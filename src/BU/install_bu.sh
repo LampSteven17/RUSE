@@ -201,7 +201,7 @@ export PATH="\$HOME/.cargo/bin:\$PATH"
 
 # Set environment variables for BU agent
 # Use the model passed from INSTALL_SUP.sh or default
-export OLLAMA_MODEL="\${OLLAMA_MODEL:-${OLLAMA_MODEL_DEFAULT:-llama3:8b}}"
+export OLLAMA_MODEL="\${OLLAMA_MODEL:-${OLLAMA_MODEL_DEFAULT:-llama3.1:8b}}"
 
 # Tell browser-use to use chromium
 export BROWSER_USE_BROWSER_TYPE="chromium"

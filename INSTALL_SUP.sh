@@ -8,7 +8,7 @@ set -o pipefail  # Exit on pipe failures
 
 # Configuration: Default model for SMOL agents (can be modified by user)
 # Examples: llama2, mistral, qwen2.5:7b, codellama, phi, llama3:8b
-DEFAULT_OLLAMA_MODEL="${DEFAULT_OLLAMA_MODEL:-llama3:8b}"
+DEFAULT_OLLAMA_MODEL="${DEFAULT_OLLAMA_MODEL:-llama3.1:8b}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

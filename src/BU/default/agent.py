@@ -6,7 +6,7 @@ from browser_use import Agent, ChatOllama
 from browser_use.browser.session import BrowserSession
 
 # Get model from environment variable (configured by install script)
-model_name = os.getenv("OLLAMA_MODEL", "llama3:8b")
+model_name = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 llm = ChatOllama(model=model_name)
 
 # Simple task - you can modify this
