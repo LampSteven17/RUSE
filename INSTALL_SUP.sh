@@ -1,24 +1,25 @@
 #!/bin/bash
 
-# DOLOS-DEPLOY: SUP Installer (MCHP, SMOL & BU)
+# DOLOS-DEPLOY: Unified SUP Installer
+# Supports MCHP, SMOL, BU and all combinations
 
 set -e  # Exit on any command failure
 set -u  # Exit on undefined variables
 set -o pipefail  # Exit on pipe failures
 
-# Configuration: Default model for SMOL agents (can be modified by user)
-# Examples: llama2, mistral, qwen2.5:7b, codellama, phi, llama3:8b
+# Configuration: Default model for LLM agents
 DEFAULT_OLLAMA_MODEL="${DEFAULT_OLLAMA_MODEL:-llama3.1:8b}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Colors for error reporting
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Error handling function
+# Error handling
 error_handler() {
     local exit_code=$?
     local line_number=$1
@@ -27,455 +28,529 @@ error_handler() {
     echo -e "${RED}    INSTALLATION FAILED!${NC}"
     echo -e "${RED}================================${NC}"
     echo ""
-    echo -e "${RED}Error occurred at line ${line_number} with exit code ${exit_code}${NC}"
-    echo -e "${RED}Command that failed: ${BASH_COMMAND}${NC}"
-    echo ""
-    echo -e "${YELLOW}Stack trace:${NC}"
-    local frame=0
-    while caller $frame; do
-        ((frame++))
-    done
-    echo ""
-    echo -e "${YELLOW}Please report this error with the following information:${NC}"
-    echo "  - Exit code: ${exit_code}"
-    echo "  - Failed line: ${line_number}"
-    echo "  - Failed command: ${BASH_COMMAND}"
-    echo "  - Script arguments: $0 $*"
-    echo "  - Working directory: $(pwd)"
-    echo "  - User: $(whoami)"
-    echo "  - Date: $(date)"
-    echo ""
-    echo -e "${RED}Installation has been cancelled.${NC}"
+    echo -e "${RED}Error at line ${line_number}, exit code ${exit_code}${NC}"
+    echo -e "${RED}Command: ${BASH_COMMAND}${NC}"
     exit $exit_code
 }
-
-# Set up error trap
 trap 'error_handler ${LINENO}' ERR
 
-# Function to log with timestamp
-log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
-}
-
-# Function to log errors
-log_error() {
-    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2
-}
+log() { echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"; }
+log_error() { echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2; }
+log_info() { echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO:${NC} $1"; }
 
 usage() {
-    echo "Usage: $0 --mchp"
-    echo "       $0 --smol --default [--model=MODEL]"
-    echo "       $0 --smol --mchp-like [--model=MODEL]"
-    echo "       $0 --smol --improved [--model=MODEL]"
-    echo "       $0 --bu --default [--model=MODEL]"
-    echo "       $0 --bu --mchp-like [--model=MODEL]"
-    echo "       $0 --bu --improved [--model=MODEL]"
-    echo "       $0 --help"
+    echo "DOLOS-DEPLOY Unified Installer"
     echo ""
-    echo "Options:"
-    echo "  --mchp                    Install MCHP (Human simulation)"
-    echo "  --smol --default          Install SMOL agent with basic configuration"
-    echo "  --smol --mchp-like        Install SMOL agent with MCHP-like behavior patterns"
-    echo "  --smol --improved         Install SMOL agent with PHASE-improved configuration"
-    echo "  --bu --default            Install BU (Browser Use) agent with basic configuration"
-    echo "  --bu --mchp-like          Install BU (Browser Use) agent with MCHP-like behavior patterns"
-    echo "  --bu --improved           Install BU (Browser Use) agent with PHASE-improved configuration"
-    echo "  --model=MODEL             Override default model for SMOL and BU installations"
-    echo "                            (e.g., --model=qwen2.5:7b, --model=mistral)"
-    echo "  --help                    Display this help message"
+    echo "Usage: $0 [FLAGS] [OPTIONS]"
+    echo ""
+    echo "=== DEFAULT Configurations ==="
+    echo "  $0 --mchp                         Install standard MCHP (human simulation)"
+    echo "  $0 --smol --default               Install standard SMOL agent"
+    echo "  $0 --smol --mchp-like             Install SMOL with MCHP-like behavior"
+    echo "  $0 --bu --default                 Install standard BU agent"
+    echo "  $0 --bu --mchp-like               Install BU with MCHP-like behavior"
+    echo ""
+    echo "=== HYBRID Configurations (MCHP workflows + LLM content) ==="
+    echo "  $0 --mchp --smol                  Install MCHP-SMOL hybrid"
+    echo "  $0 --mchp --bu                    Install MCHP-BU hybrid"
+    echo ""
+    echo "=== PHASE Configurations (LLM + improved timing) ==="
+    echo "  $0 --smol --phase                 Install SMOL-PHASE agent"
+    echo "  $0 --bu --phase                   Install BU-PHASE agent"
+    echo ""
+    echo "=== Options ==="
+    echo "  --model=MODEL                     Override Ollama model (default: $DEFAULT_OLLAMA_MODEL)"
+    echo "  --help                            Display this help message"
+    echo ""
+    echo "=== Configuration Matrix ==="
+    echo ""
+    echo "  Tier      | Flags               | Description"
+    echo "  ----------|---------------------|------------------------------------------"
+    echo "  DEFAULT   | --mchp              | Human simulation (Selenium + pyautogui)"
+    echo "  DEFAULT   | --smol --default    | Basic CodeAgent with DuckDuckGo search"
+    echo "  DEFAULT   | --bu --default      | Basic browser automation agent"
+    echo "  MCHP-LIKE | --smol --mchp-like  | SMOL with MCHP timing patterns"
+    echo "  MCHP-LIKE | --bu --mchp-like    | BU with MCHP timing patterns"
+    echo "  HYBRID    | --mchp --smol       | MCHP workflows + SMOL LLM content"
+    echo "  HYBRID    | --mchp --bu         | MCHP workflows + BU LLM content"
+    echo "  PHASE     | --smol --phase      | SMOL + time-of-day timing + logging"
+    echo "  PHASE     | --bu --phase        | BU + time-of-day timing + logging"
+    echo ""
 }
+
+# Parse flags into variables
+FLAG_MCHP=false
+FLAG_SMOL=false
+FLAG_BU=false
+FLAG_PHASE=false
+FLAG_DEFAULT=false
+FLAG_MCHP_LIKE=false
+FLAG_IMPROVED=false
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --mchp) FLAG_MCHP=true ;;
+            --smol) FLAG_SMOL=true ;;
+            --bu) FLAG_BU=true ;;
+            --phase) FLAG_PHASE=true ;;
+            --default) FLAG_DEFAULT=true ;;
+            --mchp-like) FLAG_MCHP_LIKE=true ;;
+            --improved) FLAG_IMPROVED=true ;;
+            --model=*) DEFAULT_OLLAMA_MODEL="${1#*=}" ;;
+            --help|-h) usage; exit 0 ;;
+            *) log_error "Unknown option: $1"; usage; exit 1 ;;
+        esac
+        shift
+    done
+}
+
+# Determine configuration based on flags
+determine_config() {
+    # HYBRID: --mchp --smol
+    if $FLAG_MCHP && $FLAG_SMOL && ! $FLAG_BU && ! $FLAG_PHASE; then
+        echo "MCHP-SMOL"
+        return
+    fi
+
+    # HYBRID: --mchp --bu
+    if $FLAG_MCHP && $FLAG_BU && ! $FLAG_SMOL && ! $FLAG_PHASE; then
+        echo "MCHP-BU"
+        return
+    fi
+
+    # PHASE: --smol --phase
+    if $FLAG_SMOL && $FLAG_PHASE && ! $FLAG_MCHP && ! $FLAG_BU; then
+        echo "SMOL-PHASE"
+        return
+    fi
+
+    # PHASE: --bu --phase
+    if $FLAG_BU && $FLAG_PHASE && ! $FLAG_MCHP && ! $FLAG_SMOL; then
+        echo "BU-PHASE"
+        return
+    fi
+
+    # DEFAULT: --mchp alone
+    if $FLAG_MCHP && ! $FLAG_SMOL && ! $FLAG_BU; then
+        echo "MCHP"
+        return
+    fi
+
+    # SMOL with config
+    if $FLAG_SMOL && ! $FLAG_MCHP && ! $FLAG_BU && ! $FLAG_PHASE; then
+        if $FLAG_DEFAULT; then
+            echo "SMOL-DEFAULT"
+        elif $FLAG_MCHP_LIKE; then
+            echo "SMOL-MCHP-LIKE"
+        elif $FLAG_IMPROVED; then
+            echo "SMOL-IMPROVED"
+        else
+            log_error "SMOL requires a configuration: --default, --mchp-like, or --improved"
+            exit 1
+        fi
+        return
+    fi
+
+    # BU with config
+    if $FLAG_BU && ! $FLAG_MCHP && ! $FLAG_SMOL && ! $FLAG_PHASE; then
+        if $FLAG_DEFAULT; then
+            echo "BU-DEFAULT"
+        elif $FLAG_MCHP_LIKE; then
+            echo "BU-MCHP-LIKE"
+        elif $FLAG_IMPROVED; then
+            echo "BU-IMPROVED"
+        else
+            log_error "BU requires a configuration: --default, --mchp-like, or --improved"
+            exit 1
+        fi
+        return
+    fi
+
+    # Invalid combination
+    log_error "Invalid flag combination"
+    usage
+    exit 1
+}
+
+# ============================================================================
+# Installation Functions
+# ============================================================================
+
+install_ollama() {
+    log "Setting up Ollama with model: $DEFAULT_OLLAMA_MODEL"
+    if [ -f "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" ]; then
+        chmod +x "$SCRIPT_DIR/src/install_scripts/install_ollama.sh"
+        export OLLAMA_MODELS="$DEFAULT_OLLAMA_MODEL"
+        "$SCRIPT_DIR/src/install_scripts/install_ollama.sh"
+        log "Ollama setup complete"
+    else
+        log_error "install_ollama.sh not found"
+        exit 1
+    fi
+}
+
+install_common_modules() {
+    local dest_dir="$1"
+    log "Installing common modules to $dest_dir"
+    mkdir -p "$dest_dir/common"
+    cp -r "$SCRIPT_DIR/src/common/logging" "$dest_dir/common/"
+    cp -r "$SCRIPT_DIR/src/common/timing" "$dest_dir/common/"
+    cp "$SCRIPT_DIR/src/common/__init__.py" "$dest_dir/common/"
+}
+
+create_systemd_service() {
+    local service_name="$1"
+    local work_dir="$2"
+    local run_script="$3"
+    local description="$4"
+
+    log "Creating systemd service: $service_name"
+
+    sudo tee "/etc/systemd/system/${service_name}.service" > /dev/null << EOF
+[Unit]
+Description=$description
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$work_dir
+ExecStart=/bin/bash $run_script
+Restart=always
+RestartSec=5s
+StandardOutput=append:$work_dir/logs/systemd.log
+StandardError=append:$work_dir/logs/systemd_error.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "${service_name}.service"
+}
+
+# ============================================================================
+# Config-specific Installation Functions
+# ============================================================================
+
+install_mchp() {
+    log "Installing MCHP (standard human simulation)..."
+
+    if [ -f "$SCRIPT_DIR/src/MCHP/install_mchp.sh" ]; then
+        cd "$SCRIPT_DIR/src/MCHP"
+        chmod +x install_mchp.sh
+        ./install_mchp.sh --installpath="$SCRIPT_DIR"
+
+        # Test
+        if [ -f "$SCRIPT_DIR/src/install_scripts/test_agent.sh" ]; then
+            chmod +x "$SCRIPT_DIR/src/install_scripts/test_agent.sh"
+            "$SCRIPT_DIR/src/install_scripts/test_agent.sh" --agent=MCHP --path="$SCRIPT_DIR"
+        fi
+
+        # Start service
+        sudo systemctl start mchp.service
+        log "MCHP installation complete"
+    else
+        log_error "MCHP installer not found"
+        exit 1
+    fi
+}
+
+install_mchp_hybrid() {
+    local backend="$1"  # "smol" or "bu"
+    local deploy_name="MCHP-${backend^^}"  # MCHP-SMOL or MCHP-BU
+    local service_name=$(echo "$deploy_name" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+
+    log "Installing $deploy_name (MCHP + ${backend^^} LLM content)..."
+
+    # Install Ollama
+    install_ollama
+
+    # Create directories
+    mkdir -p "$SCRIPT_DIR/deployed_sups/$deploy_name/logs"
+
+    # Install system dependencies
+    log "Installing system dependencies..."
+    sudo apt-get update -y
+    sudo apt-get install -y python3-pip python3-venv python3-dev build-essential \
+        xvfb xdg-utils firefox libxml2-dev libxslt-dev python3-tk scrot
+
+    # Install Geckodriver
+    log "Installing Geckodriver..."
+    ARCH=$(uname -m)
+    if [[ "$ARCH" == "x86_64" ]]; then
+        wget -q "https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckodriver-v0.34.0-linux64.tar.gz" -O /tmp/geckodriver.tar.gz
+        tar -xzf /tmp/geckodriver.tar.gz -C "$SCRIPT_DIR/deployed_sups/$deploy_name/"
+        rm -f /tmp/geckodriver.tar.gz
+    fi
+
+    # Create venv
+    log "Creating Python environment..."
+    python3 -m venv "$SCRIPT_DIR/deployed_sups/$deploy_name/venv"
+    source "$SCRIPT_DIR/deployed_sups/$deploy_name/venv/bin/activate"
+    pip install --upgrade pip
+
+    # Install base deps
+    pip install selenium beautifulsoup4 webdriver-manager lxml pyautogui lorem \
+        certifi chardet colorama configparser crayons idna requests urllib3
+
+    # Install backend-specific deps
+    if [[ "$backend" == "smol" ]]; then
+        pip install smolagents litellm torch transformers
+    else
+        pip install langchain-ollama
+    fi
+    deactivate
+
+    # Copy code
+    log "Copying HYBRID code..."
+    cp -r "$SCRIPT_DIR/src/MCHP-HYBRID/common/pyhuman" "$SCRIPT_DIR/deployed_sups/$deploy_name/"
+    cp "$SCRIPT_DIR/src/MCHP-HYBRID/${backend}-backend/llm_config.py" "$SCRIPT_DIR/deployed_sups/$deploy_name/"
+    install_common_modules "$SCRIPT_DIR/deployed_sups/$deploy_name"
+
+    # Create run script
+    cat > "$SCRIPT_DIR/deployed_sups/$deploy_name/run_hybrid.sh" << EOF
+#!/bin/bash
+cd "$SCRIPT_DIR/deployed_sups/$deploy_name"
+source venv/bin/activate
+export HYBRID_LLM_BACKEND="$backend"
+export OLLAMA_MODEL="$DEFAULT_OLLAMA_MODEL"
+export LITELLM_MODEL="ollama/$DEFAULT_OLLAMA_MODEL"
+export PYTHONPATH="$SCRIPT_DIR/deployed_sups/$deploy_name:\$PYTHONPATH"
+python3 -c "import llm_config; llm_config.test_connection()" || exit 1
+xvfb-run -a python3 pyhuman/human.py
+deactivate
+EOF
+    chmod +x "$SCRIPT_DIR/deployed_sups/$deploy_name/run_hybrid.sh"
+
+    # Create service
+    create_systemd_service "$service_name" "$SCRIPT_DIR/deployed_sups/$deploy_name" \
+        "$SCRIPT_DIR/deployed_sups/$deploy_name/run_hybrid.sh" "$deploy_name HYBRID Agent"
+
+    log "$deploy_name installation complete"
+    echo "Service: $service_name"
+}
+
+install_smol_default() {
+    local config="$1"  # "default", "mchp", or "improved"
+    log "Installing SMOL with $config configuration..."
+
+    install_ollama
+
+    if [ -f "$SCRIPT_DIR/src/SMOL/install_smol.sh" ]; then
+        cd "$SCRIPT_DIR/src/SMOL"
+        chmod +x install_smol.sh
+        ./install_smol.sh --installpath="$SCRIPT_DIR" --config="$config"
+
+        # Test
+        if [ -f "$SCRIPT_DIR/src/install_scripts/test_agent.sh" ]; then
+            chmod +x "$SCRIPT_DIR/src/install_scripts/test_agent.sh"
+            "$SCRIPT_DIR/src/install_scripts/test_agent.sh" --agent=SMOL --path="$SCRIPT_DIR"
+        fi
+
+        # Create and start service
+        create_systemd_service "smol" "$SCRIPT_DIR/deployed_sups/SMOL" \
+            "$SCRIPT_DIR/deployed_sups/SMOL/run_smol.sh" "SMOL Agent Service"
+        sudo systemctl start smol.service
+
+        log "SMOL ($config) installation complete"
+    else
+        log_error "SMOL installer not found"
+        exit 1
+    fi
+}
+
+install_bu_default() {
+    local config="$1"  # "default", "mchp", or "improved"
+    log "Installing BU with $config configuration..."
+
+    install_ollama
+
+    if [ -f "$SCRIPT_DIR/src/BU/install_bu.sh" ]; then
+        cd "$SCRIPT_DIR/src/BU"
+        chmod +x install_bu.sh
+        export OLLAMA_MODEL_DEFAULT="$DEFAULT_OLLAMA_MODEL"
+        ./install_bu.sh --installpath="$SCRIPT_DIR" --config="$config"
+
+        # Test
+        if [ -f "$SCRIPT_DIR/src/install_scripts/test_agent.sh" ]; then
+            chmod +x "$SCRIPT_DIR/src/install_scripts/test_agent.sh"
+            "$SCRIPT_DIR/src/install_scripts/test_agent.sh" --agent=BU --path="$SCRIPT_DIR"
+        fi
+
+        # Create and start service
+        create_systemd_service "bu" "$SCRIPT_DIR/deployed_sups/BU" \
+            "$SCRIPT_DIR/deployed_sups/BU/run_bu.sh" "BU Agent Service"
+        sudo systemctl start bu.service
+
+        log "BU ($config) installation complete"
+    else
+        log_error "BU installer not found"
+        exit 1
+    fi
+}
+
+install_smol_phase() {
+    log "Installing SMOL-PHASE (SMOL + PHASE timing + logging)..."
+
+    install_ollama
+
+    local deploy_name="SMOL-PHASE"
+    mkdir -p "$SCRIPT_DIR/deployed_sups/$deploy_name/logs"
+
+    # Install deps
+    log "Installing dependencies..."
+    sudo apt-get update -y
+    sudo apt-get install -y python3-pip python3-venv python3-dev build-essential
+
+    python3 -m venv "$SCRIPT_DIR/deployed_sups/$deploy_name/venv"
+    source "$SCRIPT_DIR/deployed_sups/$deploy_name/venv/bin/activate"
+    pip install --upgrade pip
+    pip install smolagents litellm torch transformers datasets numpy pandas requests ddgs
+    deactivate
+
+    # Copy code
+    cp "$SCRIPT_DIR/src/SMOL-PHASE/agent.py" "$SCRIPT_DIR/deployed_sups/$deploy_name/"
+    install_common_modules "$SCRIPT_DIR/deployed_sups/$deploy_name"
+
+    # Create run script
+    cat > "$SCRIPT_DIR/deployed_sups/$deploy_name/run_smol_phase.sh" << EOF
+#!/bin/bash
+cd "$SCRIPT_DIR/deployed_sups/$deploy_name"
+source venv/bin/activate
+export LITELLM_MODEL="ollama/$DEFAULT_OLLAMA_MODEL"
+export SMOL_PHASE_LOG_DIR="$SCRIPT_DIR/deployed_sups/$deploy_name/logs"
+export PYTHONPATH="$SCRIPT_DIR/deployed_sups/$deploy_name:\$PYTHONPATH"
+python3 agent.py
+deactivate
+EOF
+    chmod +x "$SCRIPT_DIR/deployed_sups/$deploy_name/run_smol_phase.sh"
+
+    create_systemd_service "smol_phase" "$SCRIPT_DIR/deployed_sups/$deploy_name" \
+        "$SCRIPT_DIR/deployed_sups/$deploy_name/run_smol_phase.sh" "SMOL-PHASE Agent Service"
+
+    log "SMOL-PHASE installation complete"
+    echo "Service: smol_phase"
+}
+
+install_bu_phase() {
+    log "Installing BU-PHASE (BU + PHASE timing + logging)..."
+
+    install_ollama
+
+    local deploy_name="BU-PHASE"
+    mkdir -p "$SCRIPT_DIR/deployed_sups/$deploy_name/logs"
+
+    # Install deps
+    log "Installing dependencies..."
+    sudo apt-get update -y
+    sudo apt-get install -y python3-pip python3-venv python3-dev build-essential xvfb
+
+    python3 -m venv "$SCRIPT_DIR/deployed_sups/$deploy_name/venv"
+    source "$SCRIPT_DIR/deployed_sups/$deploy_name/venv/bin/activate"
+    pip install --upgrade pip
+    pip install browser-use langchain-ollama playwright
+    playwright install chromium
+    playwright install-deps chromium
+    deactivate
+
+    # Copy code
+    cp "$SCRIPT_DIR/src/BU-PHASE/agent.py" "$SCRIPT_DIR/deployed_sups/$deploy_name/"
+    install_common_modules "$SCRIPT_DIR/deployed_sups/$deploy_name"
+
+    # Create run script
+    cat > "$SCRIPT_DIR/deployed_sups/$deploy_name/run_bu_phase.sh" << EOF
+#!/bin/bash
+cd "$SCRIPT_DIR/deployed_sups/$deploy_name"
+source venv/bin/activate
+export OLLAMA_MODEL="$DEFAULT_OLLAMA_MODEL"
+export BU_PHASE_LOG_DIR="$SCRIPT_DIR/deployed_sups/$deploy_name/logs"
+export PYTHONPATH="$SCRIPT_DIR/deployed_sups/$deploy_name:\$PYTHONPATH"
+xvfb-run -a python3 agent.py
+deactivate
+EOF
+    chmod +x "$SCRIPT_DIR/deployed_sups/$deploy_name/run_bu_phase.sh"
+
+    create_systemd_service "bu_phase" "$SCRIPT_DIR/deployed_sups/$deploy_name" \
+        "$SCRIPT_DIR/deployed_sups/$deploy_name/run_bu_phase.sh" "BU-PHASE Agent Service"
+
+    log "BU-PHASE installation complete"
+    echo "Service: bu_phase"
+}
+
+# ============================================================================
+# Main
+# ============================================================================
 
 if [[ $# -eq 0 ]]; then
     usage
     exit 1
 fi
 
-case $1 in
-    --mchp)
-        log "Starting MCHP installation..."
-        
-        if [ -f "$SCRIPT_DIR/src/MCHP/install_mchp.sh" ]; then
-            log "Found MCHP installer script"
-            cd "$SCRIPT_DIR/src/MCHP" || {
-                log_error "Failed to change to MCHP directory"
-                exit 1
-            }
-            chmod +x install_mchp.sh || {
-                log_error "Failed to make install_mchp.sh executable"
-                exit 1
-            }
-            log "Executing MCHP installation script..."
-            ./install_mchp.sh --installpath="$SCRIPT_DIR" || {
-                log_error "MCHP installation script failed"
-                exit 1
-            }
-            log "MCHP installation completed successfully"
-            
-            # Test MCHP installation
-            log "Testing MCHP installation..."
-            if [ -f "$SCRIPT_DIR/src/install_scripts/test_agent.sh" ]; then
-                chmod +x "$SCRIPT_DIR/src/install_scripts/test_agent.sh"
-                "$SCRIPT_DIR/src/install_scripts/test_agent.sh" --agent=MCHP --path="$SCRIPT_DIR" || {
-                    log_error "MCHP installation test failed"
-                    exit 1
-                }
-            else
-                log_error "test_agent.sh not found at $SCRIPT_DIR/src/install_scripts/"
-                exit 1
-            fi
-            
-            # Start MCHP systemd service after tests pass
-            log "Starting MCHP systemd service..."
-            sudo systemctl start mchp.service
-            
-            sleep 2
-            if sudo systemctl is-active --quiet mchp.service; then
-                log "MCHP service started successfully"
-            else
-                log_error "MCHP service failed to start. Check logs with: sudo systemctl status mchp"
-            fi
-        else
-            log_error "install_mchp.sh not found at $SCRIPT_DIR/src/MCHP/"
-            exit 1
-        fi
+parse_args "$@"
+CONFIG=$(determine_config)
+
+echo ""
+echo -e "${BLUE}================================${NC}"
+echo -e "${BLUE}  DOLOS-DEPLOY Installer${NC}"
+echo -e "${BLUE}================================${NC}"
+echo ""
+log_info "Configuration: $CONFIG"
+log_info "Model: $DEFAULT_OLLAMA_MODEL"
+echo ""
+
+case $CONFIG in
+    "MCHP")
+        install_mchp
         ;;
-    --smol)
-        # Check if a configuration was specified as second argument
-        SMOL_CONFIG=""
-        if [[ $# -ge 2 ]]; then
-            case $2 in
-                --default)
-                    SMOL_CONFIG="default"
-                    ;;
-                --mchp-like)
-                    SMOL_CONFIG="mchp"
-                    ;;
-                --improved)
-                    SMOL_CONFIG="improved"
-                    ;;
-                *)
-                    log_error "Invalid SMOL configuration '$2'"
-                    echo "Valid options are: --default, --mchp-like, --improved"
-                    usage
-                    exit 1
-                    ;;
-            esac
-            
-            # Check for additional --model flag
-            if [[ $# -ge 3 && $3 == --model=* ]]; then
-                CUSTOM_MODEL="${3#*=}"
-                if [ -n "$CUSTOM_MODEL" ]; then
-                    DEFAULT_OLLAMA_MODEL="$CUSTOM_MODEL"
-                    log "Using custom model: $CUSTOM_MODEL"
-                else
-                    log_error "--model flag requires a value (e.g., --model=qwen2.5:7b)"
-                    exit 1
-                fi
-            fi
-        else
-            log_error "SMOL configuration required"
-            echo "Please specify one of: --default, --mchp-like, --improved"
-            usage
-            exit 1
-        fi
-        
-        log "Starting SMOL installation with $SMOL_CONFIG configuration..."
-        
-        # Install Ollama for SMOL agents (local model support)
-        log "Setting up Ollama for local model support with model: $DEFAULT_OLLAMA_MODEL"
-        if [ -f "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" ]; then
-            log "Found Ollama installer script"
-            chmod +x "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" || {
-                log_error "Failed to make install_ollama.sh executable"
-                exit 1
-            }
-            # Use configured model for SMOL agents
-            export OLLAMA_MODELS="$DEFAULT_OLLAMA_MODEL"
-            log "Executing Ollama installation script..."
-            "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" || {
-                log_error "Ollama installation script failed"
-                exit 1
-            }
-            log "Ollama installation completed successfully"
-        else
-            log_error "install_ollama.sh not found at $SCRIPT_DIR/src/install_scripts/"
-            exit 1
-        fi
-        
-        # Install SMOL agent
-        if [ -f "$SCRIPT_DIR/src/SMOL/install_smol.sh" ]; then
-            log "Found SMOL installer script"
-            cd "$SCRIPT_DIR/src/SMOL" || {
-                log_error "Failed to change to SMOL directory"
-                exit 1
-            }
-            chmod +x install_smol.sh || {
-                log_error "Failed to make install_smol.sh executable"
-                exit 1
-            }
-            log "Executing SMOL installation script..."
-            ./install_smol.sh --installpath="$SCRIPT_DIR" --config="$SMOL_CONFIG" || {
-                log_error "SMOL installation script failed"
-                exit 1
-            }
-            log "SMOL installation completed successfully"
-            
-            # Test SMOL installation  
-            log "Testing SMOL installation..."
-            if [ -f "$SCRIPT_DIR/src/install_scripts/test_agent.sh" ]; then
-                chmod +x "$SCRIPT_DIR/src/install_scripts/test_agent.sh"
-                "$SCRIPT_DIR/src/install_scripts/test_agent.sh" --agent=SMOL --path="$SCRIPT_DIR" || {
-                    log_error "SMOL installation test failed"
-                    exit 1
-                }
-            else
-                log_error "test_agent.sh not found at $SCRIPT_DIR/src/install_scripts/"
-                exit 1
-            fi
-            
-            # Create and start systemd service after testing passes
-            log "Creating systemd service for SMOL..."
-            cd "$SCRIPT_DIR/src/SMOL" || {
-                log_error "Failed to change to SMOL directory"
-                exit 1
-            }
-            
-            # Create service file
-            sudo tee /etc/systemd/system/smol.service > /dev/null << EOF
-[Unit]
-Description=SMOL Agents Service
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$SCRIPT_DIR/deployed_sups/SMOL
-ExecStart=/bin/bash $SCRIPT_DIR/deployed_sups/SMOL/run_smol.sh
-Restart=always
-RestartSec=5s
-StandardOutput=append:$SCRIPT_DIR/deployed_sups/SMOL/logs/smol_systemd.log
-StandardError=append:$SCRIPT_DIR/deployed_sups/SMOL/logs/smol_systemd_error.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            
-            sudo systemctl daemon-reload
-            sudo systemctl enable smol.service
-            log "SMOL service enabled"
-            
-            log "Starting SMOL service..."
-            sudo systemctl start smol.service
-            
-            sleep 2
-            if sudo systemctl is-active --quiet smol.service; then
-                log "SMOL service started successfully"
-                
-                echo ""
-                echo -e "${GREEN}================================${NC}"
-                echo -e "${GREEN}   SMOL INSTALLATION COMPLETE!${NC}"
-                echo -e "${GREEN}================================${NC}"
-                echo ""
-                echo "SMOL ($SMOL_CONFIG configuration) is now running"
-                echo ""
-                echo "Installation Details:"
-                echo "  • Agent Type: SMOL ($SMOL_CONFIG)"
-                echo "  • Installation Path: $SCRIPT_DIR/deployed_sups/SMOL"
-                echo "  • Service Status: RUNNING"
-                echo ""
-                echo "Service Management:"
-                echo "  • Status: sudo systemctl status smol"
-                echo "  • Stop: sudo systemctl stop smol"
-                echo "  • Start: sudo systemctl start smol"
-                echo "  • Restart: sudo systemctl restart smol"
-                echo "  • Logs: sudo journalctl -u smol -f"
-                echo ""
-                echo "Manual Testing:"
-                echo "  • Run directly: $SCRIPT_DIR/deployed_sups/SMOL/run_smol.sh"
-                echo "  • View logs: tail -f $SCRIPT_DIR/deployed_sups/SMOL/logs/*.log"
-                echo ""
-            else
-                log_error "SMOL service failed to start. Check logs with: sudo systemctl status smol"
-                exit 1
-            fi
-        else
-            log_error "install_smol.sh not found at $SCRIPT_DIR/src/SMOL/"
-            exit 1
-        fi
+    "MCHP-SMOL")
+        install_mchp_hybrid "smol"
         ;;
-    --bu)
-        # Check if a configuration was specified as second argument
-        BU_CONFIG=""
-        if [[ $# -ge 2 ]]; then
-            case $2 in
-                --default)
-                    BU_CONFIG="default"
-                    ;;
-                --mchp-like)
-                    BU_CONFIG="mchp"
-                    ;;
-                --improved)
-                    BU_CONFIG="improved"
-                    ;;
-                *)
-                    log_error "Invalid BU configuration '$2'"
-                    echo "Valid options are: --default, --mchp-like, --improved"
-                    usage
-                    exit 1
-                    ;;
-            esac
-            
-            # Check for additional --model flag
-            if [[ $# -ge 3 && $3 == --model=* ]]; then
-                CUSTOM_MODEL="${3#*=}"
-                if [ -n "$CUSTOM_MODEL" ]; then
-                    DEFAULT_OLLAMA_MODEL="$CUSTOM_MODEL"
-                    log "Using custom model: $CUSTOM_MODEL"
-                else
-                    log_error "--model flag requires a value (e.g., --model=qwen2.5:7b)"
-                    exit 1
-                fi
-            fi
-        else
-            log_error "BU configuration required"
-            echo "Please specify one of: --default, --mchp-like, --improved"
-            usage
-            exit 1
-        fi
-        
-        log "Starting BU installation with $BU_CONFIG configuration..."
-        
-        # Install Ollama for BU agents (browser_use can work with local models)
-        log "Setting up Ollama for local model support with model: $DEFAULT_OLLAMA_MODEL"
-        if [ -f "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" ]; then
-            log "Found Ollama installer script"
-            chmod +x "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" || {
-                log_error "Failed to make install_ollama.sh executable"
-                exit 1
-            }
-            # Use configured model for BU agents
-            export OLLAMA_MODELS="$DEFAULT_OLLAMA_MODEL"
-            log "Executing Ollama installation script..."
-            "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" || {
-                log_error "Ollama installation script failed"
-                exit 1
-            }
-            log "Ollama installation completed successfully"
-        else
-            log_error "install_ollama.sh not found at $SCRIPT_DIR/src/install_scripts/"
-            exit 1
-        fi
-        
-        # Install BU agent
-        if [ -f "$SCRIPT_DIR/src/BU/install_bu.sh" ]; then
-            log "Found BU installer script"
-            cd "$SCRIPT_DIR/src/BU" || {
-                log_error "Failed to change to BU directory"
-                exit 1
-            }
-            chmod +x install_bu.sh || {
-                log_error "Failed to make install_bu.sh executable"
-                exit 1
-            }
-            log "Executing BU installation script..."
-            export OLLAMA_MODEL_DEFAULT="$DEFAULT_OLLAMA_MODEL"
-            ./install_bu.sh --installpath="$SCRIPT_DIR" --config="$BU_CONFIG" || {
-                log_error "BU installation script failed"
-                exit 1
-            }
-            log "BU installation completed successfully"
-            
-            # Test BU installation  
-            log "Testing BU installation..."
-            if [ -f "$SCRIPT_DIR/src/install_scripts/test_agent.sh" ]; then
-                chmod +x "$SCRIPT_DIR/src/install_scripts/test_agent.sh"
-                "$SCRIPT_DIR/src/install_scripts/test_agent.sh" --agent=BU --path="$SCRIPT_DIR" || {
-                    log_error "BU installation test failed"
-                    exit 1
-                }
-            else
-                log_error "test_agent.sh not found at $SCRIPT_DIR/src/install_scripts/"
-                exit 1
-            fi
-            
-            # Create and start systemd service after testing passes
-            log "Creating systemd service for BU..."
-            cd "$SCRIPT_DIR/src/BU" || {
-                log_error "Failed to change to BU directory"
-                exit 1
-            }
-            
-            # Create service file
-            sudo tee /etc/systemd/system/bu.service > /dev/null << EOF
-[Unit]
-Description=BU Agents Service
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=$SCRIPT_DIR/deployed_sups/BU
-Environment="DISPLAY=:99"
-ExecStart=/bin/bash $SCRIPT_DIR/deployed_sups/BU/run_bu.sh
-Restart=always
-RestartSec=5s
-StandardOutput=append:$SCRIPT_DIR/deployed_sups/BU/logs/bu_systemd.log
-StandardError=append:$SCRIPT_DIR/deployed_sups/BU/logs/bu_systemd_error.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
-            
-            sudo systemctl daemon-reload
-            sudo systemctl enable bu.service
-            log "BU service enabled"
-            
-            log "Starting BU service..."
-            sudo systemctl start bu.service
-            
-            sleep 2
-            if sudo systemctl is-active --quiet bu.service; then
-                log "BU service started successfully"
-                
-                echo ""
-                echo -e "${GREEN}================================${NC}"
-                echo -e "${GREEN}   BU INSTALLATION COMPLETE!${NC}"
-                echo -e "${GREEN}================================${NC}"
-                echo ""
-                echo "BU ($BU_CONFIG configuration) is now running"
-                echo ""
-                echo "Installation Details:"
-                echo "  • Agent Type: BU ($BU_CONFIG)"
-                echo "  • Installation Path: $SCRIPT_DIR/deployed_sups/BU"
-                echo "  • Service Status: RUNNING"
-                echo ""
-                echo "Service Management:"
-                echo "  • Status: sudo systemctl status bu"
-                echo "  • Stop: sudo systemctl stop bu"
-                echo "  • Start: sudo systemctl start bu"
-                echo "  • Restart: sudo systemctl restart bu"
-                echo "  • Logs: sudo journalctl -u bu -f"
-                echo ""
-                echo "Manual Testing:"
-                echo "  • Run directly: $SCRIPT_DIR/deployed_sups/BU/run_bu.sh"
-                echo "  • View logs: tail -f $SCRIPT_DIR/deployed_sups/BU/logs/*.log"
-                echo ""
-            else
-                log_error "BU service failed to start. Check logs with: sudo systemctl status bu"
-                exit 1
-            fi
-        else
-            log_error "install_bu.sh not found at $SCRIPT_DIR/src/BU/"
-            exit 1
-        fi
+    "MCHP-BU")
+        install_mchp_hybrid "bu"
         ;;
-    --help|-h)
-        usage
-        exit 0
+    "SMOL-DEFAULT")
+        install_smol_default "default"
+        ;;
+    "SMOL-MCHP-LIKE")
+        install_smol_default "mchp"
+        ;;
+    "SMOL-IMPROVED")
+        install_smol_default "improved"
+        ;;
+    "BU-DEFAULT")
+        install_bu_default "default"
+        ;;
+    "BU-MCHP-LIKE")
+        install_bu_default "mchp"
+        ;;
+    "BU-IMPROVED")
+        install_bu_default "improved"
+        ;;
+    "SMOL-PHASE")
+        install_smol_phase
+        ;;
+    "BU-PHASE")
+        install_bu_phase
         ;;
     *)
-        echo "Unknown option: $1"
-        usage
+        log_error "Unknown configuration: $CONFIG"
         exit 1
         ;;
 esac
+
+echo ""
+echo -e "${GREEN}================================${NC}"
+echo -e "${GREEN}  INSTALLATION COMPLETE!${NC}"
+echo -e "${GREEN}================================${NC}"
+echo ""
+echo "Configuration: $CONFIG"
+echo "Model: $DEFAULT_OLLAMA_MODEL"
+echo ""
+echo "Service commands:"
+echo "  sudo systemctl status <service>"
+echo "  sudo systemctl start <service>"
+echo "  sudo systemctl stop <service>"
+echo "  sudo journalctl -u <service> -f"
+echo ""
