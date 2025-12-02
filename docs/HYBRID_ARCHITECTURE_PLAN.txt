@@ -1,0 +1,454 @@
+================================================================================
+DOLOS-DEPLOY HYBRID ARCHITECTURE PLAN
+================================================================================
+Generated: 2025-12-02
+Status: Planning Complete - Ready for Implementation
+
+================================================================================
+OVERVIEW
+================================================================================
+
+Create new configuration tiers that augment agents with LLM-powered content
+generation and comprehensive logging, supporting both SMOL and BU backends.
+
+================================================================================
+NAMING TAXONOMY
+================================================================================
+
+Tier        | Configs                           | Description
+------------|-----------------------------------|----------------------------------
+DEFAULT     | MCHP, SMOL, BU                    | Unchanged base implementations
+HYBRID      | MCHP-SMOL, MCHP-BU                | MCHP workflows + LLM content
+PHASE       | SMOL-PHASE, BU-PHASE              | LLM agents + improved timing/behavior
+UNIFIED     | UNIFIED-SMOL, UNIFIED-BU          | HYBRID + PHASE (future)
+
+================================================================================
+DIRECTORY STRUCTURE
+================================================================================
+
+src/
+├── MCHP/                          # DEFAULT (unchanged)
+├── SMOL/                          # DEFAULT (unchanged)
+├── BU/                            # DEFAULT (unchanged)
+├── MCHP-HYBRID/                   # NEW - MCHP + LLM content
+│   ├── install_hybrid.sh          # Unified installer
+│   ├── common/pyhuman/            # Shared augmented code
+│   │   ├── human.py               # Orchestrator (unchanged from MCHP)
+│   │   ├── app/
+│   │   │   ├── utility/
+│   │   │   │   ├── base_workflow.py
+│   │   │   │   ├── webdriver_helper.py
+│   │   │   │   ├── llm_content.py      # NEW: LLM abstraction (NO FALLBACK)
+│   │   │   │   └── agent_logger.py     # NEW: Unified logging framework
+│   │   │   └── workflows/              # Augmented workflows
+│   │   └── data/                       # Seed data for LLM context
+│   ├── smol-backend/
+│   │   └── llm_config.py          # SMOL-specific env setup
+│   └── bu-backend/
+│       └── llm_config.py          # BU-specific env setup
+├── SMOL-PHASE/                    # NEW - SMOL + improved timing/behavior
+│   ├── install_smol_phase.sh
+│   ├── agent.py                   # Enhanced SMOL agent
+│   ├── phase_timing.py            # PHASE timing improvements
+│   └── agent_logger.py            # Logging framework
+├── BU-PHASE/                      # NEW - BU + improved timing/behavior
+│   ├── install_bu_phase.sh
+│   ├── agent.py                   # Enhanced BU agent
+│   ├── phase_timing.py            # PHASE timing improvements
+│   └── agent_logger.py            # Logging framework
+└── common/                        # NEW - Shared components
+    ├── logging/
+    │   └── agent_logger.py        # Master logging framework
+    └── timing/
+        └── phase_timing.py        # PHASE timing algorithms
+
+deployed_sups/
+├── MCHP/                          # Standard MCHP
+├── SMOL/                          # Standard SMOL
+├── BU/                            # Standard BU
+├── MCHP-SMOL/                     # HYBRID with SMOL backend
+├── MCHP-BU/                       # HYBRID with BU backend
+├── SMOL-PHASE/                    # SMOL with PHASE timing
+└── BU-PHASE/                      # BU with PHASE timing
+
+================================================================================
+LOGGING FRAMEWORK DESIGN
+================================================================================
+
+File: src/common/logging/agent_logger.py
+
+PURPOSE:
+- Unified logging across all agent types
+- Timestamped event tracking for experiment analysis
+- Structured log format for post-hoc analysis
+- Per-session log files with rotation
+
+LOG FORMAT (JSON-Lines):
+{
+    "timestamp": "2025-12-02T14:30:45.123456",
+    "session_id": "uuid-here",
+    "agent_type": "MCHP-SMOL",
+    "event_type": "workflow_start|workflow_end|llm_request|llm_response|error|decision",
+    "workflow": "google_search",
+    "details": {
+        "action": "generate_search_query",
+        "input": "context about tech searches",
+        "output": "how to optimize python code",
+        "duration_ms": 1523,
+        "model": "llama3.1:8b"
+    }
+}
+
+EVENT TYPES:
+- session_start      : Agent session begins
+- session_end        : Agent session ends
+- workflow_start     : Workflow execution begins
+- workflow_end       : Workflow execution ends (with success/failure)
+- llm_request        : Request sent to LLM
+- llm_response       : Response received from LLM
+- llm_error          : LLM request failed (FATAL - no fallback)
+- decision           : Agent made a choice (which site, which link, etc.)
+- browser_action     : Selenium/Playwright action (navigate, click, type)
+- gui_action         : pyautogui action (type, hotkey, click)
+- timing_delay       : Sleep/delay event with duration
+- error              : Any error encountered
+- warning            : Non-fatal warning
+
+LOG FILE STRUCTURE:
+logs/
+├── MCHP-SMOL/
+│   ├── session_2025-12-02_14-30-45_abc123.jsonl
+│   ├── session_2025-12-02_15-45-00_def456.jsonl
+│   └── latest.jsonl -> session_2025-12-02_15-45-00_def456.jsonl
+├── SMOL-PHASE/
+│   └── ...
+└── summary/
+    └── daily_2025-12-02.json    # Daily aggregated stats
+
+PYTHON API:
+```python
+from common.logging.agent_logger import AgentLogger
+
+# Initialize at agent start
+logger = AgentLogger(
+    agent_type="MCHP-SMOL",
+    log_dir="/path/to/logs"
+)
+
+# Log events
+logger.session_start()
+logger.workflow_start("google_search")
+logger.llm_request(action="generate_query", input_data={"context": "..."})
+logger.llm_response(output="search query here", duration_ms=1200)
+logger.decision(choice="selected website", options=["a.com", "b.com"], selected="a.com")
+logger.browser_action(action="navigate", target="https://google.com")
+logger.timing_delay(seconds=5.3, reason="inter-task delay")
+logger.workflow_end("google_search", success=True, duration_ms=45000)
+logger.error("LLM unavailable", fatal=True)  # Raises exception
+logger.session_end()
+```
+
+================================================================================
+LLM CONTENT ABSTRACTION (NO FALLBACK)
+================================================================================
+
+File: src/MCHP-HYBRID/common/pyhuman/app/utility/llm_content.py
+
+CRITICAL: NO FALLBACK BEHAVIOR
+- If LLM is unavailable, raise LLMUnavailableError immediately
+- Agent should fail loudly so experiments are clearly marked as failed
+- No silent degradation to TextLorem or random data
+
+```python
+class LLMUnavailableError(Exception):
+    """Raised when LLM backend is unavailable. Experiment is invalid."""
+    pass
+
+class LLMContentGenerator:
+    def _query_llm(self, prompt: str) -> str:
+        try:
+            response = self._execute_llm_call(prompt)
+            self.logger.llm_response(output=response, duration_ms=elapsed)
+            return response
+        except Exception as e:
+            self.logger.error(f"LLM UNAVAILABLE: {e}", fatal=True)
+            raise LLMUnavailableError(
+                f"LLM backend '{self.backend}' is unavailable. "
+                f"Experiment data is invalid. Error: {e}"
+            ) from e
+```
+
+DROP-IN REPLACEMENT FUNCTIONS:
+- llm_paragraph()           # Replaces TextLorem().paragraph()
+- llm_sentence()            # Replaces TextLorem().sentence()
+- llm_word()                # Replaces TextLorem()._word()
+- llm_filename()            # Replaces TextLorem filename generation
+- llm_search_query(context) # Intelligent search query generation
+- llm_select(items, ctx)    # Intelligent selection from list
+- llm_comment()             # Document comment generation
+- llm_spreadsheet_headers() # Spreadsheet column headers
+
+================================================================================
+WORKFLOW MODIFICATIONS (MCHP-HYBRID)
+================================================================================
+
+PRIORITY 1: Desktop GUI (heaviest TextLorem usage)
+
+open_office_writer.py - 8 TextLorem calls:
+  Original                                          | Replacement
+  --------------------------------------------------|---------------------------
+  TextLorem().paragraph()                           | llm_paragraph()
+  TextLorem().sentence()                            | llm_sentence()
+  TextLorem()._word()                               | llm_word()
+  TextLorem(wsep='-', srange=(1,3)).sentence()[:-1] | llm_filename()
+
+open_office_calc.py - 3 TextLorem calls:
+  - Use llm_spreadsheet_headers() for column headers
+  - Keep numeric data as random.randint() (not content)
+
+ms_paint.py - Minimal (optional filename improvement)
+
+PRIORITY 2: Web Workflows
+
+google_search.py:
+  - Replace random.choice(self.search_list) -> llm_search_query(context)
+
+browse_web.py:
+  - Replace random.choice(self.website_list) -> llm_select(websites, "browsing")
+  - Replace random.choice(clickables) -> llm_select(urls, "relevant link")
+
+browse_youtube.py:
+  - Replace search term selection -> llm_search_query("YouTube videos")
+
+PRIORITY 3: Other Workflows (minimal/no changes)
+
+download_files.py  - Keep as-is
+execute_command.py - Keep as-is
+spawn_shell.py     - Keep as-is
+
+================================================================================
+PHASE TIMING FRAMEWORK (SMOL-PHASE, BU-PHASE)
+================================================================================
+
+File: src/common/timing/phase_timing.py
+
+PURPOSE:
+- More realistic timing patterns than fixed delays
+- Time-of-day awareness
+- Activity clustering that mimics human behavior
+- Configurable profiles
+
+TIMING PROFILES:
+```python
+class PhaseTimingConfig:
+    # Cluster configuration
+    min_cluster_size: int = 3
+    max_cluster_size: int = 8
+
+    # Inter-task delays (seconds)
+    min_task_delay: float = 5.0
+    max_task_delay: float = 30.0
+
+    # Inter-cluster delays (seconds)
+    min_cluster_delay: float = 120.0
+    max_cluster_delay: float = 600.0
+
+    # Activity multipliers by hour (0-23)
+    hourly_activity: Dict[int, float] = {
+        0: 0.1, 1: 0.05, 2: 0.02, ...,  # Night: low activity
+        9: 1.0, 10: 1.2, 11: 1.1, ...,  # Morning: peak
+        14: 0.8, 15: 0.9, ...,          # Afternoon: moderate
+        22: 0.3, 23: 0.2                # Evening: declining
+    }
+```
+
+================================================================================
+SMOL-PHASE TEMPLATE
+================================================================================
+
+File: src/SMOL-PHASE/agent.py
+
+Features beyond default SMOL:
+- PHASE timing integration
+- Comprehensive logging
+- Enhanced task selection
+- Session management
+
+```python
+from common.logging.agent_logger import AgentLogger
+from common.timing.phase_timing import PhaseTiming
+
+class SmolPhaseAgent:
+    def __init__(self):
+        self.logger = AgentLogger(agent_type="SMOL-PHASE")
+        self.timing = PhaseTiming()
+        self.model = LiteLLMModel(model_id=os.getenv("LITELLM_MODEL"))
+        self.agent = CodeAgent(tools=[DuckDuckGoSearchTool()], model=self.model)
+
+    def run(self):
+        self.logger.session_start()
+        try:
+            while True:
+                cluster_size = self.timing.get_cluster_size()
+                for i in range(cluster_size):
+                    task = self._select_task()
+                    self.logger.workflow_start(task)
+                    result = self.agent.run(task)
+                    self.logger.workflow_end(task, success=True)
+
+                    delay = self.timing.get_task_delay()
+                    self.logger.timing_delay(delay, "inter-task")
+                    time.sleep(delay)
+
+                cluster_delay = self.timing.get_cluster_delay()
+                self.logger.timing_delay(cluster_delay, "inter-cluster")
+                time.sleep(cluster_delay)
+        finally:
+            self.logger.session_end()
+```
+
+================================================================================
+BU-PHASE TEMPLATE
+================================================================================
+
+File: src/BU-PHASE/agent.py
+
+Features beyond default BU:
+- PHASE timing integration
+- Comprehensive logging
+- Enhanced browser task selection
+- Session management with proper browser cleanup
+
+```python
+from common.logging.agent_logger import AgentLogger
+from common.timing.phase_timing import PhaseTiming
+
+class BuPhaseAgent:
+    def __init__(self):
+        self.logger = AgentLogger(agent_type="BU-PHASE")
+        self.timing = PhaseTiming()
+        self.llm = ChatOllama(model=os.getenv("OLLAMA_MODEL"))
+
+    async def run(self):
+        self.logger.session_start()
+        try:
+            while True:
+                cluster_size = self.timing.get_cluster_size()
+                for i in range(cluster_size):
+                    task = self._select_browser_task()
+                    self.logger.workflow_start(task)
+
+                    async with BrowserSession(...) as session:
+                        agent = Agent(task=task, llm=self.llm, browser_session=session)
+                        result = await agent.run(max_steps=10)
+
+                    self.logger.workflow_end(task, success=result is not None)
+
+                    delay = self.timing.get_task_delay()
+                    self.logger.timing_delay(delay, "inter-task")
+                    await asyncio.sleep(delay)
+
+                cluster_delay = self.timing.get_cluster_delay()
+                self.logger.timing_delay(cluster_delay, "inter-cluster")
+                await asyncio.sleep(cluster_delay)
+        finally:
+            self.logger.session_end()
+```
+
+================================================================================
+INSTALLER UPDATES
+================================================================================
+
+New install commands:
+
+# HYBRID (MCHP + LLM content)
+./INSTALL_SUP.sh --hybrid --smol [--model=MODEL]
+./INSTALL_SUP.sh --hybrid --bu [--model=MODEL]
+
+# PHASE (LLM agents + improved timing)
+./INSTALL_SUP.sh --smol --phase [--model=MODEL]
+./INSTALL_SUP.sh --bu --phase [--model=MODEL]
+
+================================================================================
+IMPLEMENTATION SEQUENCE
+================================================================================
+
+PHASE 1: Foundation (Common Components)
+  1. Create src/common/ directory structure
+  2. Implement src/common/logging/agent_logger.py
+  3. Implement src/common/timing/phase_timing.py
+
+PHASE 2: MCHP-HYBRID Implementation
+  4. Create src/MCHP-HYBRID/ directory structure
+  5. Implement llm_content.py (NO FALLBACK - fail loudly)
+  6. Copy MCHP pyhuman/ to common/pyhuman/
+  7. Modify open_office_writer.py
+  8. Modify open_office_calc.py
+  9. Modify google_search.py
+  10. Modify browse_web.py
+  11. Modify browse_youtube.py
+  12. Create backend config files
+  13. Create install_hybrid.sh
+
+PHASE 3: PHASE Templates (SMOL-PHASE, BU-PHASE)
+  14. Create src/SMOL-PHASE/ directory
+  15. Implement SMOL-PHASE agent.py with logging + timing
+  16. Create install_smol_phase.sh
+  17. Create src/BU-PHASE/ directory
+  18. Implement BU-PHASE agent.py with logging + timing
+  19. Create install_bu_phase.sh
+
+PHASE 4: Installer Integration
+  20. Update INSTALL_SUP.sh with --hybrid and --phase options
+  21. Update test_agent.sh for new configurations
+
+PHASE 5: Documentation & Validation
+  22. Update CLAUDE.md with new configurations
+  23. Test all new configurations
+  24. Verify logging output format
+
+================================================================================
+CRITICAL FILES TO CREATE/MODIFY
+================================================================================
+
+Action       | File Path
+-------------|----------------------------------------------------------
+CREATE       | src/common/logging/agent_logger.py
+CREATE       | src/common/timing/phase_timing.py
+CREATE       | src/MCHP-HYBRID/install_hybrid.sh
+CREATE       | src/MCHP-HYBRID/common/pyhuman/app/utility/llm_content.py
+CREATE       | src/MCHP-HYBRID/smol-backend/llm_config.py
+CREATE       | src/MCHP-HYBRID/bu-backend/llm_config.py
+CREATE       | src/SMOL-PHASE/agent.py
+CREATE       | src/SMOL-PHASE/install_smol_phase.sh
+CREATE       | src/BU-PHASE/agent.py
+CREATE       | src/BU-PHASE/install_bu_phase.sh
+COPY+MODIFY  | src/MCHP-HYBRID/common/pyhuman/app/workflows/open_office_writer.py
+COPY+MODIFY  | src/MCHP-HYBRID/common/pyhuman/app/workflows/open_office_calc.py
+COPY+MODIFY  | src/MCHP-HYBRID/common/pyhuman/app/workflows/google_search.py
+COPY+MODIFY  | src/MCHP-HYBRID/common/pyhuman/app/workflows/browse_web.py
+COPY+MODIFY  | src/MCHP-HYBRID/common/pyhuman/app/workflows/browse_youtube.py
+COPY         | src/MCHP-HYBRID/common/pyhuman/human.py
+COPY         | src/MCHP-HYBRID/common/pyhuman/app/utility/base_*.py
+COPY         | src/MCHP-HYBRID/common/pyhuman/data/*
+MODIFY       | INSTALL_SUP.sh
+MODIFY       | CLAUDE.md
+MODIFY       | src/install_scripts/test_agent.sh
+
+================================================================================
+KEY DESIGN DECISIONS
+================================================================================
+
+Decision                              | Rationale
+--------------------------------------|----------------------------------------
+NO FALLBACK - fail loudly             | Invalid experiments must be detectable
+Unified logging framework             | Post-hoc analysis of all agent behavior
+JSON-Lines log format                 | Easy parsing, one event per line
+Single codebase for HYBRID backends   | Reduces maintenance, behavioral parity
+Keep Selenium/pyautogui               | Preserves MCHP timing and control flow
+PHASE timing in separate module       | Reusable across SMOL-PHASE and BU-PHASE
+Per-session log files                 | Easy to correlate events per experiment
+
+================================================================================
+END OF PLAN
+================================================================================
