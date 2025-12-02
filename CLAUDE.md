@@ -20,9 +20,11 @@ DOLOS-DEPLOY is a deployment system for SUP (Simulated User Profiles) agents. It
 ```bash
 # === DEFAULT Configurations ===
 ./INSTALL_SUP.sh --mchp                    # Standard MCHP (human simulation)
-./INSTALL_SUP.sh --smol --default          # Standard SMOL agent
+./INSTALL_SUP.sh --smol                    # Standard SMOL agent
+./INSTALL_SUP.sh --bu                      # Standard BU agent
+
+# === MCHP-LIKE Configurations ===
 ./INSTALL_SUP.sh --smol --mchp-like        # SMOL with MCHP-like behavior
-./INSTALL_SUP.sh --bu --default            # Standard BU agent
 ./INSTALL_SUP.sh --bu --mchp-like          # BU with MCHP-like behavior
 
 # === HYBRID Configurations (MCHP workflows + LLM content) ===
@@ -134,3 +136,7 @@ Event types: `session_start`, `session_end`, `workflow_start`, `workflow_end`,
 - **BU**: browser-use, playwright (Chromium), Ollama
 - **HYBRID**: All MCHP deps + backend-specific LLM deps
 - **PHASE**: LLM deps + common logging/timing modules
+
+## Git Conventions
+
+- **No Claude footers**: Do NOT add "Generated with Claude Code" or "Co-Authored-By: Claude" footers to commits or PRs

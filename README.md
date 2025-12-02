@@ -10,11 +10,11 @@
  `-------'      `-----'  `------'      `-----'  `-----'
 ```
 
-# DOLOS-DEPLOY
+# dolos-engine
 
 **Deployment system for Simulated User Profile (SUP) agents**
 
-DOLOS-DEPLOY provides a unified installation and management system for agents that simulate human-like computer behavior. Whether you need scripted automation, LLM-powered browsing, or hybrid approaches combining both, DOLOS has you covered.
+dolos-engine provides a unified installation and management system for agents that simulate human-like computer behavior. Whether you need scripted automation, LLM-powered browsing, or hybrid approaches combining both, DOLOS has you covered.
 
 ---
 
@@ -27,7 +27,8 @@ cd DOLOS-DEPLOY
 
 # Install an agent (examples)
 ./INSTALL_SUP.sh --mchp                    # Human simulation
-./INSTALL_SUP.sh --smol --default          # LLM agent
+./INSTALL_SUP.sh --smol                    # LLM agent (default)
+./INSTALL_SUP.sh --bu                      # Browser automation (default)
 ./INSTALL_SUP.sh --mchp --smol             # Hybrid agent
 ./INSTALL_SUP.sh --smol --phase            # LLM + advanced timing
 ```
@@ -69,8 +70,8 @@ Browser automation agents using the browser-use library with Playwright/Chromium
 | Tier | Command | Description |
 |------|---------|-------------|
 | **DEFAULT** | `--mchp` | Standard MCHP human simulation |
-| **DEFAULT** | `--smol --default` | Basic SMOL CodeAgent |
-| **DEFAULT** | `--bu --default` | Basic BU browser agent |
+| **DEFAULT** | `--smol` | Basic SMOL CodeAgent |
+| **DEFAULT** | `--bu` | Basic BU browser agent |
 | **MCHP-LIKE** | `--smol --mchp-like` | SMOL with MCHP timing patterns |
 | **MCHP-LIKE** | `--bu --mchp-like` | BU with MCHP timing patterns |
 | **HYBRID** | `--mchp --smol` | MCHP workflows + SMOL LLM content |
@@ -97,14 +98,18 @@ Browser automation agents using the browser-use library with Playwright/Chromium
 # MCHP - Human simulation with Selenium/Firefox
 ./INSTALL_SUP.sh --mchp
 
-# SMOL - Basic LLM agent
-./INSTALL_SUP.sh --smol --default [--model=MODEL]
+# SMOL - Basic LLM agent (default behavior)
+./INSTALL_SUP.sh --smol [--model=MODEL]
+
+# BU - Basic browser automation (default behavior)
+./INSTALL_SUP.sh --bu [--model=MODEL]
+
+
+# === MCHP-LIKE Configurations ===
+# (LLM agents with MCHP timing patterns)
 
 # SMOL with MCHP-like timing
 ./INSTALL_SUP.sh --smol --mchp-like [--model=MODEL]
-
-# BU - Basic browser automation
-./INSTALL_SUP.sh --bu --default [--model=MODEL]
 
 # BU with MCHP-like timing
 ./INSTALL_SUP.sh --bu --mchp-like [--model=MODEL]
