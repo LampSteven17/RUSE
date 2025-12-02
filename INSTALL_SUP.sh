@@ -39,15 +39,17 @@ log_error() { echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2;
 log_info() { echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO:${NC} $1"; }
 
 usage() {
-    echo "DOLOS-DEPLOY Unified Installer"
+    echo "dolos-engine Unified Installer"
     echo ""
     echo "Usage: $0 [FLAGS] [OPTIONS]"
     echo ""
     echo "=== DEFAULT Configurations ==="
     echo "  $0 --mchp                         Install standard MCHP (human simulation)"
-    echo "  $0 --smol --default               Install standard SMOL agent"
+    echo "  $0 --smol                         Install standard SMOL agent"
+    echo "  $0 --bu                           Install standard BU agent"
+    echo ""
+    echo "=== MCHP-LIKE Configurations ==="
     echo "  $0 --smol --mchp-like             Install SMOL with MCHP-like behavior"
-    echo "  $0 --bu --default                 Install standard BU agent"
     echo "  $0 --bu --mchp-like               Install BU with MCHP-like behavior"
     echo ""
     echo "=== HYBRID Configurations (MCHP workflows + LLM content) ==="
@@ -67,8 +69,8 @@ usage() {
     echo "  Tier      | Flags               | Description"
     echo "  ----------|---------------------|------------------------------------------"
     echo "  DEFAULT   | --mchp              | Human simulation (Selenium + pyautogui)"
-    echo "  DEFAULT   | --smol --default    | Basic CodeAgent with DuckDuckGo search"
-    echo "  DEFAULT   | --bu --default      | Basic browser automation agent"
+    echo "  DEFAULT   | --smol              | Basic CodeAgent with DuckDuckGo search"
+    echo "  DEFAULT   | --bu                | Basic browser automation agent"
     echo "  MCHP-LIKE | --smol --mchp-like  | SMOL with MCHP timing patterns"
     echo "  MCHP-LIKE | --bu --mchp-like    | BU with MCHP timing patterns"
     echo "  HYBRID    | --mchp --smol       | MCHP workflows + SMOL LLM content"
@@ -137,32 +139,28 @@ determine_config() {
         return
     fi
 
-    # SMOL with config
+    # SMOL with config (default if no modifier specified)
     if $FLAG_SMOL && ! $FLAG_MCHP && ! $FLAG_BU && ! $FLAG_PHASE; then
-        if $FLAG_DEFAULT; then
-            echo "SMOL-DEFAULT"
-        elif $FLAG_MCHP_LIKE; then
+        if $FLAG_MCHP_LIKE; then
             echo "SMOL-MCHP-LIKE"
         elif $FLAG_IMPROVED; then
             echo "SMOL-IMPROVED"
         else
-            log_error "SMOL requires a configuration: --default, --mchp-like, or --improved"
-            exit 1
+            # Default behavior when just --smol is passed
+            echo "SMOL-DEFAULT"
         fi
         return
     fi
 
-    # BU with config
+    # BU with config (default if no modifier specified)
     if $FLAG_BU && ! $FLAG_MCHP && ! $FLAG_SMOL && ! $FLAG_PHASE; then
-        if $FLAG_DEFAULT; then
-            echo "BU-DEFAULT"
-        elif $FLAG_MCHP_LIKE; then
+        if $FLAG_MCHP_LIKE; then
             echo "BU-MCHP-LIKE"
         elif $FLAG_IMPROVED; then
             echo "BU-IMPROVED"
         else
-            log_error "BU requires a configuration: --default, --mchp-like, or --improved"
-            exit 1
+            # Default behavior when just --bu is passed
+            echo "BU-DEFAULT"
         fi
         return
     fi
