@@ -4,137 +4,123 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DOLOS-DEPLOY is a deployment system for SUP (Simulated User Profiles) agents. It provides installers and configurations for various agent types that simulate human-like behavior.
+DOLOS-DEPLOY (dolos-engine) is a deployment system for SUP (Simulated User Profiles) agents that simulate human-like computer behavior. The system supports scripted automation (MCHP), LLM-powered agents (SMOL/BU), and hybrid approaches combining both.
 
-## Configuration Tiers
-
-| Tier | Configurations | Description |
-|------|----------------|-------------|
-| **DEFAULT** | MCHP, SMOL, BU | Base implementations |
-| **MCHP-LIKE** | SMOL --mchp-like, BU --mchp-like | LLM agents with MCHP timing patterns |
-| **HYBRID** | MCHP-SMOL, MCHP-BU | MCHP workflows + LLM content generation |
-| **PHASE** | SMOL-PHASE, BU-PHASE | LLM agents + time-of-day aware timing + logging |
-
-## Installation Commands
+## Quick Reference
 
 ```bash
-# === DEFAULT Configurations ===
-./INSTALL_SUP.sh --mchp                    # Standard MCHP (human simulation)
-./INSTALL_SUP.sh --smol                    # Standard SMOL agent
-./INSTALL_SUP.sh --bu                      # Standard BU agent
+# Install an agent
+./INSTALL_SUP.sh --mchp                    # Human simulation (Selenium + pyautogui)
+./INSTALL_SUP.sh --smol                    # smolagents + Ollama
+./INSTALL_SUP.sh --bu                      # browser-use + Playwright
+./INSTALL_SUP.sh --mchp --smol             # HYBRID: MCHP workflows + SMOL LLM content
+./INSTALL_SUP.sh --smol --phase            # PHASE: SMOL + time-of-day timing + logging
+./INSTALL_SUP.sh --model=mistral           # Override default model (llama3.1:8b)
 
-# === MCHP-LIKE Configurations ===
-./INSTALL_SUP.sh --smol --mchp-like        # SMOL with MCHP-like behavior
-./INSTALL_SUP.sh --bu --mchp-like          # BU with MCHP-like behavior
+# Validate installation
+./src/install_scripts/test_agent.sh --agent=MCHP --path=/path/to/DOLOS-DEPLOY
 
-# === HYBRID Configurations (MCHP workflows + LLM content) ===
-./INSTALL_SUP.sh --mchp --smol             # MCHP-SMOL hybrid
-./INSTALL_SUP.sh --mchp --bu               # MCHP-BU hybrid
-
-# === PHASE Configurations (LLM + improved timing + logging) ===
-./INSTALL_SUP.sh --smol --phase            # SMOL-PHASE agent
-./INSTALL_SUP.sh --bu --phase              # BU-PHASE agent
-
-# === Options ===
---model=MODEL                              # Override Ollama model (default: llama3.1:8b)
-```
-
-## Architecture
-
-```
-DOLOS-DEPLOY/
-├── INSTALL_SUP.sh              # Unified installer for all configurations
-├── docs/
-│   └── HYBRID_ARCHITECTURE_PLAN.txt  # Detailed implementation plan
-├── src/
-│   ├── common/                 # Shared components
-│   │   ├── logging/
-│   │   │   └── agent_logger.py   # Unified JSON-Lines logging framework
-│   │   └── timing/
-│   │       └── phase_timing.py   # PHASE timing with time-of-day awareness
-│   ├── MCHP/                   # DEFAULT: Human simulation agent
-│   │   ├── install_mchp.sh
-│   │   └── default/pyhuman/    # Workflow-based human emulation
-│   │       ├── human.py        # Main loop - randomly executes workflows
-│   │       └── app/workflows/  # Individual behaviors
-│   ├── SMOL/                   # DEFAULT: smolagents-based AI agents
-│   │   ├── install_smol.sh
-│   │   ├── default/            # Basic CodeAgent
-│   │   └── mchp-like/          # MCHP timing patterns
-│   ├── BU/                     # DEFAULT: browser-use agents
-│   │   ├── install_bu.sh
-│   │   ├── default/            # Basic browser automation
-│   │   └── mchp-like/          # MCHP timing patterns
-│   ├── MCHP-HYBRID/            # HYBRID: MCHP + LLM content
-│   │   ├── common/pyhuman/     # Augmented workflows
-│   │   │   └── app/utility/
-│   │   │       └── llm_content.py  # LLM abstraction (NO FALLBACK)
-│   │   ├── smol-backend/       # SMOL backend config
-│   │   └── bu-backend/         # BU backend config
-│   ├── SMOL-PHASE/             # PHASE: SMOL + timing + logging
-│   │   └── agent.py
-│   ├── BU-PHASE/               # PHASE: BU + timing + logging
-│   │   └── agent.py
-│   └── install_scripts/
-│       ├── install_ollama.sh   # Ollama LLM setup
-│       └── test_agent.sh       # Validates installations
-```
-
-## Deployment Structure
-
-```
-deployed_sups/
-├── MCHP/              # Standard MCHP
-├── SMOL/              # Standard SMOL
-├── BU/                # Standard BU
-├── MCHP-SMOL/         # HYBRID with SMOL backend
-├── MCHP-BU/           # HYBRID with BU backend
-├── SMOL-PHASE/        # SMOL + PHASE timing + logging
-└── BU-PHASE/          # BU + PHASE timing + logging
-```
-
-## Service Management
-
-```bash
-# Service names by configuration
-sudo systemctl {start|stop|status} mchp        # MCHP
-sudo systemctl {start|stop|status} smol        # SMOL
-sudo systemctl {start|stop|status} bu          # BU
-sudo systemctl {start|stop|status} mchp_smol   # MCHP-SMOL
-sudo systemctl {start|stop|status} mchp_bu     # MCHP-BU
-sudo systemctl {start|stop|status} smol_phase  # SMOL-PHASE
-sudo systemctl {start|stop|status} bu_phase    # BU-PHASE
-
-# View logs
+# Service management
+sudo systemctl {start|stop|status} mchp|smol|bu|mchp_smol|mchp_bu|smol_phase|bu_phase
 sudo journalctl -u <service> -f
 ```
 
-## Logging Framework
+## Configuration Tiers
 
-PHASE and HYBRID agents use unified JSON-Lines logging:
+| Tier | Flags | Description |
+|------|-------|-------------|
+| DEFAULT | `--mchp`, `--smol`, `--bu` | Base implementations |
+| MCHP-LIKE | `--smol --mchp-like`, `--bu --mchp-like` | LLM agents with MCHP timing patterns |
+| HYBRID | `--mchp --smol`, `--mchp --bu` | MCHP workflows + LLM content generation |
+| PHASE | `--smol --phase`, `--bu --phase` | LLM agents + time-of-day aware timing + logging |
 
+## Architecture
+
+### Source Structure (`src/`)
+
+- **common/** - Shared modules used by PHASE/HYBRID agents
+  - `logging/agent_logger.py` - JSON-Lines logging framework
+  - `timing/phase_timing.py` - Time-of-day aware timing with activity clustering
+- **MCHP/** - Human simulation using Selenium/pyautogui
+  - `default/pyhuman/human.py` - Main loop: randomly selects workflows from a cluster
+  - `default/pyhuman/app/workflows/` - Individual behaviors (browse_web, google_search, open_office_writer, etc.)
+- **SMOL/** - smolagents-based AI agents with DuckDuckGo search
+- **BU/** - browser-use agents with Playwright/Chromium
+- **MCHP-HYBRID/** - MCHP workflows augmented with LLM content
+  - `common/pyhuman/app/utility/llm_content.py` - LLM abstraction layer (SmolLLMBackend, BuLLMBackend)
+  - `smol-backend/`, `bu-backend/` - Backend-specific LLM configs
+- **SMOL-PHASE/**, **BU-PHASE/** - LLM agents with PHASE timing integration
+
+### Deployment Structure (`deployed_sups/`)
+
+Installed agents are deployed to `deployed_sups/<AGENT_NAME>/` with:
+- `venv/` - Python virtual environment
+- `logs/` - Session logs (JSON-Lines for PHASE/HYBRID)
+- `run_*.sh` - Service entry point
+
+## Key Patterns
+
+### MCHP Workflow Pattern
+
+Workflows in `app/workflows/` export a `load()` function returning a workflow object with `display`, `action(extra)`, and `cleanup()` methods. The main loop (`human.py`) executes random workflows in clusters with configurable timing.
+
+### LLM Content Generation (HYBRID)
+
+```python
+from app.utility.llm_content import llm_paragraph, llm_search_query, llm_select
+
+text = llm_paragraph()                    # Replaces TextLorem().paragraph()
+query = llm_search_query("technology")    # Context-aware search query
+choice = llm_select(items, "browsing")    # Intelligent item selection
 ```
-logs/
-└── session_2025-12-02_14-30-45_abc123.jsonl
+
+### Logging (PHASE/HYBRID)
+
+```python
+from common.logging.agent_logger import AgentLogger
+
+logger = AgentLogger(agent_type="SMOL-PHASE", log_dir="/path/to/logs")
+logger.session_start()
+logger.workflow_start("google_search")
+logger.llm_request(action="generate_query", input_data={"context": "..."})
+logger.llm_response(output="query text", duration_ms=1200)
+logger.workflow_end("google_search", success=True)
+logger.session_end()
 ```
 
-Event types: `session_start`, `session_end`, `workflow_start`, `workflow_end`,
-`llm_request`, `llm_response`, `llm_error`, `decision`, `browser_action`,
-`gui_action`, `timing_delay`, `error`, `warning`, `info`
+### PHASE Timing
+
+```python
+from common.timing.phase_timing import PhaseTiming
+
+timing = PhaseTiming()
+cluster_size = timing.get_cluster_size()   # Adjusted by time-of-day
+task_delay = timing.get_task_delay()       # Inter-task delay
+cluster_delay = timing.get_cluster_delay() # Inter-cluster break
+```
 
 ## Key Design Decisions
 
-- **NO FALLBACK**: HYBRID agents fail loudly if LLM unavailable (experiments must be valid)
-- **Unified installer**: Single INSTALL_SUP.sh with combinatorial flags
-- **JSON-Lines logging**: One event per line for easy parsing
-- **PHASE timing**: Time-of-day awareness for realistic activity patterns
+- **NO FALLBACK**: HYBRID agents raise `LLMUnavailableError` if LLM fails - experiments must be clearly valid or invalid
+- **Unified installer**: Single `INSTALL_SUP.sh` with combinatorial flags determines configuration
+- **JSON-Lines logging**: One event per line for easy post-hoc analysis
+- **PHASE timing**: Hourly activity multipliers (peak 9-11 AM, 2-4 PM; minimal 2-4 AM)
 
-## Key Dependencies
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DEFAULT_OLLAMA_MODEL` | Ollama model for installation | `llama3.1:8b` |
+| `HYBRID_LLM_BACKEND` | Backend for HYBRID agents | `smol` |
+| `LITELLM_MODEL` | Model for SMOL backend | `ollama/llama3.1:8b` |
+| `OLLAMA_MODEL` | Model for BU backend | `llama3.1:8b` |
+
+## Dependencies
 
 - **MCHP**: selenium, pyautogui, Firefox, Geckodriver, xvfb
 - **SMOL**: smolagents, litellm, Ollama
 - **BU**: browser-use, playwright (Chromium), Ollama
-- **HYBRID**: All MCHP deps + backend-specific LLM deps
+- **HYBRID**: MCHP deps + backend-specific LLM deps
 - **PHASE**: LLM deps + common logging/timing modules
 
 ## Git Conventions
