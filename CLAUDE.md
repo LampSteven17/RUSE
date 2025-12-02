@@ -136,3 +136,7 @@ Event types: `session_start`, `session_end`, `workflow_start`, `workflow_end`,
 - **BU**: browser-use, playwright (Chromium), Ollama
 - **HYBRID**: All MCHP deps + backend-specific LLM deps
 - **PHASE**: LLM deps + common logging/timing modules
+
+## Git Conventions
+
+- **No Claude footers**: Do NOT add "Generated with Claude Code" or "Co-Authored-By: Claude" footers to commits or PRs
