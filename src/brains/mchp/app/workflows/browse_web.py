@@ -17,16 +17,15 @@ MAX_SLEEP_TIME = 20
 DEFAULT_TIMEOUT = 45
 
 def load():
-    driver = WebDriverHelper()
-    return WebBrowse(driver=driver)
+    return WebBrowse()
 
 
 class WebBrowse(BaseWorkflow):
 
-    def __init__(self, driver, max_sleep_time=MAX_SLEEP_TIME, 
-                               max_navigation_clicks=MAX_NAVIGATION_CLICKS, 
+    def __init__(self, max_sleep_time=MAX_SLEEP_TIME,
+                               max_navigation_clicks=MAX_NAVIGATION_CLICKS,
                                default_timeout=DEFAULT_TIMEOUT):
-        super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION, driver=driver)
+        super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION, driver=None)
 
         self.max_sleep_time = max_sleep_time
         self.max_navigation_clicks = max_navigation_clicks
@@ -34,6 +33,8 @@ class WebBrowse(BaseWorkflow):
         self.website_list = self._load_website_list()
 
     def action(self, extra=None):
+        if self.driver is None:
+            self.driver = WebDriverHelper()
         self._web_browse()
 
     """ PRIVATE """
