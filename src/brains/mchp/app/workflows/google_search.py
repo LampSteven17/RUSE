@@ -19,19 +19,20 @@ SEARCH_LIST = 'google_searches.txt'
 
 
 def load():
-    driver = WebDriverHelper()
-    return GoogleSearch(driver=driver)
+    return GoogleSearch()
 
 
 class GoogleSearch(BaseWorkflow):
 
-    def __init__(self, driver, input_wait_time=DEFAULT_WAIT_TIME):
-        super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION, driver=driver)
+    def __init__(self, input_wait_time=DEFAULT_WAIT_TIME):
+        super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION, driver=None)
 
         self.input_wait_time = input_wait_time
         self.search_list = self._load_search_list()
 
     def action(self, extra=None):
+        if self.driver is None:
+            self.driver = WebDriverHelper()
         self._search_web()
 
     """ PRIVATE """
