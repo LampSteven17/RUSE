@@ -526,7 +526,7 @@ run_directly() {
     case "$BRAIN" in
         mchp)
             log "Running MCHP agent..."
-            exec python3 -m runners.run_mchp --content="$content_arg" --mechanics="$mechanics_arg" $model_arg $phase_arg
+            exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" --mechanics="$mechanics_arg" $model_arg $phase_arg
             ;;
         smolagents)
             local task="${TASK:-What is the latest news in technology?}"
@@ -535,7 +535,7 @@ run_directly() {
             ;;
         browseruse)
             log "Running BrowserUse agent..."
-            exec python3 -m runners.run_browseruse $model_arg $phase_arg
+            exec xvfb-run -a python3 -m runners.run_browseruse $model_arg $phase_arg
             ;;
     esac
 }
