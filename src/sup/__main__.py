@@ -108,8 +108,8 @@ Configuration Keys:
             print(f"  {key}")
         return
 
-    # Import runners
-    from runners import get_config, build_config, run_mchp, run_browseruse, run_smolagents
+    # Import config helpers
+    from runners import get_config, build_config
 
     # Determine configuration
     config = None
@@ -143,12 +143,15 @@ Configuration Keys:
     print(f"  PHASE: {config.phase}")
     print("-" * 40)
 
-    # Run the appropriate brain
+    # Run the appropriate brain (import only what's needed)
     if config.brain == "mchp":
+        from runners.run_mchp import run_mchp
         run_mchp(config)
     elif config.brain == "browseruse":
+        from runners.run_browseruse import run_browseruse
         run_browseruse(config, task=args.task)
     elif config.brain == "smolagents":
+        from runners.run_smolagents import run_smolagents
         run_smolagents(config, task=args.task)
     else:
         print(f"Error: Unknown brain type '{config.brain}'")
