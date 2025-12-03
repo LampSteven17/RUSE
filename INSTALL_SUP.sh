@@ -444,7 +444,7 @@ source venv/bin/activate
 # Configuration
 export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
-export PYTHONPATH="$deploy_dir/src:\$PYTHONPATH"
+export PYTHONPATH="$deploy_dir/src:\${PYTHONPATH:-}"
 export LOG_DIR="$deploy_dir/logs"
 
 # Task (for LLM agents)
@@ -509,7 +509,7 @@ run_directly() {
     $PHASE && phase_arg="--phase"
 
     # Set environment
-    export PYTHONPATH="$SCRIPT_DIR/src:$PYTHONPATH"
+    export PYTHONPATH="$SCRIPT_DIR/src:${PYTHONPATH:-}"
     export OLLAMA_MODEL="${MODEL_NAMES[$MODEL]:-llama3.1:8b}"
     export LITELLM_MODEL="ollama/$OLLAMA_MODEL"
 
