@@ -25,12 +25,29 @@ dolos-engine provides a unified installation and management system for agents th
 git clone https://github.com/LampSteven17/DOLOS-DEPLOY.git
 cd DOLOS-DEPLOY
 
-# Install an agent (examples)
-./INSTALL_SUP.sh --mchp                    # Human simulation
-./INSTALL_SUP.sh --smol                    # LLM agent (default)
-./INSTALL_SUP.sh --bu                      # Browser automation (default)
-./INSTALL_SUP.sh --mchp --smol             # Hybrid agent
-./INSTALL_SUP.sh --smol --phase            # LLM + advanced timing
+# Install using config keys (creates systemd service)
+./INSTALL_SUP.sh --M1                      # Pure MCHP (no LLM)
+./INSTALL_SUP.sh --S1.llama                # SmolAgents + llama3.1:8b
+./INSTALL_SUP.sh --B2.gemma                # BrowserUse + gemma3:4b
+./INSTALL_SUP.sh --M2.llama                # MCHP + SmolAgents augmentation
+./INSTALL_SUP.sh --S1.llama+               # SmolAgents + PHASE timing
+
+# Or use long-form options
+./INSTALL_SUP.sh --brain mchp --content smolagents --mechanics smolagents --model llama
+
+# Run directly without installation (development/testing)
+./INSTALL_SUP.sh --S1.llama --runner                      # Run SmolAgents directly
+./INSTALL_SUP.sh --S1.llama --runner --task "Search AI"   # With custom task
+./INSTALL_SUP.sh --B2.gemma+ --runner                     # BrowserUse + PHASE
+
+# List all configurations
+./INSTALL_SUP.sh --list
+
+# Or use Python runners directly (from src/)
+cd src
+python3 -m sup M1                          # Unified CLI with config key
+python3 -m sup --brain smolagents --model llama --phase
+python3 -m runners.run_smolagents "What is AI?" --model=llama --phase
 ```
 
 ---
@@ -65,19 +82,35 @@ Browser automation agents using the browser-use library with Playwright/Chromium
 
 ---
 
-## Configuration Tiers
+## Configuration Matrix
 
-| Tier | Command | Description |
-|------|---------|-------------|
-| **DEFAULT** | `--mchp` | Standard MCHP human simulation |
-| **DEFAULT** | `--smol` | Basic SMOL CodeAgent |
-| **DEFAULT** | `--bu` | Basic BU browser agent |
-| **MCHP-LIKE** | `--smol --mchp-like` | SMOL with MCHP timing patterns |
-| **MCHP-LIKE** | `--bu --mchp-like` | BU with MCHP timing patterns |
-| **HYBRID** | `--mchp --smol` | MCHP workflows + SMOL LLM content |
-| **HYBRID** | `--mchp --bu` | MCHP workflows + BU LLM content |
-| **PHASE** | `--smol --phase` | SMOL + time-of-day timing + logging |
-| **PHASE** | `--bu --phase` | BU + time-of-day timing + logging |
+All configurations from `docs/EXPERIMENTAL_PLAN.md`:
+
+### PRE-PHASE (13 configurations)
+
+| Config | Brain | Content | Mechanics | Model |
+|--------|-------|---------|-----------|-------|
+| `--M1` | MCHP | MCHP | MCHP | None |
+| `--M2.llama` | MCHP | SmolAgents | SmolAgents | llama3.1:8b |
+| `--M2a.llama` | MCHP | SmolAgents | MCHP | llama3.1:8b |
+| `--M2b.llama` | MCHP | MCHP | SmolAgents | llama3.1:8b |
+| `--M3.llama` | MCHP | BrowserUse | BrowserUse | llama3.1:8b |
+| `--M3a.llama` | MCHP | BrowserUse | MCHP | llama3.1:8b |
+| `--M3b.llama` | MCHP | MCHP | BrowserUse | llama3.1:8b |
+| `--B1.llama` | BrowserUse | BrowserUse | BrowserUse | llama3.1:8b |
+| `--B2.gemma` | BrowserUse | BrowserUse | BrowserUse | gemma3:4b |
+| `--B3.deepseek` | BrowserUse | BrowserUse | BrowserUse | deepseek-r1:8b |
+| `--S1.llama` | SmolAgents | SmolAgents | SmolAgents | llama3.1:8b |
+| `--S2.gemma` | SmolAgents | SmolAgents | SmolAgents | gemma3:4b |
+| `--S3.deepseek` | SmolAgents | SmolAgents | SmolAgents | deepseek-r1:8b |
+
+### POST-PHASE (+ suffix = PHASE timing + enhanced prompts)
+
+| Config | Brain | Model | Description |
+|--------|-------|-------|-------------|
+| `--B1.llama+` | BrowserUse | llama3.1:8b | PHASE timing + prompts |
+| `--S1.llama+` | SmolAgents | llama3.1:8b | PHASE timing + prompts |
+| (etc.) | | | |
 
 ---
 
@@ -90,66 +123,33 @@ Browser automation agents using the browser-use library with Playwright/Chromium
 - sudo access (for systemd service installation)
 - ~10GB disk space (for models and dependencies)
 
-### Full Installation Commands
+### Installation Examples
 
 ```bash
-# === DEFAULT Configurations ===
+# Using config keys (recommended)
+./INSTALL_SUP.sh --M1                      # Pure MCHP
+./INSTALL_SUP.sh --S1.llama                # SmolAgents + llama
+./INSTALL_SUP.sh --B2.gemma                # BrowserUse + gemma
+./INSTALL_SUP.sh --M2.llama                # MCHP + SmolAgents content/mechanics
+./INSTALL_SUP.sh --S1.llama+               # SmolAgents + PHASE
 
-# MCHP - Human simulation with Selenium/Firefox
-./INSTALL_SUP.sh --mchp
+# Using long-form options
+./INSTALL_SUP.sh --brain mchp --content mchp --mechanics mchp --model none
+./INSTALL_SUP.sh --brain smolagents --model gemma --phase
+./INSTALL_SUP.sh --brain mchp --content smolagents --mechanics smolagents --model llama
 
-# SMOL - Basic LLM agent (default behavior)
-./INSTALL_SUP.sh --smol [--model=MODEL]
-
-# BU - Basic browser automation (default behavior)
-./INSTALL_SUP.sh --bu [--model=MODEL]
-
-
-# === MCHP-LIKE Configurations ===
-# (LLM agents with MCHP timing patterns)
-
-# SMOL with MCHP-like timing
-./INSTALL_SUP.sh --smol --mchp-like [--model=MODEL]
-
-# BU with MCHP-like timing
-./INSTALL_SUP.sh --bu --mchp-like [--model=MODEL]
-
-
-# === HYBRID Configurations ===
-# (MCHP workflows with LLM-generated content)
-
-# MCHP + SMOL LLM backend
-./INSTALL_SUP.sh --mchp --smol [--model=MODEL]
-
-# MCHP + BU LLM backend
-./INSTALL_SUP.sh --mchp --bu [--model=MODEL]
-
-
-# === PHASE Configurations ===
-# (LLM agents with advanced timing and logging)
-
-# SMOL with PHASE timing
-./INSTALL_SUP.sh --smol --phase [--model=MODEL]
-
-# BU with PHASE timing
-./INSTALL_SUP.sh --bu --phase [--model=MODEL]
+# List all available configurations
+./INSTALL_SUP.sh --list
 ```
 
-### Model Selection
+### Model Options
 
-Default model: `llama3.1:8b`
-
-Override with:
-```bash
-./INSTALL_SUP.sh --smol --default --model=mistral
-./INSTALL_SUP.sh --mchp --smol --model=qwen2.5:7b
-```
-
-Or set environment variable:
-```bash
-export DEFAULT_OLLAMA_MODEL=codellama
-./INSTALL_SUP.sh --smol --default
-```
+| Key | Model | Used By |
+|-----|-------|---------|
+| `none` | (no LLM) | M1 |
+| `llama` | llama3.1:8b | Default for LLM configs |
+| `gemma` | gemma3:4b | B2, S2 series |
+| `deepseek` | deepseek-r1:8b | B3, S3 series |
 
 ---
 
@@ -179,6 +179,25 @@ sudo journalctl -u <service> -f
 
 ---
 
+## Architecture
+
+The codebase uses a **Brain → Augmentations → Model** architecture:
+
+1. **Brain**: Core execution engine (MCHP, SmolAgents, BrowserUse)
+2. **Augmentations**: Optional LLM content/mechanics controllers
+3. **Model**: LLM selection (llama3.1:8b, gemma3:4b, deepseek-r1:8b)
+
+### Configuration Keys
+
+| Series | Pattern | Example |
+|--------|---------|---------|
+| M (MCHP) | M[1-3][a\|b].[model] | M1, M2.llama, M2a.llama |
+| S (SmolAgents) | S[1-3].[model][+] | S1.llama, S2.gemma+ |
+| B (BrowserUse) | B[1-3].[model][+] | B1.llama, B3.deepseek+ |
+
+- No suffix = DEFAULT_PROMPTS (baseline)
+- `+` suffix = PHASE_PROMPTS (enhanced prompts)
+
 ## Directory Structure
 
 ```
@@ -187,19 +206,34 @@ DOLOS-DEPLOY/
 ├── README.md                   # This file
 ├── CLAUDE.md                   # Claude Code guidance
 ├── docs/
-│   └── HYBRID_ARCHITECTURE_PLAN.txt
+│   └── EXPERIMENTAL_PLAN.md    # 16-configuration experiment matrix
 ├── src/
+│   ├── brains/                 # Core agent implementations
+│   │   ├── mchp/               # MCHP agent (Selenium/pyautogui)
+│   │   │   ├── agent.py        # MCHPAgent class
+│   │   │   ├── human.py        # Workflow main loop
+│   │   │   └── app/workflows/  # Individual behaviors
+│   │   ├── smolagents/         # SmolAgents (HuggingFace)
+│   │   │   ├── agent.py        # SmolAgent class
+│   │   │   └── prompts.py      # Three-prompt configuration
+│   │   └── browseruse/         # BrowserUse (Playwright)
+│   │       ├── agent.py        # BrowserUseAgent class
+│   │       └── prompts.py      # Three-prompt configuration
+│   ├── augmentations/          # LLM content/mechanics controllers
+│   │   ├── content/            # Content generation (llm_content.py)
+│   │   └── mechanics/          # Behavioral prompts
+│   ├── runners/                # Unified runners
+│   │   ├── run_config.py       # SUPConfig + CONFIGS registry
+│   │   ├── run_mchp.py         # python3 -m runners.run_mchp
+│   │   ├── run_smolagents.py   # python3 -m runners.run_smolagents
+│   │   └── run_browseruse.py   # python3 -m runners.run_browseruse
 │   ├── common/                 # Shared modules
-│   │   ├── logging/            # JSON-Lines logging framework
-│   │   └── timing/             # PHASE timing system
-│   ├── MCHP/                   # Human simulation agent
-│   ├── SMOL/                   # smolagents-based agents
-│   ├── BU/                     # browser-use agents
-│   ├── MCHP-HYBRID/            # Hybrid configurations
-│   ├── SMOL-PHASE/             # SMOL + PHASE timing
-│   ├── BU-PHASE/               # BU + PHASE timing
-│   └── install_scripts/        # Shared installation utilities
-└── deployed_sups/              # Deployed agents (created during install)
+│   │   ├── logging/            # JSON-Lines logging (agent_logger.py)
+│   │   ├── timing/             # PHASE timing (phase_timing.py)
+│   │   └── config/             # Model registry (model_config.py)
+│   ├── sup/                    # Unified CLI (python -m sup)
+│   └── install_scripts/        # Installation utilities (ollama, tests)
+└── deployed_sups/              # Deployed agents (created by installer)
     ├── MCHP/
     ├── SMOL/
     ├── BU/
