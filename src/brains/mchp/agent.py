@@ -78,6 +78,7 @@ class MCHPAgent:
     def _signal_handler(self, sig, frame):
         """Handle shutdown signals gracefully."""
         self.stop()
+        sys.exit(0)
 
     def run(self):
         """Start the MCHP emulation loop."""
@@ -92,13 +93,19 @@ class MCHPAgent:
             self._emulation_loop()
         except KeyboardInterrupt:
             self.stop()
+            sys.exit(0)
 
     def stop(self):
         """Stop the emulation and cleanup workflows."""
+        if not self._running:
+            return  # Already stopped
         self._running = False
+        print("\nTerminating MCHP agent...")
         for workflow in self.workflows:
-            workflow.cleanup()
-        print(" Terminating MCHP agent...")
+            try:
+                workflow.cleanup()
+            except Exception:
+                pass  # Ignore cleanup errors on shutdown
 
 
 def run(cluster_size=DEFAULT_CLUSTER_SIZE, task_interval=DEFAULT_TASK_INTERVAL,
