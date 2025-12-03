@@ -413,20 +413,24 @@ create_run_script() {
 
     local model_name="${MODEL_NAMES[$MODEL]:-llama3.1:8b}"
 
+    # Build model arg (skip if none)
+    local model_arg=""
+    [[ "$MODEL" != "none" ]] && model_arg="--model=$MODEL"
+
     # Build runner command based on brain
     local runner_cmd=""
     local xvfb_prefix=""
 
     case "$BRAIN" in
         mchp)
-            runner_cmd="python3 -m runners.run_mchp --content=$content_arg --mechanics=$mechanics_arg --model=$MODEL $phase_arg"
+            runner_cmd="python3 -m runners.run_mchp --content=$content_arg --mechanics=$mechanics_arg $model_arg $phase_arg"
             xvfb_prefix="xvfb-run -a "
             ;;
         smolagents)
-            runner_cmd="python3 -m runners.run_smolagents \"\$TASK\" --model=$MODEL $phase_arg"
+            runner_cmd="python3 -m runners.run_smolagents \"\$TASK\" $model_arg $phase_arg"
             ;;
         browseruse)
-            runner_cmd="python3 -m runners.run_browseruse --model=$MODEL $phase_arg"
+            runner_cmd="python3 -m runners.run_browseruse $model_arg $phase_arg"
             xvfb_prefix="xvfb-run -a "
             ;;
     esac
@@ -515,19 +519,23 @@ run_directly() {
 
     cd "$SCRIPT_DIR/src"
 
+    # Build model arg (skip if none)
+    local model_arg=""
+    [[ "$MODEL" != "none" ]] && model_arg="--model=$MODEL"
+
     case "$BRAIN" in
         mchp)
             log "Running MCHP agent..."
-            exec python3 -m runners.run_mchp --content="$content_arg" --mechanics="$mechanics_arg" --model="$MODEL" $phase_arg
+            exec python3 -m runners.run_mchp --content="$content_arg" --mechanics="$mechanics_arg" $model_arg $phase_arg
             ;;
         smolagents)
             local task="${TASK:-What is the latest news in technology?}"
             log "Running SmolAgents with task: $task"
-            exec python3 -m runners.run_smolagents "$task" --model="$MODEL" $phase_arg
+            exec python3 -m runners.run_smolagents "$task" $model_arg $phase_arg
             ;;
         browseruse)
             log "Running BrowserUse agent..."
-            exec python3 -m runners.run_browseruse --model="$MODEL" $phase_arg
+            exec python3 -m runners.run_browseruse $model_arg $phase_arg
             ;;
     esac
 }
