@@ -1,0 +1,145 @@
+"""
+BrowserUse Brain - AI-powered browser automation agent.
+
+Supports three-prompt configuration for content and mechanics control.
+"""
+import os
+import asyncio
+from typing import Optional
+
+from browser_use import Agent
+from browser_use.browser.session import BrowserSession
+
+from common.config.model_config import get_model
+from brains.browseruse.prompts import BUPrompts, DEFAULT_PROMPTS
+
+
+class BrowserUseAgent:
+    """
+    BrowserUse agent with three-prompt support.
+
+    Configurations:
+    - B1.llama: DEFAULT_PROMPTS + llama3.1:8b
+    - B2.gemma: DEFAULT_PROMPTS + gemma3:4b
+    - B3.deepseek: DEFAULT_PROMPTS + deepseek-r1:8b
+    - B?.model+: PHASE_PROMPTS + any model (POST-PHASE)
+    """
+
+    def __init__(
+        self,
+        prompts: BUPrompts = DEFAULT_PROMPTS,
+        model: str = None,
+        headless: bool = True,
+        max_steps: int = 10,
+    ):
+        self.prompts = prompts
+        self.model_name = get_model(model)
+        self.headless = headless
+        self.max_steps = max_steps
+        self._llm = None
+        self._browser_session = None
+
+    def _get_llm(self):
+        """Lazy-load the LLM."""
+        if self._llm is None:
+            from browser_use import ChatOllama
+            self._llm = ChatOllama(model=self.model_name)
+        return self._llm
+
+    def _get_browser_session(self):
+        """Create browser session with container-safe configuration."""
+        return BrowserSession(
+            headless=self.headless,
+            channel="chromium",
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-extensions',
+                '--disable-gpu',
+            ]
+        )
+
+    async def run_async(self, task: str) -> Optional[str]:
+        """
+        Run a task asynchronously with configured prompts.
+
+        Args:
+            task: The specific task to perform (e.g., "Search for Python tutorials")
+
+        Returns:
+            Result from the agent, or None on error
+        """
+        # Build full prompt from task + content + mechanics guidelines
+        full_prompt = BUPrompts(
+            task=task,
+            content=self.prompts.content,
+            mechanics=self.prompts.mechanics,
+        ).build_full_prompt()
+
+        print(f"Starting BrowserUse agent with model: {self.model_name}")
+        print(f"Task: {task}")
+
+        try:
+            browser_session = self._get_browser_session()
+            agent = Agent(
+                task=full_prompt,
+                llm=self._get_llm(),
+                browser_session=browser_session,
+            )
+            result = await agent.run(max_steps=self.max_steps)
+            print("Task completed successfully!")
+            return result
+        except Exception as e:
+            print(f"Error running agent: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def run(self, task: str) -> Optional[str]:
+        """
+        Run a task synchronously.
+
+        Args:
+            task: The specific task to perform
+
+        Returns:
+            Result from the agent, or None on error
+        """
+        return asyncio.run(self.run_async(task))
+
+
+def run(task: str, model: str = None, prompts: BUPrompts = DEFAULT_PROMPTS,
+        headless: bool = True, max_steps: int = 10) -> Optional[str]:
+    """Convenience function to run BrowserUse agent."""
+    agent = BrowserUseAgent(
+        prompts=prompts,
+        model=model,
+        headless=headless,
+        max_steps=max_steps,
+    )
+    return agent.run(task)
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description='BrowserUse Agent')
+    parser.add_argument('task', nargs='?', default="Visit google.com and search for 'OpenAI news'")
+    parser.add_argument('--model', type=str, default=None, help='Model key: llama, gemma, deepseek')
+    parser.add_argument('--phase', action='store_true', help='Use PHASE-improved prompts')
+    parser.add_argument('--max-steps', type=int, default=10)
+    parser.add_argument('--headless', action='store_true', default=True)
+    args = parser.parse_args()
+
+    from brains.browseruse.prompts import PHASE_PROMPTS
+
+    prompts = PHASE_PROMPTS if args.phase else DEFAULT_PROMPTS
+
+    run(
+        task=args.task,
+        model=args.model,
+        prompts=prompts,
+        headless=args.headless,
+        max_steps=args.max_steps,
+    )
