@@ -9,7 +9,7 @@ WORKFLOW_NAME = 'MicrosoftPaint'
 WORKFLOW_DESCRIPTION = 'Create a blank MS Paint file (Windows)'
 
 DEFAULT_INPUT_WAIT_TIME = 2
-DEFAULT_PAINT_PATH = paint_path = 'C:\Windows\System32\mspaint.exe'
+DEFAULT_PAINT_PATH = paint_path = r'C:\Windows\System32\mspaint.exe'
 
 
 def load():
