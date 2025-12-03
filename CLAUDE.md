@@ -9,47 +9,82 @@ DOLOS-DEPLOY (dolos-engine) is a deployment system for SUP (Simulated User Profi
 ## Quick Reference
 
 ```bash
-# Install an agent
-./INSTALL_SUP.sh --mchp                    # Human simulation (Selenium + pyautogui)
-./INSTALL_SUP.sh --smol                    # smolagents + Ollama
-./INSTALL_SUP.sh --bu                      # browser-use + Playwright
-./INSTALL_SUP.sh --mchp --smol             # HYBRID: MCHP workflows + SMOL LLM content
-./INSTALL_SUP.sh --smol --phase            # PHASE: SMOL + time-of-day timing + logging
-./INSTALL_SUP.sh --model=mistral           # Override default model (llama3.1:8b)
+# Install using config keys (from EXPERIMENTAL_PLAN.md)
+./INSTALL_SUP.sh --M1                      # Pure MCHP (no LLM)
+./INSTALL_SUP.sh --S1.llama                # SmolAgents + llama3.1:8b
+./INSTALL_SUP.sh --B2.gemma                # BrowserUse + gemma3:4b
+./INSTALL_SUP.sh --M2.llama                # MCHP + SmolAgents content/mechanics
+./INSTALL_SUP.sh --S1.llama+               # SmolAgents + PHASE timing
 
-# Validate installation
-./src/install_scripts/test_agent.sh --agent=MCHP --path=/path/to/DOLOS-DEPLOY
+# Or use long-form options
+./INSTALL_SUP.sh --brain mchp --content smolagents --mechanics smolagents --model llama
 
-# Service management
-sudo systemctl {start|stop|status} mchp|smol|bu|mchp_smol|mchp_bu|smol_phase|bu_phase
+# Run directly without installation (dev/testing)
+./INSTALL_SUP.sh --S1.llama --runner                  # Run directly
+./INSTALL_SUP.sh --S1.llama --runner --task "Search"  # With custom task
+./INSTALL_SUP.sh --list                               # List all configs
+
+# Or use Python runners directly (from src/)
+python3 -m sup M1                                   # Unified CLI
+python3 -m sup --brain smolagents --model llama --phase
+python3 -m runners.run_smolagents "What is AI?" --model=llama --phase
+
+# Service management (service name = config key, lowercase with underscores)
+sudo systemctl {start|stop|status} m1|s1_llama|b2_gemma|m2_llama|s1_llamap
 sudo journalctl -u <service> -f
 ```
 
-## Configuration Tiers
+## Architecture: Brain → Augmentations → Model
 
-| Tier | Flags | Description |
-|------|-------|-------------|
-| DEFAULT | `--mchp`, `--smol`, `--bu` | Base implementations |
-| MCHP-LIKE | `--smol --mchp-like`, `--bu --mchp-like` | LLM agents with MCHP timing patterns |
-| HYBRID | `--mchp --smol`, `--mchp --bu` | MCHP workflows + LLM content generation |
-| PHASE | `--smol --phase`, `--bu --phase` | LLM agents + time-of-day aware timing + logging |
+The codebase uses a three-layer architecture:
 
-## Architecture
+1. **Brain** (`src/brains/`): Core execution engine
+   - `mchp/` - Selenium/pyautogui workflow automation
+   - `smolagents/` - HuggingFace smolagents with DuckDuckGo search
+   - `browseruse/` - Playwright-based browser automation
+
+2. **Augmentations** (`src/augmentations/`): Optional LLM enhancements
+   - `content/` - Content generation (paragraphs, search queries)
+   - `mechanics/` - Behavioral prompts (search strategies)
+
+3. **Model** (`src/common/config/model_config.py`): LLM selection
+   - `llama` → llama3.1:8b (default)
+   - `gemma` → gemma3:4b
+   - `deepseek` → deepseek-r1:8b
+
+### Configuration Keys
+
+Configurations encode brain + augmentation + model:
+
+| Series | Pattern | Example |
+|--------|---------|---------|
+| M (MCHP) | M[1-3][a\|b].[model] | M1, M2.llama, M2a.llama |
+| S (SmolAgents) | S[1-3].[model][+] | S1.llama, S2.gemma+ |
+| B (BrowserUse) | B[1-3].[model][+] | B1.llama, B3.deepseek+ |
+
+- No suffix = DEFAULT_PROMPTS (PRE-PHASE baseline)
+- `+` suffix = PHASE_PROMPTS (POST-PHASE with enhanced prompts)
+
+Pre-defined configurations are in `src/runners/run_config.py`.
 
 ### Source Structure (`src/`)
 
-- **common/** - Shared modules used by PHASE/HYBRID agents
+- **brains/** - Core agent implementations
+  - `mchp/human.py` - Main loop: random workflows in clusters
+  - `mchp/app/workflows/` - Individual behaviors (browse_web, google_search, etc.)
+  - `smolagents/agent.py` - SmolAgent class with three-prompt support
+  - `browseruse/agent.py` - BrowserUseAgent with async execution
+- **augmentations/** - LLM content/mechanics controllers
+  - `content/llm_content.py` - LLM abstraction (SmolLLMBackend, BuLLMBackend)
+  - `*/prompts/` - Prompt configurations (default.py, phase.py)
+- **runners/** - Unified agent runners
+  - `run_config.py` - SUPConfig dataclass and CONFIGS registry
+  - `run_mchp.py`, `run_smolagents.py`, `run_browseruse.py`
+- **sup/** - Unified CLI (`python -m sup M1`, `python -m sup --list`)
+- **common/** - Shared modules
   - `logging/agent_logger.py` - JSON-Lines logging framework
-  - `timing/phase_timing.py` - Time-of-day aware timing with activity clustering
-- **MCHP/** - Human simulation using Selenium/pyautogui
-  - `default/pyhuman/human.py` - Main loop: randomly selects workflows from a cluster
-  - `default/pyhuman/app/workflows/` - Individual behaviors (browse_web, google_search, open_office_writer, etc.)
-- **SMOL/** - smolagents-based AI agents with DuckDuckGo search
-- **BU/** - browser-use agents with Playwright/Chromium
-- **MCHP-HYBRID/** - MCHP workflows augmented with LLM content
-  - `common/pyhuman/app/utility/llm_content.py` - LLM abstraction layer (SmolLLMBackend, BuLLMBackend)
-  - `smol-backend/`, `bu-backend/` - Backend-specific LLM configs
-- **SMOL-PHASE/**, **BU-PHASE/** - LLM agents with PHASE timing integration
+  - `timing/phase_timing.py` - Time-of-day aware timing
+  - `config/model_config.py` - Model registry
 
 ### Deployment Structure (`deployed_sups/`)
 
@@ -62,12 +97,29 @@ Installed agents are deployed to `deployed_sups/<AGENT_NAME>/` with:
 
 ### MCHP Workflow Pattern
 
-Workflows in `app/workflows/` export a `load()` function returning a workflow object with `display`, `action(extra)`, and `cleanup()` methods. The main loop (`human.py`) executes random workflows in clusters with configurable timing.
+Workflows in `brains/mchp/app/workflows/` export a `load()` function returning a workflow object with `display`, `action(extra)`, and `cleanup()` methods. The main loop (`human.py`) executes random workflows in clusters with configurable timing.
+
+### Three-Prompt Configuration (SmolAgents/BrowserUse)
+
+```python
+from brains.smolagents.prompts import SMOLPrompts, PHASE_PROMPTS
+from brains.smolagents.agent import SmolAgent
+
+# Prompts structure: task + content + mechanics
+prompts = SMOLPrompts(
+    task="Research and answer the question.",
+    content="[Content guidelines for output formatting]",
+    mechanics="[Behavior guidelines for search strategies]",
+)
+
+agent = SmolAgent(prompts=PHASE_PROMPTS, model="llama")
+result = agent.run("What is AI?")
+```
 
 ### LLM Content Generation (HYBRID)
 
 ```python
-from app.utility.llm_content import llm_paragraph, llm_search_query, llm_select
+from augmentations.content.llm_content import llm_paragraph, llm_search_query, llm_select
 
 text = llm_paragraph()                    # Replaces TextLorem().paragraph()
 query = llm_search_query("technology")    # Context-aware search query
@@ -111,9 +163,10 @@ cluster_delay = timing.get_cluster_delay() # Inter-cluster break
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DEFAULT_OLLAMA_MODEL` | Ollama model for installation | `llama3.1:8b` |
-| `HYBRID_LLM_BACKEND` | Backend for HYBRID agents | `smol` |
-| `LITELLM_MODEL` | Model for SMOL backend | `ollama/llama3.1:8b` |
-| `OLLAMA_MODEL` | Model for BU backend | `llama3.1:8b` |
+| `OLLAMA_MODEL` | Runtime model (BU backend) | `llama3.1:8b` |
+| `LITELLM_MODEL` | Runtime model (SMOL backend) | `ollama/llama3.1:8b` |
+| `HYBRID_LLM_BACKEND` | Backend for HYBRID agents (`smol` or `bu`) | `smol` |
+| `PYTHONPATH` | Must include `src/` for module imports | Set by runners |
 
 ## Dependencies
 
