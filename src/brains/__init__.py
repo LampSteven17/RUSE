@@ -5,9 +5,11 @@ Available brains:
 - mchp: Human behavior emulation (Selenium/PyAutoGUI)
 - browseruse: AI-powered browser automation (Playwright)
 - smolagents: HuggingFace research agent
+
+Import specific brains directly to avoid loading unused dependencies:
+    from brains.mchp import MCHPAgent
+    from brains.browseruse import BrowserUseAgent
+    from brains.smolagents import SmolAgent
 """
-from brains import mchp
-from brains import browseruse
-from brains import smolagents
 
 __all__ = ['mchp', 'browseruse', 'smolagents']
