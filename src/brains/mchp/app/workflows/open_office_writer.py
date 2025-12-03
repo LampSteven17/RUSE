@@ -9,7 +9,7 @@ from ..utility.base_workflow import BaseWorkflow
 WORKFLOW_NAME = 'OpenOfficeWriter'
 WORKFLOW_DESCRIPTION = 'Create documents with Apache OpenOffice Writer (Windows)'
 DEFAULT_WAIT_TIME = 2
-OPEN_OFFICE_PATH = "C:\Program Files (x86)\OpenOffice 4\program\soffice"
+OPEN_OFFICE_PATH = r"C:\Program Files (x86)\OpenOffice 4\program\soffice"
 
 def load():
     return OpenOfficeWriter()
