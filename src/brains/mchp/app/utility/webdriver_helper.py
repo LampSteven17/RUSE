@@ -28,6 +28,13 @@ class WebDriverHelper(BaseDriverHelper):
         try:
             self.options = webdriver.FirefoxOptions()
             self.options.add_argument("--headless")
+            # Options to improve headless stability in VMs
+            self.options.add_argument("--no-sandbox")
+            self.options.add_argument("--disable-dev-shm-usage")
+            # Reduce startup overhead
+            self.options.set_preference("browser.sessionstore.resume_from_crash", False)
+            self.options.set_preference("browser.shell.checkDefaultBrowser", False)
+            self.options.set_preference("browser.startup.homepage_override.mstone", "ignore")
 
             super().__init__(name=DRIVER_NAME)
             self._driver_path = FirefoxService(executable_path=geckodriver_path)
