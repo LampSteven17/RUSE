@@ -323,6 +323,8 @@ install_ollama() {
     fi
 }
 
+CUDA_INSTALLED=false
+
 install_cuda() {
     # Install CUDA 12.8 from NVIDIA's official repository
     # Required for GPU-accelerated BrowserUse/SmolAgents
@@ -359,6 +361,7 @@ install_cuda() {
         echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
     fi
 
+    CUDA_INSTALLED=true
     log "CUDA 12.8 installed. Reboot required for driver to load."
 }
 
@@ -690,6 +693,13 @@ install_agent() {
     echo "  sudo systemctl stop $service_name"
     echo "  sudo journalctl -u $service_name -f"
     echo ""
+
+    # Reboot if CUDA was installed (required for nvidia driver to load)
+    if $CUDA_INSTALLED; then
+        log "CUDA drivers were installed. Rebooting in 5 seconds for driver to load..."
+        sleep 5
+        sudo reboot
+    fi
 }
 
 # ============================================================================
