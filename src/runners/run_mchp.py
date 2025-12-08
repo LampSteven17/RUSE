@@ -11,7 +11,14 @@ Configurations:
 - M3b.llama: MCHP + BrowserUse mechanics only
 """
 import os
+from datetime import datetime
 from runners.run_config import SUPConfig
+
+
+def log(msg: str):
+    """Print with timestamp."""
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{ts}] {msg}")
 
 
 def run_mchp(config: SUPConfig):
@@ -38,7 +45,7 @@ def run_mchp(config: SUPConfig):
     # Import and run the MCHP agent
     from brains.mchp import MCHPAgent
 
-    print(f"Running MCHP agent (config: {config.config_key})")
+    log(f"Running MCHP agent (config: {config.config_key})")
 
     agent = MCHPAgent()
     agent.run()

@@ -7,7 +7,14 @@ Configurations:
 - B3.deepseek: BrowserUse + deepseek-r1:8b
 - B?.model+: POST-PHASE with PHASE-improved prompts
 """
+from datetime import datetime
 from runners.run_config import SUPConfig
+
+
+def log(msg: str):
+    """Print with timestamp."""
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{ts}] {msg}")
 
 
 def run_browseruse(config: SUPConfig, task: str = None):
@@ -28,8 +35,8 @@ def run_browseruse(config: SUPConfig, task: str = None):
     if task is None:
         task = get_random_task()
 
-    print(f"Running BrowserUse agent (config: {config.config_key})")
-    print(f"PHASE mode: {config.phase}")
+    log(f"Running BrowserUse agent (config: {config.config_key})")
+    log(f"PHASE mode: {config.phase}")
 
     agent = BrowserUseAgent(
         prompts=prompts,

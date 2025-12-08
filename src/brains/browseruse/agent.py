@@ -5,7 +5,14 @@ Supports three-prompt configuration for content and mechanics control.
 """
 import os
 import asyncio
+from datetime import datetime
 from typing import Optional
+
+
+def log(msg: str):
+    """Print with timestamp."""
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{ts}] {msg}")
 
 from browser_use import Agent
 from browser_use.browser.session import BrowserSession
@@ -77,8 +84,8 @@ class BrowserUseAgent:
             mechanics=self.prompts.mechanics,
         ).build_full_prompt()
 
-        print(f"Starting BrowserUse agent with model: {self.model_name}")
-        print(f"Task: {task}")
+        log(f"Starting BrowserUse agent with model: {self.model_name}")
+        log(f"Task: {task}")
 
         try:
             browser_session = self._get_browser_session()
@@ -88,10 +95,10 @@ class BrowserUseAgent:
                 browser_session=browser_session,
             )
             result = await agent.run(max_steps=self.max_steps)
-            print("Task completed successfully!")
+            log("Task completed successfully!")
             return result
         except Exception as e:
-            print(f"Error running agent: {e}")
+            log(f"Error running agent: {e}")
             import traceback
             traceback.print_exc()
             return None
