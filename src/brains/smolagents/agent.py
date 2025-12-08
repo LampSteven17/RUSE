@@ -4,9 +4,16 @@ SmolAgents Brain - HuggingFace smolagents-based research agent.
 Supports three-prompt configuration for content and mechanics control.
 """
 import os
+from datetime import datetime
 from typing import Optional
 
 from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool
+
+
+def log(msg: str):
+    """Print with timestamp."""
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{ts}] {msg}")
 
 from common.config.model_config import get_model
 from brains.smolagents.prompts import SMOLPrompts, DEFAULT_PROMPTS
@@ -61,15 +68,15 @@ class SmolAgent:
         Returns:
             Result from the agent
         """
-        print(f"Starting SmolAgents agent with model: {self.model_name}")
-        print(f"Task: {task}")
+        log(f"Starting SmolAgents agent with model: {self.model_name}")
+        log(f"Task: {task}")
 
         try:
             result = self._agent.run(task)
-            print("Task completed successfully!")
+            log("Task completed successfully!")
             return result
         except Exception as e:
-            print(f"Error running agent: {e}")
+            log(f"Error running agent: {e}")
             import traceback
             traceback.print_exc()
             return None
