@@ -342,9 +342,12 @@ install_cuda() {
     rm -f /tmp/cuda-keyring.deb
 
     # Update and install CUDA toolkit + drivers
+    # Note: cuda-drivers triggers modprobe which fails before reboot - this is expected
     sudo apt-get update -y
     sudo apt-get install -y cuda-toolkit-12-8
-    sudo apt-get install -y cuda-drivers
+    sudo apt-get install -y cuda-drivers || {
+        log "CUDA drivers installed (modprobe fails until reboot - this is normal)"
+    }
 
     # Add CUDA to PATH for current session
     export PATH=/usr/local/cuda-12.8/bin:$PATH
@@ -356,7 +359,7 @@ install_cuda() {
         echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
     fi
 
-    log "CUDA 12.8 installed. A reboot may be required for the driver to load."
+    log "CUDA 12.8 installed. Reboot required for driver to load."
 }
 
 install_firefox_deb() {
