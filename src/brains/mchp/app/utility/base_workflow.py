@@ -1,11 +1,13 @@
 from abc import abstractmethod
+from datetime import datetime
 
 
 class BaseWorkflow(object):
 
     @property
     def display(self):
-        return 'Running Task: {}'.format(self.description)
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return '[{}] Running Task: {}'.format(timestamp, self.description)
 
     __slots__ = ['name', 'description', 'driver']
 
