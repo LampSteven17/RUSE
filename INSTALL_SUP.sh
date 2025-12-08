@@ -323,6 +323,42 @@ install_ollama() {
     fi
 }
 
+install_cuda() {
+    # Install CUDA 12.8 from NVIDIA's official repository
+    # Required for GPU-accelerated BrowserUse/SmolAgents
+    # Ref: https://developer.nvidia.com/cuda-12-8-0-download-archive
+
+    # Check if GPU is present
+    if ! lspci | grep -qi nvidia; then
+        log "No NVIDIA GPU detected, skipping CUDA installation"
+        return 0
+    fi
+
+    log "NVIDIA GPU detected, installing CUDA 12.8..."
+
+    # Install CUDA keyring
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
+    sudo dpkg -i /tmp/cuda-keyring.deb
+    rm -f /tmp/cuda-keyring.deb
+
+    # Update and install CUDA toolkit + drivers
+    sudo apt-get update -y
+    sudo apt-get install -y cuda-toolkit-12-8
+    sudo apt-get install -y cuda-drivers
+
+    # Add CUDA to PATH for current session
+    export PATH=/usr/local/cuda-12.8/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH
+
+    # Add to bashrc for future sessions
+    if ! grep -q "cuda-12.8" ~/.bashrc; then
+        echo 'export PATH=/usr/local/cuda-12.8/bin:$PATH' >> ~/.bashrc
+        echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+    fi
+
+    log "CUDA 12.8 installed. A reboot may be required for the driver to load."
+}
+
 install_firefox_deb() {
     # Install Firefox from Mozilla's official deb repository (not snap)
     # Snap Firefox causes Selenium/geckodriver timeouts due to sandbox confinement
@@ -380,8 +416,10 @@ install_system_deps() {
                 rm -f /tmp/geckodriver.tar.gz
             fi
             ;;
-        browseruse)
+        browseruse|smolagents)
             sudo apt-get install -y xvfb
+            # Install CUDA if GPU is present (for LLM acceleration)
+            install_cuda
             ;;
     esac
 }
