@@ -323,6 +323,43 @@ install_ollama() {
     fi
 }
 
+install_firefox_deb() {
+    # Install Firefox from Mozilla's official deb repository (not snap)
+    # Snap Firefox causes Selenium/geckodriver timeouts due to sandbox confinement
+    # See: https://support.mozilla.org/en-US/kb/install-firefox-linux
+
+    log "Setting up Mozilla APT repository for Firefox..."
+
+    # Remove snap Firefox if present
+    if snap list firefox &>/dev/null; then
+        log "Removing snap Firefox (causes Selenium compatibility issues)..."
+        sudo snap remove firefox 2>/dev/null || true
+    fi
+
+    # Create keyring directory
+    sudo install -d -m 0755 /etc/apt/keyrings
+
+    # Import Mozilla APT signing key
+    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | \
+        sudo tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null
+
+    # Add Mozilla APT repository
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" | \
+        sudo tee /etc/apt/sources.list.d/mozilla.list > /dev/null
+
+    # Configure APT to prioritize Mozilla packages
+    echo 'Package: *
+Pin: origin packages.mozilla.org
+Pin-Priority: 1000
+' | sudo tee /etc/apt/preferences.d/mozilla > /dev/null
+
+    # Install Firefox from Mozilla repo
+    sudo apt-get update -y
+    sudo apt-get install -y firefox
+
+    log "Firefox deb installed: $(firefox --version)"
+}
+
 install_system_deps() {
     log "Installing system dependencies for $BRAIN..."
 
@@ -331,7 +368,9 @@ install_system_deps() {
 
     case "$BRAIN" in
         mchp)
-            sudo apt-get install -y xvfb xdg-utils firefox libxml2-dev libxslt-dev python3-tk scrot
+            sudo apt-get install -y xvfb xdg-utils libxml2-dev libxslt-dev python3-tk scrot
+            # Install Firefox from Mozilla deb repo (not snap)
+            install_firefox_deb
             # Install Geckodriver
             log "Installing Geckodriver..."
             if [[ "$(uname -m)" == "x86_64" ]]; then
