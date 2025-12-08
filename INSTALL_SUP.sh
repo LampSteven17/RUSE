@@ -350,8 +350,8 @@ install_cuda() {
     }
 
     # Add CUDA to PATH for current session
-    export PATH=/usr/local/cuda-12.8/bin:$PATH
-    export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH
+    export PATH=/usr/local/cuda-12.8/bin:${PATH:-}
+    export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH:-}
 
     # Add to bashrc for future sessions
     if ! grep -q "cuda-12.8" ~/.bashrc; then
