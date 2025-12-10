@@ -444,7 +444,7 @@ install_python_deps() {
                 certifi chardet colorama configparser crayons idna requests urllib3
             ;;
         smolagents)
-            pip install smolagents litellm torch transformers datasets numpy pandas requests duckduckgo-search
+            pip install smolagents litellm torch transformers datasets numpy pandas requests duckduckgo-search ddgs
             ;;
         browseruse)
             pip install browser-use langchain-ollama playwright
