@@ -55,14 +55,15 @@ class SmolAgent:
         if self.tools is None:
             self.tools = [DuckDuckGoSearchTool()]
 
-        # Build system prompt from content + mechanics
-        system_prompt = prompts.build_system_prompt()
+        # Build instructions from content + mechanics prompts
+        instructions = prompts.build_system_prompt()
 
         # Create the underlying CodeAgent
+        # Note: smolagents v1.x uses 'instructions' parameter instead of 'system_prompt'
         self._agent = CodeAgent(
             tools=self.tools,
             model=self._llm,
-            system_prompt=system_prompt,
+            instructions=instructions,
         )
 
     def run(self, task: str) -> str:
