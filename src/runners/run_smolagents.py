@@ -8,7 +8,10 @@ Configurations:
 - S?.model+: POST-PHASE with PHASE-improved prompts
 """
 from datetime import datetime
+from typing import Optional
+
 from runners.run_config import SUPConfig
+from common.logging.agent_logger import AgentLogger
 
 
 def log(msg: str):
@@ -17,13 +20,14 @@ def log(msg: str):
     print(f"[{ts}] {msg}")
 
 
-def run_smolagents(config: SUPConfig, task: str = None):
+def run_smolagents(config: SUPConfig, task: str = None, log_dir: Optional[str] = None):
     """
     Run SmolAgents brain with configured model and prompts.
 
     Args:
         config: SUP configuration
         task: Optional task to run (uses default if not provided)
+        log_dir: Optional directory for log files
     """
     from brains.smolagents import SmolAgent, DEFAULT_PROMPTS, PHASE_PROMPTS
     from brains.smolagents.tasks import get_random_task
@@ -38,12 +42,45 @@ def run_smolagents(config: SUPConfig, task: str = None):
     log(f"Running SmolAgents agent (config: {config.config_key})")
     log(f"PHASE mode: {config.phase}")
 
-    agent = SmolAgent(
-        prompts=prompts,
-        model=config.model,
+    # Create logger for structured logging
+    logger = AgentLogger(
+        agent_type=config.config_key,
+        log_dir=log_dir,
     )
 
-    return agent.run(task)
+    log(f"Logging to: {logger.get_log_path()}")
+
+    # Start session with config details
+    logger.session_start(config={
+        "config_key": config.config_key,
+        "brain": config.brain,
+        "model": config.model,
+        "phase": config.phase,
+        "task": task[:500] if len(task) > 500 else task,
+    })
+
+    try:
+        agent = SmolAgent(
+            prompts=prompts,
+            model=config.model,
+            logger=logger,
+        )
+
+        result = agent.run(task)
+
+        # End session with summary
+        logger.session_end(summary={
+            "task_completed": result is not None,
+            "result_length": len(str(result)) if result else 0,
+        })
+
+        return result
+    except Exception as e:
+        logger.error(str(e), fatal=False, exception=e)
+        logger.session_end(summary={"task_completed": False, "error": str(e)})
+        raise
+    finally:
+        logger.close()
 
 
 if __name__ == "__main__":
@@ -54,6 +91,7 @@ if __name__ == "__main__":
     parser.add_argument("task", nargs="?", default=None, help="Task to perform")
     parser.add_argument("--model", choices=["llama", "gemma", "deepseek"], default="llama")
     parser.add_argument("--phase", action="store_true", help="Enable PHASE-improved prompts")
+    parser.add_argument("--log-dir", type=str, default=None, help="Directory for log files")
     args = parser.parse_args()
 
     config = build_config(
@@ -62,4 +100,4 @@ if __name__ == "__main__":
         phase=args.phase,
     )
 
-    run_smolagents(config, task=args.task)
+    run_smolagents(config, task=args.task, log_dir=args.log_dir)
