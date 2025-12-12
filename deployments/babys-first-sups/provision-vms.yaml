@@ -16,9 +16,10 @@
   vars:
     # OpenStack RC file to source
     os_rc_file: "~/vxn3kr-bot-rc"
-    os_image: "ubuntu-22.04"
-    os_network: "private-net"
-    os_keypair: "vxn3kr-bot"
+    os_image: "noble-amd64"
+    os_network: "ext_net"
+    os_keypair: "bot-desktop"
+    os_security_group: "default"
 
     # Inventory file output path
     inventory_file: "{{ playbook_dir }}/inventory.ini"
@@ -77,6 +78,7 @@
             --image "{{ os_image }}" \
             --network "{{ os_network }}" \
             --key-name "{{ os_keypair }}" \
+            --security-group "{{ os_security_group }}" \
             --wait \
             -f json \
             "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
