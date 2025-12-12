@@ -1,0 +1,79 @@
+---
+# Ansible Playbook: install-sups.yaml
+# Step 2: Install SUP behaviors on provisioned VMs
+#
+# Prerequisites:
+#   - Run provision-vms.yaml first to create VMs and inventory.ini
+#
+# Usage:
+#   ansible-playbook -i inventory.ini install-sups.yaml
+#   ansible-playbook -i inventory.ini install-sups.yaml -e "dolos_repo=https://github.com/myorg/DOLOS-DEPLOY.git"
+
+- name: Install SUPs - babys-first-sups
+  hosts: sup_hosts
+  become: yes
+
+  vars:
+    # Git repo for DOLOS-DEPLOY
+    dolos_repo: "https://github.com/LampSteven17/DOLOS-DEPLOY.git"
+    dolos_branch: "main"
+    dolos_path: "/opt/dolos-deploy"
+
+  tasks:
+    - name: Display target configuration
+      debug:
+        msg: "Installing {{ sup_behavior }} on {{ inventory_hostname }} ({{ ansible_host }})"
+
+    - name: Wait for cloud-init to complete
+      command: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - git
+          - curl
+          - wget
+        state: present
+
+    - name: Clone DOLOS-DEPLOY repo
+      git:
+        repo: "{{ dolos_repo }}"
+        dest: "{{ dolos_path }}"
+        version: "{{ dolos_branch }}"
+        force: yes
+
+    - name: Make INSTALL_SUP.sh executable
+      file:
+        path: "{{ dolos_path }}/INSTALL_SUP.sh"
+        mode: '0755'
+
+    - name: Run INSTALL_SUP.sh
+      shell: |
+        cd {{ dolos_path }}
+        ./INSTALL_SUP.sh --{{ sup_behavior }}
+      args:
+        executable: /bin/bash
+      async: 1800
+      poll: 30
+      register: install_result
+
+    - name: Display install result
+      debug:
+        msg: "SUP {{ sup_behavior }} installed successfully on {{ inventory_hostname }}"
+      when: install_result.rc == 0
+
+    - name: Check SUP service status
+      shell: systemctl is-active $(systemctl list-units --type=service | grep -E '(mchp|smol|bu)' | awk '{print $1}' | head -1) || true
+      register: service_status
+      changed_when: false
+
+    - name: Display service status
+      debug:
+        msg: "Service status: {{ service_status.stdout }}"

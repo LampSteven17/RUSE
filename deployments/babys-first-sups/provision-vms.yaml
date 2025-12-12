@@ -1,0 +1,152 @@
+---
+# Ansible Playbook: provision-vms.yaml
+# Step 1: Provision OpenStack VMs for SUP deployment
+#
+# Usage:
+#   ansible-playbook provision-vms.yaml
+#   ansible-playbook provision-vms.yaml -e "os_keypair=my-key"
+#
+# Output:
+#   Creates inventory.ini file for use by install-sups.yaml
+
+- name: Provision VMs - babys-first-sups
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # OpenStack RC file to source
+    os_rc_file: "~/vxn3kr-bot-rc"
+    os_image: "ubuntu-22.04"
+    os_network: "private-net"
+    os_keypair: "vxn3kr-bot"
+
+    # Inventory file output path
+    inventory_file: "{{ playbook_dir }}/inventory.ini"
+
+    # Available flavor capacity (adjust based on your quota)
+    flavor_capacity:
+      rtx2080ti-1gpu.14vcpu.28g: 5
+      rtx2080ti-A-1gpu.14vcpu.28g: 3
+      v100-1gpu.14vcpu.28g: 4
+      v1.14vcpu.28g: 10
+
+    # SUPs to deploy
+    deployments:
+      - behavior: S1.llama
+        flavor: rtx2080ti-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: B1.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 2
+
+      - behavior: M1
+        flavor: rtx2080ti-A-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: M1
+        flavor: v1.14vcpu.28g
+        count: 1
+
+  tasks:
+    - name: Expand deployments to VM list
+      set_fact:
+        vm_list: >-
+          {%- set vms = [] -%}
+          {%- for dep in deployments -%}
+            {%- for i in range(dep.count) -%}
+              {%- set _ = vms.append({'behavior': dep.behavior, 'flavor': dep.flavor, 'index': i}) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ vms }}
+
+    - name: Display VMs to be created
+      debug:
+        msg: "Will create {{ vm_list | length }} VMs: {{ vm_list | map(attribute='behavior') | list }}"
+
+    - name: Create OpenStack VMs
+      shell: |
+        source {{ os_rc_file }}
+        # Check if VM already exists
+        if openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" &>/dev/null; then
+          echo "VM already exists"
+          openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" -f json
+        else
+          openstack server create \
+            --flavor "{{ item.flavor }}" \
+            --image "{{ os_image }}" \
+            --network "{{ os_network }}" \
+            --key-name "{{ os_keypair }}" \
+            --wait \
+            -f json \
+            "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "sup-{{ item.behavior }}-{{ item.index }}"
+      register: created_vms
+
+    - name: Get VM IPs
+      shell: |
+        source {{ os_rc_file }}
+        openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" -f value -c addresses | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+      args:
+        executable: /bin/bash
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "sup-{{ item.behavior }}-{{ item.index }}"
+      register: vm_ips
+
+    - name: Build inventory data
+      set_fact:
+        inventory_entries: >-
+          {%- set entries = [] -%}
+          {%- for result in vm_ips.results -%}
+            {%- set vm = vm_list[loop.index0] -%}
+            {%- set entry = {
+              'ip': result.stdout,
+              'behavior': vm.behavior,
+              'name': 'sup-' + vm.behavior | replace('.', '-') + '-' + (vm.index | string)
+            } -%}
+            {%- set _ = entries.append(entry) -%}
+          {%- endfor -%}
+          {{ entries }}
+
+    - name: Generate inventory file
+      copy:
+        content: |
+          # Auto-generated inventory for babys-first-sups
+          # Generated: {{ ansible_date_time.iso8601 | default(lookup('pipe', 'date -Iseconds')) }}
+
+          [sup_hosts]
+          {% for entry in inventory_entries %}
+          {{ entry.name }} ansible_host={{ entry.ip }} sup_behavior={{ entry.behavior }} ansible_user=ubuntu ansible_ssh_common_args="-o StrictHostKeyChecking=no"
+          {% endfor %}
+
+          [sup_hosts:vars]
+          ansible_python_interpreter=/usr/bin/python3
+        dest: "{{ inventory_file }}"
+      delegate_to: localhost
+
+    - name: Display inventory file location
+      debug:
+        msg: "Inventory written to: {{ inventory_file }}"
+
+    - name: Display created VMs
+      debug:
+        msg: |
+          Created {{ inventory_entries | length }} VMs:
+          {% for entry in inventory_entries %}
+            - {{ entry.name }}: {{ entry.ip }} ({{ entry.behavior }})
+          {% endfor %}
+
+    - name: Wait for SSH on all VMs
+      wait_for:
+        host: "{{ item.ip }}"
+        port: 22
+        timeout: 300
+      loop: "{{ inventory_entries }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.ip }})"
