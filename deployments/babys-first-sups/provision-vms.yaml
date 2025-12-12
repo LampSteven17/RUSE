@@ -3,8 +3,8 @@
 # Step 1: Provision OpenStack VMs for SUP deployment
 #
 # Architecture:
-#   n8n (Ansible) → SSH → axes (OpenStack CLI) → OpenStack API
-#                                              → SSH → new VMs
+#   n8n (Ansible) → SSH → bastion (OpenStack CLI) → OpenStack API
+#                                                 → SSH → new VMs
 #
 # Usage:
 #   ansible-playbook provision-vms.yaml
@@ -14,11 +14,11 @@
 #   Creates inventory.ini file for use by install-sups.yaml
 
 - name: Provision VMs - babys-first-sups
-  hosts: axes
+  hosts: bastion
   gather_facts: false
 
   vars:
-    # OpenStack RC file on axes
+    # OpenStack RC file on bastion
     os_rc_file: "~/vxn3kr-bot-rc"
     os_image: "noble-amd64"
     os_network: "ext_net"
@@ -27,7 +27,7 @@
 
     # SSH config for ProxyJump (on Ansible control node)
     ssh_config_file: "/home/node/.n8n/ssh/config"
-    bastion_host: "axes"
+    bastion_host: "bastion"
 
     # Inventory file output path (on Ansible control node)
     inventory_file: "{{ playbook_dir }}/inventory.ini"

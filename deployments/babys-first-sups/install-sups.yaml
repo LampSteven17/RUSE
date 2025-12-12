@@ -3,11 +3,11 @@
 # Step 2: Install SUP behaviors on provisioned VMs
 #
 # Architecture:
-#   n8n (Ansible) → SSH (ProxyJump) → axes → SSH → VMs
+#   n8n (Ansible) → SSH (ProxyJump) → bastion → SSH → VMs
 #
 # Prerequisites:
 #   - Run provision-vms.yaml first to create VMs and inventory.ini
-#   - inventory.ini contains ProxyJump config for reaching VMs through axes
+#   - inventory.ini contains ProxyJump config for reaching VMs through bastion
 #
 # Usage:
 #   ansible-playbook -i inventory.ini install-sups.yaml
