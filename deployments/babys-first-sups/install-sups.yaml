@@ -2,12 +2,15 @@
 # Ansible Playbook: install-sups.yaml
 # Step 2: Install SUP behaviors on provisioned VMs
 #
+# Architecture:
+#   n8n (Ansible) → SSH (ProxyJump) → axes → SSH → VMs
+#
 # Prerequisites:
 #   - Run provision-vms.yaml first to create VMs and inventory.ini
+#   - inventory.ini contains ProxyJump config for reaching VMs through axes
 #
 # Usage:
 #   ansible-playbook -i inventory.ini install-sups.yaml
-#   ansible-playbook -i inventory.ini install-sups.yaml -e "dolos_repo=https://github.com/myorg/DOLOS-DEPLOY.git"
 
 - name: Install SUPs - babys-first-sups
   hosts: sup_hosts

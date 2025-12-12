@@ -2,26 +2,34 @@
 # Ansible Playbook: provision-vms.yaml
 # Step 1: Provision OpenStack VMs for SUP deployment
 #
+# Architecture:
+#   n8n (Ansible) → SSH → axes (OpenStack CLI) → OpenStack API
+#                                              → SSH → new VMs
+#
 # Usage:
 #   ansible-playbook provision-vms.yaml
-#   ansible-playbook provision-vms.yaml -e "os_keypair=my-key"
+#   ANSIBLE_SSH_ARGS="-F /home/node/.n8n/ssh/config" ansible-playbook provision-vms.yaml
 #
 # Output:
 #   Creates inventory.ini file for use by install-sups.yaml
 
 - name: Provision VMs - babys-first-sups
-  hosts: localhost
+  hosts: axes
   gather_facts: false
 
   vars:
-    # OpenStack RC file to source
+    # OpenStack RC file on axes
     os_rc_file: "~/vxn3kr-bot-rc"
     os_image: "noble-amd64"
     os_network: "ext_net"
     os_keypair: "bot-desktop"
     os_security_group: "default"
 
-    # Inventory file output path
+    # SSH config for ProxyJump (on Ansible control node)
+    ssh_config_file: "/home/node/.n8n/ssh/config"
+    bastion_host: "axes"
+
+    # Inventory file output path (on Ansible control node)
     inventory_file: "{{ playbook_dir }}/inventory.ini"
 
     # Available flavor capacity (adjust based on your quota)
@@ -116,26 +124,6 @@
           {%- endfor -%}
           {{ entries }}
 
-    - name: Generate inventory file
-      copy:
-        content: |
-          # Auto-generated inventory for babys-first-sups
-          # Generated: {{ ansible_date_time.iso8601 | default(lookup('pipe', 'date -Iseconds')) }}
-
-          [sup_hosts]
-          {% for entry in inventory_entries %}
-          {{ entry.name }} ansible_host={{ entry.ip }} sup_behavior={{ entry.behavior }} ansible_user=ubuntu ansible_ssh_common_args="-o StrictHostKeyChecking=no"
-          {% endfor %}
-
-          [sup_hosts:vars]
-          ansible_python_interpreter=/usr/bin/python3
-        dest: "{{ inventory_file }}"
-      delegate_to: localhost
-
-    - name: Display inventory file location
-      debug:
-        msg: "Inventory written to: {{ inventory_file }}"
-
     - name: Display created VMs
       debug:
         msg: |
@@ -144,11 +132,37 @@
             - {{ entry.name }}: {{ entry.ip }} ({{ entry.behavior }})
           {% endfor %}
 
-    - name: Wait for SSH on all VMs
-      wait_for:
-        host: "{{ item.ip }}"
-        port: 22
-        timeout: 300
+    - name: Generate inventory file on control node
+      delegate_to: localhost
+      copy:
+        content: |
+          # Auto-generated inventory for babys-first-sups
+          # Generated: {{ lookup('pipe', 'date -Iseconds') }}
+          # Access: Via ProxyJump through {{ bastion_host }}
+
+          [sup_hosts]
+          {% for entry in inventory_entries %}
+          {{ entry.name }} ansible_host={{ entry.ip }} sup_behavior={{ entry.behavior }}
+          {% endfor %}
+
+          [sup_hosts:vars]
+          ansible_user=ubuntu
+          ansible_python_interpreter=/usr/bin/python3
+          ansible_ssh_common_args=-F {{ ssh_config_file }} -o ProxyJump={{ bastion_host }} -o StrictHostKeyChecking=no
+        dest: "{{ inventory_file }}"
+
+    - name: Display inventory file location
+      debug:
+        msg: "Inventory written to: {{ inventory_file }}"
+
+    - name: Test SSH connectivity to VMs (via bastion)
+      delegate_to: localhost
+      shell: |
+        ssh -F {{ ssh_config_file }} -o ProxyJump={{ bastion_host }} -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@{{ item.ip }} 'echo SSH OK'
       loop: "{{ inventory_entries }}"
       loop_control:
         label: "{{ item.name }} ({{ item.ip }})"
+      register: ssh_test
+      retries: 10
+      delay: 30
+      until: ssh_test.rc == 0
