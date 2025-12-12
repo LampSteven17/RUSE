@@ -1,0 +1,40 @@
+# DOLOS-DEPLOY Catalog
+# Reference file listing all available behaviors and OpenStack flavors
+# Used by n8n for deployment configuration validation
+
+# Available SUP Behaviors
+behaviors:
+  # MCHP Series (scripted automation, no LLM required)
+  - M1           # Pure MCHP, no LLM
+  - M2.llama     # MCHP + SmolAgents (content + mechanics)
+  - M2a.llama    # MCHP + SmolAgents (content only)
+  - M2b.llama    # MCHP + SmolAgents (mechanics only)
+  - M3.llama     # MCHP + BrowserUse (content + mechanics)
+  - M3a.llama    # MCHP + BrowserUse (content only)
+  - M3b.llama    # MCHP + BrowserUse (mechanics only)
+
+  # BrowserUse Series (LLM-driven browser automation)
+  - B1.llama     # BrowserUse + llama3.1:8b
+  - B2.gemma     # BrowserUse + gemma3:4b
+  - B3.deepseek  # BrowserUse + deepseek-r1:8b
+  - B1.llama+    # BrowserUse + llama3.1:8b + PHASE timing
+  - B2.gemma+    # BrowserUse + gemma3:4b + PHASE timing
+  - B3.deepseek+ # BrowserUse + deepseek-r1:8b + PHASE timing
+
+  # SmolAgents Series (HuggingFace smolagents)
+  - S1.llama     # SmolAgents + llama3.1:8b
+  - S2.gemma     # SmolAgents + gemma3:4b
+  - S3.deepseek  # SmolAgents + deepseek-r1:8b
+  - S1.llama+    # SmolAgents + llama3.1:8b + PHASE timing
+  - S2.gemma+    # SmolAgents + gemma3:4b + PHASE timing
+  - S3.deepseek+ # SmolAgents + deepseek-r1:8b + PHASE timing
+
+# Available OpenStack Flavors
+# See docs/OPENSTACK_FLAVORS.md for full details
+flavors:
+  # GPU flavors (required for LLM-based behaviors)
+  - rtx2080ti-1gpu.14vcpu.28g      # pci_passthrough:alias='rtx2080ti:1'
+  - rtx2080ti-A-1gpu.14vcpu.28g    # pci_passthrough:alias='2080ti-rtx-a:1'
+  - v100-1gpu.14vcpu.28g           # pci_passthrough:alias='v100:1'
+  # Non-GPU flavors (M1 only)
+  - v1.14vcpu.28g
