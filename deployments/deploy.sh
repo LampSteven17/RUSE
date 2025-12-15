@@ -118,6 +118,37 @@ run_install() {
     print_step "SUP installation complete!"
 }
 
+# Run teardown playbook
+run_teardown() {
+    local deployment=$1
+    local deploy_dir="$SCRIPT_DIR/$deployment"
+
+    if [[ ! -f "$deploy_dir/teardown.yaml" ]]; then
+        print_error "No teardown.yaml found for this deployment."
+        return 1
+    fi
+
+    print_warn "This will DELETE all VMs and volumes for: $deployment"
+    read -p "Are you sure? [y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        print_step "Teardown cancelled."
+        return 0
+    fi
+
+    print_step "Tearing down: $deployment"
+    echo ""
+
+    cd "$deploy_dir"
+
+    if [[ -f "$SSH_CONFIG" ]]; then
+        ANSIBLE_SSH_ARGS="-F $SSH_CONFIG" ansible-playbook -i hosts.ini teardown.yaml
+    else
+        ansible-playbook -i hosts.ini teardown.yaml
+    fi
+
+    print_step "Teardown complete!"
+}
+
 # Show deployment info
 show_deployment_info() {
     local deployment=$1
@@ -153,16 +184,17 @@ main_menu() {
 
         echo "What would you like to do?"
         echo ""
-        echo "  1) Provision VMs (create OpenStack instances)"
-        echo "  2) Install SUPs (on provisioned VMs)"
-        echo "  3) Full deploy (provision + install)"
-        echo "  4) Show deployment info"
-        echo "  5) Exit"
+        echo "  1) Full deploy (provision + install)"
+        echo "  2) Provision VMs only (create OpenStack instances)"
+        echo "  3) Install SUPs only (on provisioned VMs)"
+        echo "  4) Teardown (delete VMs and volumes)"
+        echo "  5) Show deployment info"
+        echo "  6) Exit"
         echo ""
-        read -p "Select option [1-5]: " choice
+        read -p "Select option [1-6]: " choice
 
         case $choice in
-            1|2|3|4)
+            1|2|3|4|5)
                 echo ""
                 list_deployments
                 echo ""
@@ -174,19 +206,33 @@ main_menu() {
                     case $choice in
                         1)
                             run_provision "$deployment"
-                            ;;
-                        2)
+                            echo ""
+                            print_step "SUP installation will begin in 30 seconds (press 'n' to cancel)..."
+                            for i in {30..1}; do
+                                printf "\r    Starting in %2d seconds... " "$i"
+                                read -t 1 -n 1 key 2>/dev/null && {
+                                    if [[ "$key" == "n" || "$key" == "N" ]]; then
+                                        echo ""
+                                        print_warn "SUP installation cancelled."
+                                        break 2
+                                    fi
+                                }
+                            done
+                            echo ""
                             run_install "$deployment"
                             ;;
-                        3)
+                        2)
                             run_provision "$deployment"
-                            echo ""
-                            read -p "Continue with SUP installation? [Y/n]: " cont
-                            if [[ "$cont" != "n" && "$cont" != "N" ]]; then
-                                run_install "$deployment"
-                            fi
+                            ;;
+                        3)
+                            run_install "$deployment"
                             ;;
                         4)
+                            run_teardown "$deployment"
+                            echo "Goodbye!"
+                            exit 0
+                            ;;
+                        5)
                             show_deployment_info "$deployment"
                             ;;
                     esac
@@ -197,7 +243,7 @@ main_menu() {
                 echo ""
                 read -p "Press Enter to continue..."
                 ;;
-            5)
+            6)
                 echo "Goodbye!"
                 exit 0
                 ;;
@@ -224,8 +270,11 @@ cli_mode() {
             run_provision "$deployment"
             run_install "$deployment"
             ;;
+        teardown)
+            run_teardown "$deployment"
+            ;;
         *)
-            echo "Usage: $0 [provision|install|deploy] <deployment-name>"
+            echo "Usage: $0 [provision|install|deploy|teardown] <deployment-name>"
             echo "       $0  (interactive mode)"
             exit 1
             ;;

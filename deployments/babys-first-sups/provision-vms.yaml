@@ -3,22 +3,21 @@
 # Step 1: Provision OpenStack VMs for SUP deployment
 #
 # Architecture:
-#   n8n (Ansible) → SSH → bastion (OpenStack CLI) → OpenStack API
-#                                                 → SSH → new VMs
+#   Ansible → SSH → axes (OpenStack CLI) → OpenStack API
+#                                        → SSH → new VMs
 #
 # Usage:
-#   ansible-playbook provision-vms.yaml
-#   ANSIBLE_SSH_ARGS="-F /home/node/.n8n/ssh/config" ansible-playbook provision-vms.yaml
+#   ansible-playbook -i hosts.ini provision-vms.yaml
 #
 # Output:
 #   Creates inventory.ini file for use by install-sups.yaml
 
 - name: Provision VMs - babys-first-sups
-  hosts: bastion
+  hosts: openstack_controller
   gather_facts: false
 
   vars:
-    # OpenStack RC file on bastion
+    # OpenStack RC file on axes
     os_rc_file: "~/vxn3kr-bot-rc"
     os_image: "noble-amd64"
     os_network: "ext_net"
@@ -26,8 +25,8 @@
     os_security_group: "default"
 
     # SSH config for ProxyJump (on Ansible control node)
-    ssh_config_file: "/home/node/.n8n/ssh/config"
-    bastion_host: "bastion"
+    ssh_config_file: "/home/ubuntu/.ssh/config"
+    jump_host: "axes"
 
     # Inventory file output path (on Ansible control node)
     inventory_file: "{{ playbook_dir }}/inventory.ini"
@@ -62,9 +61,12 @@
       set_fact:
         vm_list: >-
           {%- set vms = [] -%}
+          {%- set behavior_counts = {} -%}
           {%- for dep in deployments -%}
             {%- for i in range(dep.count) -%}
-              {%- set _ = vms.append({'behavior': dep.behavior, 'flavor': dep.flavor, 'index': i}) -%}
+              {%- set idx = behavior_counts.get(dep.behavior, 0) -%}
+              {%- set _ = behavior_counts.update({dep.behavior: idx + 1}) -%}
+              {%- set _ = vms.append({'behavior': dep.behavior, 'flavor': dep.flavor, 'index': idx}) -%}
             {%- endfor -%}
           {%- endfor -%}
           {{ vms }}
@@ -84,6 +86,7 @@
           openstack server create \
             --flavor "{{ item.flavor }}" \
             --image "{{ os_image }}" \
+            --boot-from-volume 200 \
             --network "{{ os_network }}" \
             --key-name "{{ os_keypair }}" \
             --security-group "{{ os_security_group }}" \
@@ -138,7 +141,7 @@
         content: |
           # Auto-generated inventory for babys-first-sups
           # Generated: {{ lookup('pipe', 'date -Iseconds') }}
-          # Access: Via ProxyJump through {{ bastion_host }}
+          # Access: Via ProxyJump through {{ jump_host }}
 
           [sup_hosts]
           {% for entry in inventory_entries %}
@@ -148,17 +151,17 @@
           [sup_hosts:vars]
           ansible_user=ubuntu
           ansible_python_interpreter=/usr/bin/python3
-          ansible_ssh_common_args=-F {{ ssh_config_file }} -o ProxyJump={{ bastion_host }} -o StrictHostKeyChecking=no
+          ansible_ssh_common_args=-F {{ ssh_config_file }} -o ProxyJump={{ jump_host }} -o StrictHostKeyChecking=no
         dest: "{{ inventory_file }}"
 
     - name: Display inventory file location
       debug:
         msg: "Inventory written to: {{ inventory_file }}"
 
-    - name: Test SSH connectivity to VMs (via bastion)
+    - name: Test SSH connectivity to VMs (via axes)
       delegate_to: localhost
       shell: |
-        ssh -F {{ ssh_config_file }} -o ProxyJump={{ bastion_host }} -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@{{ item.ip }} 'echo SSH OK'
+        ssh -F {{ ssh_config_file }} -o ProxyJump={{ jump_host }} -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@{{ item.ip }} 'echo SSH OK'
       loop: "{{ inventory_entries }}"
       loop_control:
         label: "{{ item.name }} ({{ item.ip }})"
@@ -166,3 +169,30 @@
       retries: 10
       delay: 30
       until: ssh_test.rc == 0
+
+    - name: Generate SSH config snippet
+      set_fact:
+        ssh_config_snippet: |
+
+          ############# SUP VMs #############
+          # Add this to your ~/.ssh/config
+          # Requires ProxyJump through axes
+
+          Host sup-*
+              User ubuntu
+              PreferredAuthentications publickey
+              IdentityFile ~/.ssh/id_rsa
+              ProxyJump axes
+              StrictHostKeyChecking no
+              ServerAliveInterval 120
+
+          {% for entry in inventory_entries %}
+          Host {{ entry.name }}
+              HostName {{ entry.ip }}
+
+          {% endfor %}
+          #####################################
+
+    - name: Display SSH config for copy/paste
+      debug:
+        msg: "{{ ssh_config_snippet.split('\n') }}"

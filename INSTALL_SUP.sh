@@ -81,6 +81,7 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 
   --runner              Run directly without systemd installation
   --task "TASK"         Task for LLM agents (with --runner)
+  --stage <1|2>         Staged install for Ansible (1=pre-reboot, 2=post-reboot)
   --list                List all available configurations
   --help                Show this help
 
@@ -108,6 +109,7 @@ MODEL=""
 PHASE=false
 RUNNER=false
 TASK=""
+STAGE=0  # 0=full install, 1=pre-reboot only, 2=post-reboot only
 
 # Pre-defined configurations matching EXPERIMENTAL_PLAN.md
 declare -A CONFIGS
@@ -217,6 +219,14 @@ parse_args() {
             --task)
                 shift
                 TASK="$1"
+                ;;
+            --stage)
+                shift
+                STAGE="$1"
+                if [[ "$STAGE" != "1" && "$STAGE" != "2" ]]; then
+                    log_error "Invalid stage: $STAGE (must be 1 or 2)"
+                    exit 1
+                fi
                 ;;
             --list)
                 list_configs
@@ -641,37 +651,69 @@ install_agent() {
     log "  PHASE: $PHASE"
     log "  Deploy directory: $deploy_dir"
     log "  Service name: $service_name"
+    [[ "$STAGE" != "0" ]] && log "  Stage: $STAGE"
 
-    # Install Ollama if needed
-    if [[ "$MODEL" != "none" ]]; then
-        install_ollama
+    # ========== STAGE 1: System deps and drivers (pre-reboot) ==========
+    if [[ "$STAGE" == "0" || "$STAGE" == "1" ]]; then
+        log "=== Stage 1: Installing system dependencies ==="
+
+        # Install system dependencies (includes CUDA if GPU present)
+        install_system_deps
+
+        # Create deployment directory
+        mkdir -p "$deploy_dir/logs"
+
+        # Check if reboot needed for NVIDIA driver
+        if $CUDA_INSTALLED; then
+            if [[ "$STAGE" == "1" ]]; then
+                log "Stage 1 complete. NVIDIA drivers installed - reboot required."
+                log "After reboot, run: ./INSTALL_SUP.sh --$CONFIG_KEY --stage=2"
+                exit 100  # Special exit code: reboot needed
+            else
+                log "CUDA drivers installed. Rebooting in 5 seconds..."
+                sleep 5
+                sudo reboot
+            fi
+        fi
+
+        if [[ "$STAGE" == "1" ]]; then
+            log "Stage 1 complete. No reboot required."
+            exit 0
+        fi
     fi
 
-    # Install system dependencies
-    install_system_deps
+    # ========== STAGE 2: Ollama, Python, services (post-reboot) ==========
+    if [[ "$STAGE" == "0" || "$STAGE" == "2" ]]; then
+        log "=== Stage 2: Installing application components ==="
 
-    # Create deployment directory
-    mkdir -p "$deploy_dir/logs"
+        # Ensure deploy dir exists (may be running stage 2 after reboot)
+        mkdir -p "$deploy_dir/logs"
 
-    # Create virtual environment
-    log "Creating Python virtual environment..."
-    python3 -m venv "$deploy_dir/venv"
+        # Install Ollama if needed
+        if [[ "$MODEL" != "none" ]]; then
+            install_ollama
+        fi
 
-    # Install Python dependencies
-    install_python_deps "$deploy_dir/venv"
+        # Create virtual environment
+        log "Creating Python virtual environment..."
+        python3 -m venv "$deploy_dir/venv"
 
-    # Copy source code
-    copy_source_code "$deploy_dir"
+        # Install Python dependencies
+        install_python_deps "$deploy_dir/venv"
 
-    # Create run script
-    create_run_script "$deploy_dir"
+        # Copy source code
+        copy_source_code "$deploy_dir"
 
-    # Create systemd service
-    create_systemd_service "$service_name" "$deploy_dir"
+        # Create run script
+        create_run_script "$deploy_dir"
 
-    # Start service
-    log "Starting $service_name service..."
-    sudo systemctl start "${service_name}.service"
+        # Create systemd service
+        create_systemd_service "$service_name" "$deploy_dir"
+
+        # Start service
+        log "Starting $service_name service..."
+        sudo systemctl start "${service_name}.service"
+    fi
 
     echo ""
     echo -e "${GREEN}================================${NC}"
@@ -693,13 +735,6 @@ install_agent() {
     echo "  sudo systemctl stop $service_name"
     echo "  sudo journalctl -u $service_name -f"
     echo ""
-
-    # Reboot if CUDA was installed (required for nvidia driver to load)
-    if $CUDA_INSTALLED; then
-        log "CUDA drivers were installed. Rebooting in 5 seconds for driver to load..."
-        sleep 5
-        sudo reboot
-    fi
 }
 
 # ============================================================================
