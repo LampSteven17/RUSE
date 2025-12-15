@@ -3,11 +3,11 @@
 # Step 2: Install SUP behaviors on provisioned VMs
 #
 # Architecture:
-#   n8n (Ansible) → SSH (ProxyJump) → bastion → SSH → VMs
+#   Ansible → SSH (ProxyJump) → axes → SSH → VMs
 #
 # Prerequisites:
 #   - Run provision-vms.yaml first to create VMs and inventory.ini
-#   - inventory.ini contains ProxyJump config for reaching VMs through bastion
+#   - inventory.ini contains ProxyJump config for reaching VMs through axes
 #
 # Usage:
 #   ansible-playbook -i inventory.ini install-sups.yaml
@@ -57,20 +57,37 @@
         path: "{{ dolos_path }}/INSTALL_SUP.sh"
         mode: '0755'
 
-    - name: Run INSTALL_SUP.sh
+    - name: Run INSTALL_SUP.sh Stage 1 (system deps, drivers)
       shell: |
         cd {{ dolos_path }}
-        ./INSTALL_SUP.sh --{{ sup_behavior }}
+        ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=1
       args:
         executable: /bin/bash
       async: 1800
       poll: 30
-      register: install_result
+      register: stage1_result
+      failed_when: stage1_result.rc not in [0, 100]
+
+    - name: Reboot if NVIDIA drivers were installed (exit code 100)
+      reboot:
+        reboot_timeout: 600
+        msg: "Rebooting for NVIDIA driver to load"
+      when: stage1_result.rc == 100
+
+    - name: Run INSTALL_SUP.sh Stage 2 (ollama, python, services)
+      shell: |
+        cd {{ dolos_path }}
+        ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
+      args:
+        executable: /bin/bash
+      async: 1800
+      poll: 30
+      register: stage2_result
 
     - name: Display install result
       debug:
         msg: "SUP {{ sup_behavior }} installed successfully on {{ inventory_hostname }}"
-      when: install_result.rc == 0
+      when: stage2_result.rc == 0
 
     - name: Check SUP service status
       shell: systemctl is-active $(systemctl list-units --type=service | grep -E '(mchp|smol|bu)' | awk '{print $1}' | head -1) || true
