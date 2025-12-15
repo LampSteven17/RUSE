@@ -228,6 +228,13 @@ parse_args() {
                     exit 1
                 fi
                 ;;
+            --stage=*)
+                STAGE="${1#*=}"
+                if [[ "$STAGE" != "1" && "$STAGE" != "2" ]]; then
+                    log_error "Invalid stage: $STAGE (must be 1 or 2)"
+                    exit 1
+                fi
+                ;;
             --list)
                 list_configs
                 exit 0
