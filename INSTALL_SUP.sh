@@ -191,45 +191,24 @@ parse_args() {
                 parse_config_key "${1#--}"
                 ;;
 
-            # Long-form options
-            --brain)
-                shift
-                BRAIN="$1"
-                ;;
-            --content)
-                shift
-                CONTENT="$1"
-                ;;
-            --mechanics)
-                shift
-                MECHANICS="$1"
-                ;;
-            --model)
-                shift
-                MODEL="$1"
-                ;;
-            --phase)
-                PHASE=true
-                ;;
+            # Long-form options (support both --arg value and --arg=value)
+            --brain) shift; BRAIN="$1" ;;
+            --brain=*) BRAIN="${1#*=}" ;;
+            --content) shift; CONTENT="$1" ;;
+            --content=*) CONTENT="${1#*=}" ;;
+            --mechanics) shift; MECHANICS="$1" ;;
+            --mechanics=*) MECHANICS="${1#*=}" ;;
+            --model) shift; MODEL="$1" ;;
+            --model=*) MODEL="${1#*=}" ;;
+            --phase) PHASE=true ;;
 
             # Execution options
-            --runner)
-                RUNNER=true
-                ;;
-            --task)
-                shift
-                TASK="$1"
-                ;;
-            --stage)
-                shift
-                STAGE="$1"
-                if [[ "$STAGE" != "1" && "$STAGE" != "2" ]]; then
-                    log_error "Invalid stage: $STAGE (must be 1 or 2)"
-                    exit 1
-                fi
-                ;;
+            --runner) RUNNER=true ;;
+            --task) shift; TASK="$1" ;;
+            --task=*) TASK="${1#*=}" ;;
+            --stage) shift; STAGE="$1" ;&
             --stage=*)
-                STAGE="${1#*=}"
+                [[ "$1" == --stage=* ]] && STAGE="${1#*=}"
                 if [[ "$STAGE" != "1" && "$STAGE" != "2" ]]; then
                     log_error "Invalid stage: $STAGE (must be 1 or 2)"
                     exit 1
