@@ -94,6 +94,20 @@
       register: service_status
       changed_when: false
 
-    - name: Display service status
+- name: Deployment Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display deployment summary
       debug:
-        msg: "Service status: {{ service_status.stdout }}"
+        msg: |
+
+          ══════════════════════════════════════════════════════════════
+                            DEPLOYMENT COMPLETE
+          ══════════════════════════════════════════════════════════════
+
+          {% for host in groups['sup_hosts'] %}
+          {{ '%-20s' | format(host) }} {{ hostvars[host]['sup_behavior'] }}  ✓
+          {% endfor %}
+
+          ══════════════════════════════════════════════════════════════

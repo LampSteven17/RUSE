@@ -208,18 +208,25 @@ main_menu() {
                             run_provision "$deployment"
                             echo ""
                             print_step "SUP installation will begin in 30 seconds (press 'n' to cancel)..."
+                            cancelled=false
                             for i in {30..1}; do
                                 printf "\r    Starting in %2d seconds... " "$i"
                                 read -t 1 -n 1 key 2>/dev/null && {
                                     if [[ "$key" == "n" || "$key" == "N" ]]; then
                                         echo ""
                                         print_warn "SUP installation cancelled."
-                                        break 2
+                                        cancelled=true
+                                        break
                                     fi
                                 }
                             done
                             echo ""
-                            run_install "$deployment"
+                            if [[ "$cancelled" == "false" ]]; then
+                                run_install "$deployment"
+                                echo ""
+                                echo "Deployment complete. Goodbye!"
+                                exit 0
+                            fi
                             ;;
                         2)
                             run_provision "$deployment"
