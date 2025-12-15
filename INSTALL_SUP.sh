@@ -420,6 +420,12 @@ install_system_deps() {
             ;;
         browseruse|smolagents)
             sudo apt-get install -y xvfb
+            # Install uv (provides uvx for browser-use)
+            if ! command -v uvx &> /dev/null; then
+                log "Installing uv (provides uvx)..."
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+                export PATH="$HOME/.local/bin:$PATH"
+            fi
             # Install CUDA if GPU is present (for LLM acceleration)
             install_cuda
             ;;
@@ -443,7 +449,7 @@ install_python_deps() {
             pip install smolagents litellm torch transformers datasets numpy pandas requests duckduckgo-search ddgs
             ;;
         browseruse)
-            pip install browser-use langchain-ollama playwright
+            pip install uv browser-use langchain-ollama playwright
             playwright install chromium
             playwright install-deps chromium
             ;;
@@ -525,6 +531,8 @@ cd "$deploy_dir"
 source venv/bin/activate
 
 # Configuration
+export PATH="\$HOME/.local/bin:/usr/local/cuda-12.8/bin:\$PATH"
+export LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:\${LD_LIBRARY_PATH:-}"
 export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
 export PYTHONPATH="$deploy_dir/src:\${PYTHONPATH:-}"
