@@ -98,16 +98,14 @@
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Display deployment summary
+    - name: Display PLAY RECAP legend
       debug:
         msg: |
 
-          ══════════════════════════════════════════════════════════════
-                            DEPLOYMENT COMPLETE
-          ══════════════════════════════════════════════════════════════
-
-          {% for host in groups['sup_hosts'] %}
-          {{ '%-20s' | format(host) }} {{ hostvars[host]['sup_behavior'] }}  ✓
-          {% endfor %}
-
-          ══════════════════════════════════════════════════════════════
+          ┌─────────────────────────────────────────────────────────────┐
+          │  PLAY RECAP Legend:                                         │
+          │    ok      = Tasks completed successfully                   │
+          │    changed = Tasks that modified the system                 │
+          │    skipped = Tasks skipped (conditions not met, e.g. no GPU)│
+          │    failed  = Tasks that failed (0 = success!)               │
+          └─────────────────────────────────────────────────────────────┘
