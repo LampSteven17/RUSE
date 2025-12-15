@@ -20,7 +20,7 @@
     # Git repo for DOLOS-DEPLOY
     dolos_repo: "https://github.com/LampSteven17/DOLOS-DEPLOY.git"
     dolos_branch: "main"
-    dolos_path: "/home/{{ ansible_user }}/dolos-deploy"
+    dolos_path: "/opt/dolos-deploy"
 
   tasks:
     - name: Display target configuration
