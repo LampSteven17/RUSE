@@ -102,10 +102,13 @@
       debug:
         msg: |
 
-          ┌─────────────────────────────────────────────────────────────┐
-          │  PLAY RECAP Legend:                                         │
-          │    ok      = Tasks completed successfully                   │
-          │    changed = Tasks that modified the system                 │
-          │    skipped = Tasks skipped (conditions not met, e.g. no GPU)│
-          │    failed  = Tasks that failed (0 = success!)               │
-          └─────────────────────────────────────────────────────────────┘
+          ┌───────────────────────────────────────────────────────────────────┐
+          │  PLAY RECAP Legend (number = count of Ansible tasks):             │
+          │                                                                   │
+          │    ok=13     → 13 tasks ran successfully                          │
+          │    changed=5 → 5 tasks made changes (installed packages, etc.)    │
+          │    skipped=1 → 1 task skipped (e.g. no reboot needed, no GPU)     │
+          │    failed=0  → 0 tasks failed (this is good!)                     │
+          │                                                                   │
+          │  If failed=0 for all hosts, deployment was successful!            │
+          └───────────────────────────────────────────────────────────────────┘

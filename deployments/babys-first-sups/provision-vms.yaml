@@ -170,10 +170,10 @@
       delay: 30
       until: ssh_test.rc == 0
 
-    - name: Generate SSH config snippet
-      set_fact:
-        ssh_config_snippet: |
-
+    - name: Write SSH config snippet to file
+      delegate_to: localhost
+      copy:
+        content: |
           ############# SUP VMs #############
           # Add this to your ~/.ssh/config
           # Requires ProxyJump through axes
@@ -192,7 +192,27 @@
 
           {% endfor %}
           #####################################
+        dest: "{{ playbook_dir }}/ssh_config_snippet.txt"
 
-    - name: Display SSH config for copy/paste
+    - name: Display SSH config location
       debug:
-        msg: "{{ ssh_config_snippet.split('\n') }}"
+        msg: "SSH config saved to: {{ playbook_dir }}/ssh_config_snippet.txt"
+
+    - name: Print SSH config (copy-pasteable)
+      delegate_to: localhost
+      command: cat "{{ playbook_dir }}/ssh_config_snippet.txt"
+      register: ssh_out
+      changed_when: false
+
+    - name: SSH Config Output
+      pause:
+        seconds: 1
+        prompt: |
+
+          ═══════════════════════════════════════════════════════════════
+            SSH CONFIG - Copy and paste into ~/.ssh/config
+          ═══════════════════════════════════════════════════════════════
+          {{ ssh_out.stdout }}
+          ═══════════════════════════════════════════════════════════════
+            Saved to: {{ playbook_dir }}/ssh_config_snippet.txt
+          ═══════════════════════════════════════════════════════════════
