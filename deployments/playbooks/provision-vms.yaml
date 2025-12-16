@@ -1,5 +1,5 @@
 ---
-# Ansible Playbook: provision-vms.yaml
+# Ansible Playbook: provision-vms.yaml (Shared)
 # Step 1: Provision OpenStack VMs for SUP deployment
 #
 # Architecture:
@@ -7,25 +7,21 @@
 #                                        → SSH → new VMs
 #
 # Usage:
-#   ansible-playbook -i hosts.ini provision-vms.yaml
+#   ansible-playbook -i ../exp-1/hosts.ini provision-vms.yaml -e deployment_dir=../exp-1
 #
 # Output:
 #   Creates inventory.ini file for use by install-sups.yaml
-#
-# GPU Allocation (exp-1):
-#   V100:                    ALL GPU configs (M2*, M3*, B1-B3, S1-S3) (12 of 19 used)
-#   RTX 2080 TI (A variant): DUPLICATES of S1-S3, B1-B3              (6 of 6 used)
-#   RTX 2080 TI (non-A):     (spare capacity)                        (0 of 4 used)
-#   Non-GPU:                 M1                                      (1 used)
-#
-# Total VMs: 19 (1 M1 + 12 V100 + 6 RTX A duplicates)
 
-- name: Provision VMs - exp-1 (PRE-PHASE Experimental)
+- name: Provision VMs
   hosts: openstack_controller
   gather_facts: false
 
   vars:
-    # OpenStack RC file on axes
+    # Default paths (can be overridden via -e)
+    deployment_dir: "{{ playbook_dir }}"
+    config_file: "{{ deployment_dir }}/config.yaml"
+
+    # OpenStack defaults (can be overridden in config.yaml)
     os_rc_file: "~/vxn3kr-bot-rc"
     os_image: "noble-amd64"
     os_network: "ext_net"
@@ -36,122 +32,23 @@
     ssh_config_file: "/home/ubuntu/.ssh/config"
     jump_host: "axes"
 
-    # Inventory file output path (on Ansible control node)
-    inventory_file: "{{ playbook_dir }}/inventory.ini"
+  pre_tasks:
+    - name: Load deployment configuration
+      include_vars:
+        file: "{{ config_file }}"
 
-    # ═══════════════════════════════════════════════════════════════════
-    # GPU CAPACITY - Adjust these based on your available hardware
-    # ═══════════════════════════════════════════════════════════════════
-    flavor_capacity:
-      rtx2080ti-1gpu.14vcpu.28g: 4        # RTX 2080 TI non-A variant
-      rtx2080ti-A-1gpu.14vcpu.28g: 6      # RTX 2080 TI A variant (preferred for S1, B1)
-      v100-1gpu.14vcpu.28g: 19            # V100 GPUs
-      v1.14vcpu.28g: 20                   # Non-GPU (M1 only)
+    - name: Set inventory file path
+      set_fact:
+        inventory_file: "{{ deployment_dir }}/inventory.ini"
 
-    # ═══════════════════════════════════════════════════════════════════
-    # PRE-PHASE EXPERIMENTAL DEPLOYMENTS
-    # Based on docs/EXPERIMENTAL_PLAN.md
-    # ═══════════════════════════════════════════════════════════════════
-    #
-    # Assignment Strategy:
-    #   - ALL GPU configs → V100 (primary)
-    #   - DUPLICATES of S1-S3, B1-B3 → RTX 2080 TI A variant
-    #   - M1 (no GPU) → Non-GPU flavor
-    #
-    deployments:
-      # ─────────────────────────────────────────────────────────────────
-      # NON-GPU: M1 (Pure MCHP baseline)
-      # ─────────────────────────────────────────────────────────────────
-      - behavior: M1
-        flavor: v1.14vcpu.28g
-        count: 1
+    - name: Display deployment info
+      debug:
+        msg: |
 
-      # ─────────────────────────────────────────────────────────────────
-      # V100: MCHP Series with LLM augmentation (M2*, M3*)
-      # ─────────────────────────────────────────────────────────────────
-      - behavior: M2.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: M2a.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: M2b.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: M3.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: M3a.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: M3b.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      # ─────────────────────────────────────────────────────────────────
-      # V100: BrowserUse Series (B1, B2, B3)
-      # ─────────────────────────────────────────────────────────────────
-      - behavior: B1.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: B2.gemma
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: B3.deepseek
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      # ─────────────────────────────────────────────────────────────────
-      # V100: SmolAgents Series (S1, S2, S3)
-      # ─────────────────────────────────────────────────────────────────
-      - behavior: S1.llama
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: S2.gemma
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: S3.deepseek
-        flavor: v100-1gpu.14vcpu.28g
-        count: 1
-
-      # ─────────────────────────────────────────────────────────────────
-      # RTX 2080 TI A VARIANT: DUPLICATES of BrowserUse Series
-      # ─────────────────────────────────────────────────────────────────
-      - behavior: B1.llama
-        flavor: rtx2080ti-A-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: B2.gemma
-        flavor: rtx2080ti-A-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: B3.deepseek
-        flavor: rtx2080ti-A-1gpu.14vcpu.28g
-        count: 1
-
-      # ─────────────────────────────────────────────────────────────────
-      # RTX 2080 TI A VARIANT: DUPLICATES of SmolAgents Series
-      # ─────────────────────────────────────────────────────────────────
-      - behavior: S1.llama
-        flavor: rtx2080ti-A-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: S2.gemma
-        flavor: rtx2080ti-A-1gpu.14vcpu.28g
-        count: 1
-
-      - behavior: S3.deepseek
-        flavor: rtx2080ti-A-1gpu.14vcpu.28g
-        count: 1
+          ═══════════════════════════════════════════════════════════════
+          Deployment: {{ deployment_name }}
+          Config: {{ config_file }}
+          ═══════════════════════════════════════════════════════════════
 
   tasks:
     # ═══════════════════════════════════════════════════════════════════
@@ -247,7 +144,7 @@
         msg: |
 
           ═══════════════════════════════════════════════════════════════
-          Will create {{ vm_list | length }} VMs:
+          Will create {{ vm_list | length }} VMs for {{ deployment_name }}:
           ═══════════════════════════════════════════════════════════════
           {% for vm in vm_list %}
             - sup-{{ vm.behavior | replace('.', '-') }}-{{ vm.index }} ({{ vm.flavor | regex_replace('-1gpu.*', '') }})
@@ -321,14 +218,9 @@
       delegate_to: localhost
       copy:
         content: |
-          # Auto-generated inventory for exp-1 (PRE-PHASE Experimental)
+          # Auto-generated inventory for {{ deployment_name }}
           # Generated: {{ lookup('pipe', 'date -Iseconds') }}
           # Access: Via ProxyJump through {{ jump_host }}
-          #
-          # GPU Allocation Summary:
-          #   V100: M2*, M3*, B1-B3, S1-S3 (primary instances)
-          #   RTX 2080 TI A: B1-B3, S1-S3 (duplicate instances)
-          #   Non-GPU: M1
 
           [sup_hosts]
           {% for entry in inventory_entries %}
@@ -361,7 +253,7 @@
       delegate_to: localhost
       copy:
         content: |
-          ############# SUP VMs - exp-1 #############
+          ############# SUP VMs - {{ deployment_name }} #############
           # Add this to your ~/.ssh/config
           # Requires ProxyJump through axes
 
@@ -379,15 +271,15 @@
 
           {% endfor %}
           #############################################
-        dest: "{{ playbook_dir }}/ssh_config_snippet.txt"
+        dest: "{{ deployment_dir }}/ssh_config_snippet.txt"
 
     - name: Display SSH config location
       debug:
-        msg: "SSH config saved to: {{ playbook_dir }}/ssh_config_snippet.txt"
+        msg: "SSH config saved to: {{ deployment_dir }}/ssh_config_snippet.txt"
 
     - name: Print SSH config (copy-pasteable)
       delegate_to: localhost
-      command: cat "{{ playbook_dir }}/ssh_config_snippet.txt"
+      command: cat "{{ deployment_dir }}/ssh_config_snippet.txt"
       register: ssh_out
       changed_when: false
 
@@ -401,5 +293,5 @@
           ═══════════════════════════════════════════════════════════════
           {{ ssh_out.stdout }}
           ═══════════════════════════════════════════════════════════════
-            Saved to: {{ playbook_dir }}/ssh_config_snippet.txt
+            Saved to: {{ deployment_dir }}/ssh_config_snippet.txt
           ═══════════════════════════════════════════════════════════════

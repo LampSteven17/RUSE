@@ -1,5 +1,5 @@
 ---
-# Ansible Playbook: install-sups.yaml
+# Ansible Playbook: install-sups.yaml (Shared)
 # Step 2: Install SUP behaviors on provisioned VMs
 #
 # Architecture:
@@ -10,17 +10,28 @@
 #   - inventory.ini contains ProxyJump config for reaching VMs through axes
 #
 # Usage:
-#   ansible-playbook -i inventory.ini install-sups.yaml
+#   ansible-playbook -i ../exp-1/inventory.ini install-sups.yaml -e deployment_dir=../exp-1
 
-- name: Install SUPs - babys-first-sups
+- name: Install SUPs
   hosts: sup_hosts
   become: yes
 
   vars:
+    # Default paths (can be overridden via -e)
+    deployment_dir: "{{ playbook_dir }}"
+    config_file: "{{ deployment_dir }}/config.yaml"
+
     # Git repo for DOLOS-DEPLOY
     dolos_repo: "https://github.com/LampSteven17/DOLOS-DEPLOY.git"
     dolos_branch: "main"
     dolos_path: "/opt/dolos-deploy"
+
+  pre_tasks:
+    - name: Load deployment configuration
+      include_vars:
+        file: "{{ config_file }}"
+      delegate_to: localhost
+      run_once: true
 
   tasks:
     - name: Display target configuration
@@ -97,6 +108,10 @@
 - name: Deployment Summary
   hosts: localhost
   gather_facts: false
+
+  vars:
+    deployment_dir: "{{ playbook_dir }}"
+
   tasks:
     - name: Display PLAY RECAP legend
       debug:
@@ -115,11 +130,11 @@
 
     - name: Check for SSH config file
       stat:
-        path: "{{ playbook_dir }}/ssh_config_snippet.txt"
+        path: "{{ deployment_dir }}/ssh_config_snippet.txt"
       register: ssh_config_file
 
     - name: Read SSH config
-      command: cat "{{ playbook_dir }}/ssh_config_snippet.txt"
+      command: cat "{{ deployment_dir }}/ssh_config_snippet.txt"
       register: ssh_config_content
       when: ssh_config_file.stat.exists
       changed_when: false
@@ -134,6 +149,6 @@
           ═══════════════════════════════════════════════════════════════
           {{ ssh_config_content.stdout }}
           ═══════════════════════════════════════════════════════════════
-            Saved to: {{ playbook_dir }}/ssh_config_snippet.txt
+            Saved to: {{ deployment_dir }}/ssh_config_snippet.txt
           ═══════════════════════════════════════════════════════════════
       when: ssh_config_file.stat.exists

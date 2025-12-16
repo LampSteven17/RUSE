@@ -3,10 +3,21 @@
 # Interactive SUP Deployment Script
 # Runs Ansible playbooks to provision VMs and install SUPs
 #
+# Structure:
+#   deployments/
+#   ├── playbooks/           # Shared playbook logic
+#   │   ├── provision-vms.yaml
+#   │   ├── install-sups.yaml
+#   │   └── teardown.yaml
+#   ├── exp-1/               # Deployment configs
+#   │   ├── config.yaml
+#   │   └── hosts.ini
+#   └── deploy.sh            # This script
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAYBOOKS_DIR="$SCRIPT_DIR/playbooks"
 SSH_CONFIG="${SSH_CONFIG:-$HOME/.ssh/config}"
 
 # Colors
@@ -39,7 +50,7 @@ list_deployments() {
     echo -e "${BLUE}Available deployments:${NC}"
     local i=1
     for dir in "$SCRIPT_DIR"/*/; do
-        if [[ -f "${dir}provision-vms.yaml" ]]; then
+        if [[ -f "${dir}config.yaml" ]]; then
             deployment=$(basename "$dir")
             echo "  $i) $deployment"
             ((i++))
@@ -51,7 +62,7 @@ list_deployments() {
 get_deployments() {
     local deployments=()
     for dir in "$SCRIPT_DIR"/*/; do
-        if [[ -f "${dir}provision-vms.yaml" ]]; then
+        if [[ -f "${dir}config.yaml" ]]; then
             deployments+=("$(basename "$dir")")
         fi
     done
@@ -64,6 +75,11 @@ check_prereqs() {
 
     if ! command -v ansible-playbook &> /dev/null; then
         print_error "ansible-playbook not found. Please install Ansible."
+        exit 1
+    fi
+
+    if [[ ! -d "$PLAYBOOKS_DIR" ]]; then
+        print_error "Playbooks directory not found at $PLAYBOOKS_DIR"
         exit 1
     fi
 
@@ -86,15 +102,21 @@ run_provision() {
     print_step "Provisioning VMs for: $deployment"
     echo ""
 
-    cd "$deploy_dir"
+    cd "$PLAYBOOKS_DIR"
 
     if [[ -f "$SSH_CONFIG" ]]; then
-        ANSIBLE_SSH_ARGS="-F $SSH_CONFIG" ansible-playbook -i hosts.ini provision-vms.yaml
+        ANSIBLE_SSH_ARGS="-F $SSH_CONFIG" ansible-playbook \
+            -i "$deploy_dir/hosts.ini" \
+            -e "deployment_dir=$deploy_dir" \
+            provision-vms.yaml
     else
-        ansible-playbook -i hosts.ini provision-vms.yaml
+        ansible-playbook \
+            -i "$deploy_dir/hosts.ini" \
+            -e "deployment_dir=$deploy_dir" \
+            provision-vms.yaml
     fi
 
-    if [[ -f "inventory.ini" ]]; then
+    if [[ -f "$deploy_dir/inventory.ini" ]]; then
         print_step "VMs provisioned! Inventory written to: $deploy_dir/inventory.ini"
     fi
 }
@@ -112,8 +134,11 @@ run_install() {
     print_step "Installing SUPs for: $deployment"
     echo ""
 
-    cd "$deploy_dir"
-    ansible-playbook -i inventory.ini install-sups.yaml
+    cd "$PLAYBOOKS_DIR"
+    ansible-playbook \
+        -i "$deploy_dir/inventory.ini" \
+        -e "deployment_dir=$deploy_dir" \
+        install-sups.yaml
 
     print_step "SUP installation complete!"
 }
@@ -123,8 +148,8 @@ run_teardown() {
     local deployment=$1
     local deploy_dir="$SCRIPT_DIR/$deployment"
 
-    if [[ ! -f "$deploy_dir/teardown.yaml" ]]; then
-        print_error "No teardown.yaml found for this deployment."
+    if [[ ! -f "$deploy_dir/config.yaml" ]]; then
+        print_error "No config.yaml found for this deployment."
         return 1
     fi
 
@@ -138,12 +163,18 @@ run_teardown() {
     print_step "Tearing down: $deployment"
     echo ""
 
-    cd "$deploy_dir"
+    cd "$PLAYBOOKS_DIR"
 
     if [[ -f "$SSH_CONFIG" ]]; then
-        ANSIBLE_SSH_ARGS="-F $SSH_CONFIG" ansible-playbook -i hosts.ini teardown.yaml
+        ANSIBLE_SSH_ARGS="-F $SSH_CONFIG" ansible-playbook \
+            -i "$deploy_dir/hosts.ini" \
+            -e "deployment_dir=$deploy_dir" \
+            teardown.yaml
     else
-        ansible-playbook -i hosts.ini teardown.yaml
+        ansible-playbook \
+            -i "$deploy_dir/hosts.ini" \
+            -e "deployment_dir=$deploy_dir" \
+            teardown.yaml
     fi
 
     print_step "Teardown complete!"
@@ -157,9 +188,9 @@ show_deployment_info() {
     echo -e "\n${BLUE}Deployment: $deployment${NC}"
     echo "-----------------------------------"
 
-    if [[ -f "$deploy_dir/provision-vms.yaml" ]]; then
+    if [[ -f "$deploy_dir/config.yaml" ]]; then
         echo -e "${GREEN}Configured SUPs:${NC}"
-        grep -A1 "behavior:" "$deploy_dir/provision-vms.yaml" | grep -E "behavior:|flavor:" | head -20
+        grep -A1 "behavior:" "$deploy_dir/config.yaml" | grep -E "behavior:|flavor:" | head -20
     fi
 
     if [[ -f "$deploy_dir/inventory.ini" ]]; then
@@ -176,6 +207,7 @@ main_menu() {
 
     if [[ ${#deployments[@]} -eq 0 ]]; then
         print_error "No deployments found in $SCRIPT_DIR"
+        print_error "Each deployment needs a config.yaml file"
         exit 1
     fi
 
