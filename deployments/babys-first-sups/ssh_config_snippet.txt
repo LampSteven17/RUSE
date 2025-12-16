@@ -1,0 +1,28 @@
+############# SUP VMs - babys-first-sups #############
+# Add this to your ~/.ssh/config
+# Requires ProxyJump through axes
+
+Host sup-*
+    User ubuntu
+    PreferredAuthentications publickey
+    IdentityFile ~/.ssh/id_rsa
+    ProxyJump axes
+    StrictHostKeyChecking no
+    ServerAliveInterval 120
+
+Host sup-S1-llama-0
+    HostName 10.246.115.63
+
+Host sup-B1-llama-0
+    HostName 10.246.116.122
+
+Host sup-B1-llama-1
+    HostName 10.246.116.143
+
+Host sup-M1-0
+    HostName 10.246.117.213
+
+Host sup-M1-1
+    HostName 10.246.116.206
+
+#############################################
