@@ -220,6 +220,88 @@
             - {{ entry.name }}: {{ entry.ip }} ({{ entry.behavior }})
           {% endfor %}
 
+    - name: Build deployment summary data
+      set_fact:
+        v100_vms: "{{ inventory_entries | selectattr('flavor', 'equalto', 'v100-1gpu.14vcpu.28g') | list }}"
+        rtx_a_vms: "{{ inventory_entries | selectattr('flavor', 'equalto', 'rtx2080ti-A-1gpu.14vcpu.28g') | list }}"
+        rtx_vms: "{{ inventory_entries | selectattr('flavor', 'equalto', 'rtx2080ti-1gpu.14vcpu.28g') | list }}"
+        nogpu_vms: "{{ inventory_entries | selectattr('flavor', 'equalto', 'v1.14vcpu.28g') | list }}"
+
+    - name: Display Deployment Summary
+      pause:
+        seconds: 1
+        prompt: |
+
+          ╔════════════════════════════════════════════════════════════════════════════════╗
+          ║                    {{ '%-52s' | format(deployment_name | upper + ' DEPLOYMENT SUMMARY') }} ║
+          ╠════════════════════════════════════════════════════════════════════════════════╣
+          ║                                                                                ║
+          ║  HARDWARE ALLOCATION                                                           ║
+          ║  ┌───────────────────────────────────┬───────────┬───────────┬───────────┐    ║
+          ║  │ Flavor                            │ Available │ Assigned  │ Remaining │    ║
+          ║  ├───────────────────────────────────┼───────────┼───────────┼───────────┤    ║
+          ║  │ v100-1gpu.14vcpu.28g              │ {{ '%9d' | format(flavor_capacity['v100-1gpu.14vcpu.28g'] | default(0)) }} │ {{ '%9d' | format(v100_vms | length) }} │ {{ '%9d' | format((flavor_capacity['v100-1gpu.14vcpu.28g'] | default(0)) - (v100_vms | length)) }} │    ║
+          ║  │ rtx2080ti-A-1gpu.14vcpu.28g       │ {{ '%9d' | format(flavor_capacity['rtx2080ti-A-1gpu.14vcpu.28g'] | default(0)) }} │ {{ '%9d' | format(rtx_a_vms | length) }} │ {{ '%9d' | format((flavor_capacity['rtx2080ti-A-1gpu.14vcpu.28g'] | default(0)) - (rtx_a_vms | length)) }} │    ║
+          ║  │ rtx2080ti-1gpu.14vcpu.28g         │ {{ '%9d' | format(flavor_capacity['rtx2080ti-1gpu.14vcpu.28g'] | default(0)) }} │ {{ '%9d' | format(rtx_vms | length) }} │ {{ '%9d' | format((flavor_capacity['rtx2080ti-1gpu.14vcpu.28g'] | default(0)) - (rtx_vms | length)) }} │    ║
+          ║  │ v1.14vcpu.28g (non-GPU)           │ {{ '%9d' | format(flavor_capacity['v1.14vcpu.28g'] | default(0)) }} │ {{ '%9d' | format(nogpu_vms | length) }} │ {{ '%9d' | format((flavor_capacity['v1.14vcpu.28g'] | default(0)) - (nogpu_vms | length)) }} │    ║
+          ║  └───────────────────────────────────┴───────────┴───────────┴───────────┘    ║
+          ║                                                                                ║
+          {% if v100_vms | length > 0 %}
+          ╠════════════════════════════════════════════════════════════════════════════════╣
+          ║                                                                                ║
+          ║  V100 ASSIGNMENTS ({{ v100_vms | length }} VMs){{ ' ' * (54 - (v100_vms | length | string | length)) }}║
+          ║  ┌──────────────────┬────────────────────────────────────────────────────┐    ║
+          ║  │ Config           │ VM Name                                            │    ║
+          ║  ├──────────────────┼────────────────────────────────────────────────────┤    ║
+          {% for vm in v100_vms %}
+          ║  │ {{ '%-16s' | format(vm.behavior) }} │ {{ '%-50s' | format(vm.name) }} │    ║
+          {% endfor %}
+          ║  └──────────────────┴────────────────────────────────────────────────────┘    ║
+          ║                                                                                ║
+          {% endif %}
+          {% if rtx_a_vms | length > 0 %}
+          ╠════════════════════════════════════════════════════════════════════════════════╣
+          ║                                                                                ║
+          ║  RTX 2080 TI A ASSIGNMENTS ({{ rtx_a_vms | length }} VMs) - Hardware comparison{{ ' ' * (26 - (rtx_a_vms | length | string | length)) }}║
+          ║  ┌──────────────────┬────────────────────────────────────────────────────┐    ║
+          ║  │ Config           │ VM Name                                            │    ║
+          ║  ├──────────────────┼────────────────────────────────────────────────────┤    ║
+          {% for vm in rtx_a_vms %}
+          ║  │ {{ '%-16s' | format(vm.behavior) }} │ {{ '%-50s' | format(vm.name) }} │    ║
+          {% endfor %}
+          ║  └──────────────────┴────────────────────────────────────────────────────┘    ║
+          ║                                                                                ║
+          {% endif %}
+          {% if rtx_vms | length > 0 %}
+          ╠════════════════════════════════════════════════════════════════════════════════╣
+          ║                                                                                ║
+          ║  RTX 2080 TI ASSIGNMENTS ({{ rtx_vms | length }} VMs){{ ' ' * (51 - (rtx_vms | length | string | length)) }}║
+          ║  ┌──────────────────┬────────────────────────────────────────────────────┐    ║
+          ║  │ Config           │ VM Name                                            │    ║
+          ║  ├──────────────────┼────────────────────────────────────────────────────┤    ║
+          {% for vm in rtx_vms %}
+          ║  │ {{ '%-16s' | format(vm.behavior) }} │ {{ '%-50s' | format(vm.name) }} │    ║
+          {% endfor %}
+          ║  └──────────────────┴────────────────────────────────────────────────────┘    ║
+          ║                                                                                ║
+          {% endif %}
+          {% if nogpu_vms | length > 0 %}
+          ╠════════════════════════════════════════════════════════════════════════════════╣
+          ║                                                                                ║
+          ║  NON-GPU ASSIGNMENTS ({{ nogpu_vms | length }} VMs){{ ' ' * (51 - (nogpu_vms | length | string | length)) }}║
+          ║  ┌──────────────────┬────────────────────────────────────────────────────┐    ║
+          ║  │ Config           │ VM Name                                            │    ║
+          ║  ├──────────────────┼────────────────────────────────────────────────────┤    ║
+          {% for vm in nogpu_vms %}
+          ║  │ {{ '%-16s' | format(vm.behavior) }} │ {{ '%-50s' | format(vm.name) }} │    ║
+          {% endfor %}
+          ║  └──────────────────┴────────────────────────────────────────────────────┘    ║
+          ║                                                                                ║
+          {% endif %}
+          ╠════════════════════════════════════════════════════════════════════════════════╣
+          ║  TOTAL: {{ inventory_entries | length }} VMs  │  V100: {{ v100_vms | length }}  │  RTX A: {{ rtx_a_vms | length }}  │  RTX: {{ rtx_vms | length }}  │  Non-GPU: {{ nogpu_vms | length }}{{ ' ' * (16 - (inventory_entries | length | string | length) - (v100_vms | length | string | length) - (rtx_a_vms | length | string | length) - (rtx_vms | length | string | length) - (nogpu_vms | length | string | length)) }}║
+          ╚════════════════════════════════════════════════════════════════════════════════╝
+
     - name: Generate inventory file on control node
       delegate_to: localhost
       copy:
