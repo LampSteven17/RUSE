@@ -155,14 +155,19 @@
             - sup-{{ vm.behavior | replace('.', '-') }}-{{ vm.index }} ({{ vm.flavor | regex_replace('-1gpu.*', '') }})
           {% endfor %}
 
-    - name: Create OpenStack VMs
+    # ─────────────────────────────────────────────────────────────────
+    # BATCHED VM CREATION: Create VMs in batches to avoid overloading OpenStack
+    # Uses throttle to limit concurrent creates, no --wait for faster submission
+    # ─────────────────────────────────────────────────────────────────
+    - name: Create OpenStack VMs (batched, {{ vm_create_batch_size | default(5) }} at a time)
       shell: |
         source {{ os_rc_file }}
+        VM_NAME="sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
         # Check if VM already exists
-        if openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" &>/dev/null; then
-          echo "VM already exists"
-          openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" -f json
+        if openstack server show "$VM_NAME" &>/dev/null; then
+          echo "EXISTS: $VM_NAME"
         else
+          # Create without --wait (returns immediately after submission)
           openstack server create \
             --flavor "{{ item.flavor }}" \
             --image "{{ os_image }}" \
@@ -170,16 +175,44 @@
             --network "{{ os_network }}" \
             --key-name "{{ os_keypair }}" \
             --security-group "{{ os_security_group }}" \
-            --wait \
-            -f json \
-            "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
+            -f value -c id \
+            "$VM_NAME"
+          echo "CREATED: $VM_NAME"
         fi
       args:
         executable: /bin/bash
       loop: "{{ vm_list }}"
       loop_control:
         label: "sup-{{ item.behavior }}-{{ item.index }}"
+      throttle: "{{ vm_create_batch_size | default(5) }}"
       register: created_vms
+
+    - name: Wait for all VMs to become ACTIVE (parallel polling)
+      shell: |
+        source {{ os_rc_file }}
+        VM_NAME="sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
+        STATUS=$(openstack server show "$VM_NAME" -f value -c status 2>/dev/null || echo "UNKNOWN")
+        if [ "$STATUS" = "ACTIVE" ]; then
+          echo "ACTIVE"
+          exit 0
+        elif [ "$STATUS" = "ERROR" ]; then
+          echo "ERROR: VM in error state"
+          exit 1
+        else
+          echo "BUILDING: $STATUS"
+          exit 2
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "sup-{{ item.behavior }}-{{ item.index }}"
+      register: vm_status_check
+      until: vm_status_check.rc == 0
+      retries: 30
+      delay: 10
+      throttle: 10
+      failed_when: vm_status_check.rc == 1
 
     - name: Get VM IPs
       shell: |

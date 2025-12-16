@@ -426,10 +426,14 @@ install_system_deps() {
                 curl -LsSf https://astral.sh/uv/install.sh | sh
                 export PATH="$HOME/.local/bin:$PATH"
             fi
-            # Install CUDA if GPU is present (for LLM acceleration)
-            install_cuda
             ;;
     esac
+
+    # Install CUDA if GPU is present and model requires it (for LLM acceleration)
+    # This applies to ALL brain types when MODEL != none
+    if [[ "$MODEL" != "none" ]]; then
+        install_cuda
+    fi
 }
 
 install_python_deps() {
