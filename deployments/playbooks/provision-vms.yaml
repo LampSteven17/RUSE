@@ -96,32 +96,34 @@
         seconds: 0
         prompt: |
 
-          ╔═══════════════════════════════════════════════════════════════════════════╗
-          ║                         GPU CAPACITY REPORT                               ║
-          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ╔════════════════════════════════════════════════════════════════════════╗
+          ║                        GPU CAPACITY REPORT                             ║
+          ╠══════════════════════════════════════╦═══════╦══════════╦══════════════╣
+          ║ Flavor                               ║ Used  ║ Status   ║ Remaining    ║
+          ╠══════════════════════════════════════╬═══════╬══════════╬══════════════╣
           {% for item in capacity_report %}
-          ║ {{ '%-40s' | format(item.flavor) }} │ {{ '%2d' | format(item.requested) }}/{{ '%2d' | format(item.available) }} │ {{ '%-8s' | format(item.status) }} │ {{ '%+3d' | format(item.remaining) }} remaining ║
+          ║ {{ '%-36s' | format(item.flavor) }} ║ {{ '%2d' | format(item.requested) }}/{{ '%-2d' | format(item.available) }} ║ {{ '%-8s' | format(item.status) }} ║ {{ '%+3d' | format(item.remaining) }} left     ║
           {% endfor %}
-          ╠═══════════════════════════════════════════════════════════════════════════╣
-          ║ LEGEND: OK=capacity available, FULL=at limit, SHORTAGE=over capacity      ║
-          ╚═══════════════════════════════════════════════════════════════════════════╝
+          ╠══════════════════════════════════════╩═══════╩══════════╩══════════════╣
+          ║ OK=capacity available  FULL=at limit  SHORTAGE=over capacity           ║
+          ╚════════════════════════════════════════════════════════════════════════╝
 
     - name: Check for GPU shortages
       fail:
         msg: |
 
-          ╔═══════════════════════════════════════════════════════════════════════════╗
-          ║                      GPU CAPACITY EXCEEDED                                ║
-          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ╔════════════════════════════════════════════════════════════════════════╗
+          ║                      GPU CAPACITY EXCEEDED                             ║
+          ╠════════════════════════════════════════════════════════════════════════╣
           {% for item in capacity_report %}
           {% if item.status == 'SHORTAGE' %}
-          ║ SHORTAGE: {{ item.flavor }}
-          ║          Requested: {{ item.requested }}, Available: {{ item.available }}, Over by: {{ (item.remaining | abs) }}
+          ║ SHORTAGE: {{ '%-60s' | format(item.flavor) }} ║
+          ║   Requested: {{ '%2d' | format(item.requested) }}  Available: {{ '%2d' | format(item.available) }}  Over by: {{ '%-25d' | format(item.remaining | abs) }} ║
           {% endif %}
           {% endfor %}
-          ╠═══════════════════════════════════════════════════════════════════════════╣
-          ║ Please reduce deployment counts or add more GPU capacity                  ║
-          ╚═══════════════════════════════════════════════════════════════════════════╝
+          ╠════════════════════════════════════════════════════════════════════════╣
+          ║ Please reduce deployment counts or add more GPU capacity               ║
+          ╚════════════════════════════════════════════════════════════════════════╝
       when: capacity_report | selectattr('status', 'equalto', 'SHORTAGE') | list | length > 0
 
     # ═══════════════════════════════════════════════════════════════════
