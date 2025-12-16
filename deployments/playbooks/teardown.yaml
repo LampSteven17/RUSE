@@ -23,8 +23,9 @@
         file: "{{ config_file }}"
 
     - name: Display deployment info
-      debug:
-        msg: "Tearing down deployment: {{ deployment_name }}"
+      pause:
+        seconds: 0
+        prompt: "Tearing down deployment: {{ deployment_name }}"
 
   tasks:
     - name: Get list of SUP servers
@@ -36,8 +37,9 @@
       register: server_list
 
     - name: Display servers to be deleted
-      debug:
-        msg: |
+      pause:
+        seconds: 0
+        prompt: |
           Found servers to delete:
           {{ server_list.stdout_lines | default(['(none)']) | join('\n') }}
 
@@ -101,8 +103,9 @@
       register: cleanup_status
 
     - name: Display cleanup status
-      debug:
-        msg: "{{ cleanup_status.stdout }}"
+      pause:
+        seconds: 0
+        prompt: "{{ cleanup_status.stdout }}"
 
     - name: Remove local inventory file
       delegate_to: localhost

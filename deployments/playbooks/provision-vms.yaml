@@ -42,12 +42,13 @@
         inventory_file: "{{ deployment_dir }}/inventory.ini"
 
     - name: Display deployment info
-      debug:
-        msg: |
+      pause:
+        seconds: 0
+        prompt: |
 
           ═══════════════════════════════════════════════════════════════
-          Deployment: {{ deployment_name }}
-          Config: {{ config_file }}
+            Deployment: {{ deployment_name }}
+            Config: {{ config_file }}
           ═══════════════════════════════════════════════════════════════
 
   tasks:
@@ -91,8 +92,9 @@
           {{ report }}
 
     - name: Display GPU Capacity Report
-      debug:
-        msg: |
+      pause:
+        seconds: 0
+        prompt: |
 
           ╔═══════════════════════════════════════════════════════════════════════════╗
           ║                         GPU CAPACITY REPORT                               ║
@@ -140,8 +142,9 @@
           {{ vms }}
 
     - name: Display VMs to be created
-      debug:
-        msg: |
+      pause:
+        seconds: 0
+        prompt: |
 
           ═══════════════════════════════════════════════════════════════
           Will create {{ vm_list | length }} VMs for {{ deployment_name }}:
@@ -204,8 +207,9 @@
           {{ entries }}
 
     - name: Display created VMs
-      debug:
-        msg: |
+      pause:
+        seconds: 0
+        prompt: |
 
           ═══════════════════════════════════════════════════════════════
           Created {{ inventory_entries | length }} VMs:
@@ -234,8 +238,9 @@
         dest: "{{ inventory_file }}"
 
     - name: Display inventory file location
-      debug:
-        msg: "Inventory written to: {{ inventory_file }}"
+      pause:
+        seconds: 0
+        prompt: "Inventory written to: {{ inventory_file }}"
 
     - name: Test SSH connectivity to VMs (via axes)
       delegate_to: localhost
@@ -274,8 +279,9 @@
         dest: "{{ deployment_dir }}/ssh_config_snippet.txt"
 
     - name: Display SSH config location
-      debug:
-        msg: "SSH config saved to: {{ deployment_dir }}/ssh_config_snippet.txt"
+      pause:
+        seconds: 0
+        prompt: "SSH config saved to: {{ deployment_dir }}/ssh_config_snippet.txt"
 
     - name: Print SSH config (copy-pasteable)
       delegate_to: localhost
