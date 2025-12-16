@@ -1,0 +1,405 @@
+---
+# Ansible Playbook: provision-vms.yaml
+# Step 1: Provision OpenStack VMs for SUP deployment
+#
+# Architecture:
+#   Ansible → SSH → axes (OpenStack CLI) → OpenStack API
+#                                        → SSH → new VMs
+#
+# Usage:
+#   ansible-playbook -i hosts.ini provision-vms.yaml
+#
+# Output:
+#   Creates inventory.ini file for use by install-sups.yaml
+#
+# GPU Allocation (exp-1):
+#   V100:                    ALL GPU configs (M2*, M3*, B1-B3, S1-S3) (12 of 19 used)
+#   RTX 2080 TI (A variant): DUPLICATES of S1-S3, B1-B3              (6 of 6 used)
+#   RTX 2080 TI (non-A):     (spare capacity)                        (0 of 4 used)
+#   Non-GPU:                 M1                                      (1 used)
+#
+# Total VMs: 19 (1 M1 + 12 V100 + 6 RTX A duplicates)
+
+- name: Provision VMs - exp-1 (PRE-PHASE Experimental)
+  hosts: openstack_controller
+  gather_facts: false
+
+  vars:
+    # OpenStack RC file on axes
+    os_rc_file: "~/vxn3kr-bot-rc"
+    os_image: "noble-amd64"
+    os_network: "ext_net"
+    os_keypair: "bot-desktop"
+    os_security_group: "default"
+
+    # SSH config for ProxyJump (on Ansible control node)
+    ssh_config_file: "/home/ubuntu/.ssh/config"
+    jump_host: "axes"
+
+    # Inventory file output path (on Ansible control node)
+    inventory_file: "{{ playbook_dir }}/inventory.ini"
+
+    # ═══════════════════════════════════════════════════════════════════
+    # GPU CAPACITY - Adjust these based on your available hardware
+    # ═══════════════════════════════════════════════════════════════════
+    flavor_capacity:
+      rtx2080ti-1gpu.14vcpu.28g: 4        # RTX 2080 TI non-A variant
+      rtx2080ti-A-1gpu.14vcpu.28g: 6      # RTX 2080 TI A variant (preferred for S1, B1)
+      v100-1gpu.14vcpu.28g: 19            # V100 GPUs
+      v1.14vcpu.28g: 20                   # Non-GPU (M1 only)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # PRE-PHASE EXPERIMENTAL DEPLOYMENTS
+    # Based on docs/EXPERIMENTAL_PLAN.md
+    # ═══════════════════════════════════════════════════════════════════
+    #
+    # Assignment Strategy:
+    #   - ALL GPU configs → V100 (primary)
+    #   - DUPLICATES of S1-S3, B1-B3 → RTX 2080 TI A variant
+    #   - M1 (no GPU) → Non-GPU flavor
+    #
+    deployments:
+      # ─────────────────────────────────────────────────────────────────
+      # NON-GPU: M1 (Pure MCHP baseline)
+      # ─────────────────────────────────────────────────────────────────
+      - behavior: M1
+        flavor: v1.14vcpu.28g
+        count: 1
+
+      # ─────────────────────────────────────────────────────────────────
+      # V100: MCHP Series with LLM augmentation (M2*, M3*)
+      # ─────────────────────────────────────────────────────────────────
+      - behavior: M2.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: M2a.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: M2b.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: M3.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: M3a.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: M3b.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      # ─────────────────────────────────────────────────────────────────
+      # V100: BrowserUse Series (B1, B2, B3)
+      # ─────────────────────────────────────────────────────────────────
+      - behavior: B1.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: B2.gemma
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: B3.deepseek
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      # ─────────────────────────────────────────────────────────────────
+      # V100: SmolAgents Series (S1, S2, S3)
+      # ─────────────────────────────────────────────────────────────────
+      - behavior: S1.llama
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: S2.gemma
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: S3.deepseek
+        flavor: v100-1gpu.14vcpu.28g
+        count: 1
+
+      # ─────────────────────────────────────────────────────────────────
+      # RTX 2080 TI A VARIANT: DUPLICATES of BrowserUse Series
+      # ─────────────────────────────────────────────────────────────────
+      - behavior: B1.llama
+        flavor: rtx2080ti-A-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: B2.gemma
+        flavor: rtx2080ti-A-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: B3.deepseek
+        flavor: rtx2080ti-A-1gpu.14vcpu.28g
+        count: 1
+
+      # ─────────────────────────────────────────────────────────────────
+      # RTX 2080 TI A VARIANT: DUPLICATES of SmolAgents Series
+      # ─────────────────────────────────────────────────────────────────
+      - behavior: S1.llama
+        flavor: rtx2080ti-A-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: S2.gemma
+        flavor: rtx2080ti-A-1gpu.14vcpu.28g
+        count: 1
+
+      - behavior: S3.deepseek
+        flavor: rtx2080ti-A-1gpu.14vcpu.28g
+        count: 1
+
+  tasks:
+    # ═══════════════════════════════════════════════════════════════════
+    # CAPACITY VALIDATION
+    # ═══════════════════════════════════════════════════════════════════
+    - name: Calculate flavor usage from deployments
+      set_fact:
+        flavor_usage: >-
+          {%- set usage = {} -%}
+          {%- for dep in deployments -%}
+            {%- set current = usage.get(dep.flavor, 0) -%}
+            {%- set _ = usage.update({dep.flavor: current + dep.count}) -%}
+          {%- endfor -%}
+          {{ usage }}
+
+    - name: Validate GPU capacity
+      set_fact:
+        capacity_report: >-
+          {%- set report = [] -%}
+          {%- set has_shortage = false -%}
+          {%- for flavor, requested in flavor_usage.items() -%}
+            {%- set available = flavor_capacity.get(flavor, 0) -%}
+            {%- set remaining = available - requested -%}
+            {%- if remaining < 0 -%}
+              {%- set status = 'SHORTAGE' -%}
+              {%- set has_shortage = true -%}
+            {%- elif remaining == 0 -%}
+              {%- set status = 'FULL' -%}
+            {%- else -%}
+              {%- set status = 'OK' -%}
+            {%- endif -%}
+            {%- set _ = report.append({
+              'flavor': flavor,
+              'requested': requested,
+              'available': available,
+              'remaining': remaining,
+              'status': status
+            }) -%}
+          {%- endfor -%}
+          {{ report }}
+
+    - name: Display GPU Capacity Report
+      debug:
+        msg: |
+
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║                         GPU CAPACITY REPORT                               ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          {% for item in capacity_report %}
+          ║ {{ '%-40s' | format(item.flavor) }} │ {{ '%2d' | format(item.requested) }}/{{ '%2d' | format(item.available) }} │ {{ '%-8s' | format(item.status) }} │ {{ '%+3d' | format(item.remaining) }} remaining ║
+          {% endfor %}
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║ LEGEND: OK=capacity available, FULL=at limit, SHORTAGE=over capacity      ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
+
+    - name: Check for GPU shortages
+      fail:
+        msg: |
+
+          ╔═══════════════════════════════════════════════════════════════════════════╗
+          ║                      GPU CAPACITY EXCEEDED                                ║
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          {% for item in capacity_report %}
+          {% if item.status == 'SHORTAGE' %}
+          ║ SHORTAGE: {{ item.flavor }}
+          ║          Requested: {{ item.requested }}, Available: {{ item.available }}, Over by: {{ (item.remaining | abs) }}
+          {% endif %}
+          {% endfor %}
+          ╠═══════════════════════════════════════════════════════════════════════════╣
+          ║ Please reduce deployment counts or add more GPU capacity                  ║
+          ╚═══════════════════════════════════════════════════════════════════════════╝
+      when: capacity_report | selectattr('status', 'equalto', 'SHORTAGE') | list | length > 0
+
+    # ═══════════════════════════════════════════════════════════════════
+    # VM CREATION
+    # ═══════════════════════════════════════════════════════════════════
+    - name: Expand deployments to VM list
+      set_fact:
+        vm_list: >-
+          {%- set vms = [] -%}
+          {%- set behavior_counts = {} -%}
+          {%- for dep in deployments -%}
+            {%- for i in range(dep.count) -%}
+              {%- set idx = behavior_counts.get(dep.behavior, 0) -%}
+              {%- set _ = behavior_counts.update({dep.behavior: idx + 1}) -%}
+              {%- set _ = vms.append({'behavior': dep.behavior, 'flavor': dep.flavor, 'index': idx}) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ vms }}
+
+    - name: Display VMs to be created
+      debug:
+        msg: |
+
+          ═══════════════════════════════════════════════════════════════
+          Will create {{ vm_list | length }} VMs:
+          ═══════════════════════════════════════════════════════════════
+          {% for vm in vm_list %}
+            - sup-{{ vm.behavior | replace('.', '-') }}-{{ vm.index }} ({{ vm.flavor | regex_replace('-1gpu.*', '') }})
+          {% endfor %}
+
+    - name: Create OpenStack VMs
+      shell: |
+        source {{ os_rc_file }}
+        # Check if VM already exists
+        if openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" &>/dev/null; then
+          echo "VM already exists"
+          openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" -f json
+        else
+          openstack server create \
+            --flavor "{{ item.flavor }}" \
+            --image "{{ os_image }}" \
+            --boot-from-volume 200 \
+            --network "{{ os_network }}" \
+            --key-name "{{ os_keypair }}" \
+            --security-group "{{ os_security_group }}" \
+            --wait \
+            -f json \
+            "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "sup-{{ item.behavior }}-{{ item.index }}"
+      register: created_vms
+
+    - name: Get VM IPs
+      shell: |
+        source {{ os_rc_file }}
+        openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" -f value -c addresses | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+      args:
+        executable: /bin/bash
+      loop: "{{ vm_list }}"
+      loop_control:
+        label: "sup-{{ item.behavior }}-{{ item.index }}"
+      register: vm_ips
+
+    - name: Build inventory data
+      set_fact:
+        inventory_entries: >-
+          {%- set entries = [] -%}
+          {%- for result in vm_ips.results -%}
+            {%- set vm = vm_list[loop.index0] -%}
+            {%- set entry = {
+              'ip': result.stdout,
+              'behavior': vm.behavior,
+              'flavor': vm.flavor,
+              'name': 'sup-' + vm.behavior | replace('.', '-') + '-' + (vm.index | string)
+            } -%}
+            {%- set _ = entries.append(entry) -%}
+          {%- endfor -%}
+          {{ entries }}
+
+    - name: Display created VMs
+      debug:
+        msg: |
+
+          ═══════════════════════════════════════════════════════════════
+          Created {{ inventory_entries | length }} VMs:
+          ═══════════════════════════════════════════════════════════════
+          {% for entry in inventory_entries %}
+            - {{ entry.name }}: {{ entry.ip }} ({{ entry.behavior }})
+          {% endfor %}
+
+    - name: Generate inventory file on control node
+      delegate_to: localhost
+      copy:
+        content: |
+          # Auto-generated inventory for exp-1 (PRE-PHASE Experimental)
+          # Generated: {{ lookup('pipe', 'date -Iseconds') }}
+          # Access: Via ProxyJump through {{ jump_host }}
+          #
+          # GPU Allocation Summary:
+          #   V100: M2*, M3*, B1-B3, S1-S3 (primary instances)
+          #   RTX 2080 TI A: B1-B3, S1-S3 (duplicate instances)
+          #   Non-GPU: M1
+
+          [sup_hosts]
+          {% for entry in inventory_entries %}
+          {{ entry.name }} ansible_host={{ entry.ip }} sup_behavior={{ entry.behavior }} sup_flavor={{ entry.flavor }}
+          {% endfor %}
+
+          [sup_hosts:vars]
+          ansible_user=ubuntu
+          ansible_python_interpreter=/usr/bin/python3
+          ansible_ssh_common_args=-F {{ ssh_config_file }} -o ProxyJump={{ jump_host }} -o StrictHostKeyChecking=no
+        dest: "{{ inventory_file }}"
+
+    - name: Display inventory file location
+      debug:
+        msg: "Inventory written to: {{ inventory_file }}"
+
+    - name: Test SSH connectivity to VMs (via axes)
+      delegate_to: localhost
+      shell: |
+        ssh -F {{ ssh_config_file }} -o ProxyJump={{ jump_host }} -o StrictHostKeyChecking=no -o ConnectTimeout=30 ubuntu@{{ item.ip }} 'echo SSH OK'
+      loop: "{{ inventory_entries }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.ip }})"
+      register: ssh_test
+      retries: 10
+      delay: 30
+      until: ssh_test.rc == 0
+
+    - name: Write SSH config snippet to file
+      delegate_to: localhost
+      copy:
+        content: |
+          ############# SUP VMs - exp-1 #############
+          # Add this to your ~/.ssh/config
+          # Requires ProxyJump through axes
+
+          Host sup-*
+              User ubuntu
+              PreferredAuthentications publickey
+              IdentityFile ~/.ssh/id_rsa
+              ProxyJump axes
+              StrictHostKeyChecking no
+              ServerAliveInterval 120
+
+          {% for entry in inventory_entries %}
+          Host {{ entry.name }}
+              HostName {{ entry.ip }}
+
+          {% endfor %}
+          #############################################
+        dest: "{{ playbook_dir }}/ssh_config_snippet.txt"
+
+    - name: Display SSH config location
+      debug:
+        msg: "SSH config saved to: {{ playbook_dir }}/ssh_config_snippet.txt"
+
+    - name: Print SSH config (copy-pasteable)
+      delegate_to: localhost
+      command: cat "{{ playbook_dir }}/ssh_config_snippet.txt"
+      register: ssh_out
+      changed_when: false
+
+    - name: SSH Config Output
+      pause:
+        seconds: 1
+        prompt: |
+
+          ═══════════════════════════════════════════════════════════════
+            SSH CONFIG - Copy and paste into ~/.ssh/config
+          ═══════════════════════════════════════════════════════════════
+          {{ ssh_out.stdout }}
+          ═══════════════════════════════════════════════════════════════
+            Saved to: {{ playbook_dir }}/ssh_config_snippet.txt
+          ═══════════════════════════════════════════════════════════════
