@@ -112,3 +112,28 @@
           │                                                                   │
           │  If failed=0 for all hosts, deployment was successful!            │
           └───────────────────────────────────────────────────────────────────┘
+
+    - name: Check for SSH config file
+      stat:
+        path: "{{ playbook_dir }}/ssh_config_snippet.txt"
+      register: ssh_config_file
+
+    - name: Read SSH config
+      command: cat "{{ playbook_dir }}/ssh_config_snippet.txt"
+      register: ssh_config_content
+      when: ssh_config_file.stat.exists
+      changed_when: false
+
+    - name: Display SSH Config
+      pause:
+        seconds: 1
+        prompt: |
+
+          ═══════════════════════════════════════════════════════════════
+            SSH CONFIG - Copy and paste into ~/.ssh/config
+          ═══════════════════════════════════════════════════════════════
+          {{ ssh_config_content.stdout }}
+          ═══════════════════════════════════════════════════════════════
+            Saved to: {{ playbook_dir }}/ssh_config_snippet.txt
+          ═══════════════════════════════════════════════════════════════
+      when: ssh_config_file.stat.exists
