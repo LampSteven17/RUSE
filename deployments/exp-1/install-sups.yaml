@@ -1,0 +1,139 @@
+---
+# Ansible Playbook: install-sups.yaml
+# Step 2: Install SUP behaviors on provisioned VMs
+#
+# Architecture:
+#   Ansible → SSH (ProxyJump) → axes → SSH → VMs
+#
+# Prerequisites:
+#   - Run provision-vms.yaml first to create VMs and inventory.ini
+#   - inventory.ini contains ProxyJump config for reaching VMs through axes
+#
+# Usage:
+#   ansible-playbook -i inventory.ini install-sups.yaml
+
+- name: Install SUPs - exp-1 (PRE-PHASE Experimental)
+  hosts: sup_hosts
+  become: yes
+
+  vars:
+    # Git repo for DOLOS-DEPLOY
+    dolos_repo: "https://github.com/LampSteven17/DOLOS-DEPLOY.git"
+    dolos_branch: "main"
+    dolos_path: "/opt/dolos-deploy"
+
+  tasks:
+    - name: Display target configuration
+      debug:
+        msg: "Installing {{ sup_behavior }} on {{ inventory_hostname }} ({{ ansible_host }})"
+
+    - name: Wait for cloud-init to complete
+      command: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - git
+          - curl
+          - wget
+        state: present
+
+    - name: Clone DOLOS-DEPLOY repo
+      git:
+        repo: "{{ dolos_repo }}"
+        dest: "{{ dolos_path }}"
+        version: "{{ dolos_branch }}"
+        force: yes
+
+    - name: Make INSTALL_SUP.sh executable
+      file:
+        path: "{{ dolos_path }}/INSTALL_SUP.sh"
+        mode: '0755'
+
+    - name: Run INSTALL_SUP.sh Stage 1 (system deps, drivers)
+      shell: |
+        cd {{ dolos_path }}
+        ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=1
+      args:
+        executable: /bin/bash
+      async: 1800
+      poll: 30
+      register: stage1_result
+      failed_when: stage1_result.rc not in [0, 100]
+
+    - name: Reboot if NVIDIA drivers were installed (exit code 100)
+      reboot:
+        reboot_timeout: 600
+        msg: "Rebooting for NVIDIA driver to load"
+      when: stage1_result.rc == 100
+
+    - name: Run INSTALL_SUP.sh Stage 2 (ollama, python, services)
+      shell: |
+        cd {{ dolos_path }}
+        ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
+      args:
+        executable: /bin/bash
+      async: 1800
+      poll: 30
+      register: stage2_result
+
+    - name: Display install result
+      debug:
+        msg: "SUP {{ sup_behavior }} installed successfully on {{ inventory_hostname }}"
+      when: stage2_result.rc == 0
+
+    - name: Check SUP service status
+      shell: systemctl is-active $(systemctl list-units --type=service | grep -E '(mchp|smol|bu)' | awk '{print $1}' | head -1) || true
+      register: service_status
+      changed_when: false
+
+- name: Deployment Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display PLAY RECAP legend
+      debug:
+        msg: |
+
+          ┌───────────────────────────────────────────────────────────────────┐
+          │  PLAY RECAP Legend (number = count of Ansible tasks):             │
+          │                                                                   │
+          │    ok=13     → 13 tasks ran successfully                          │
+          │    changed=5 → 5 tasks made changes (installed packages, etc.)    │
+          │    skipped=1 → 1 task skipped (e.g. no reboot needed, no GPU)     │
+          │    failed=0  → 0 tasks failed (this is good!)                     │
+          │                                                                   │
+          │  If failed=0 for all hosts, deployment was successful!            │
+          └───────────────────────────────────────────────────────────────────┘
+
+    - name: Check for SSH config file
+      stat:
+        path: "{{ playbook_dir }}/ssh_config_snippet.txt"
+      register: ssh_config_file
+
+    - name: Read SSH config
+      command: cat "{{ playbook_dir }}/ssh_config_snippet.txt"
+      register: ssh_config_content
+      when: ssh_config_file.stat.exists
+      changed_when: false
+
+    - name: Display SSH Config
+      pause:
+        seconds: 1
+        prompt: |
+
+          ═══════════════════════════════════════════════════════════════
+            SSH CONFIG - Copy and paste into ~/.ssh/config
+          ═══════════════════════════════════════════════════════════════
+          {{ ssh_config_content.stdout }}
+          ═══════════════════════════════════════════════════════════════
+            Saved to: {{ playbook_dir }}/ssh_config_snippet.txt
+          ═══════════════════════════════════════════════════════════════
+      when: ssh_config_file.stat.exists
