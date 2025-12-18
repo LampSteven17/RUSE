@@ -322,9 +322,10 @@ install_ollama() {
 CUDA_INSTALLED=false
 
 install_cuda() {
-    # Install CUDA 12.8 from NVIDIA's official repository
-    # Required for GPU-accelerated BrowserUse/SmolAgents
-    # Ref: https://developer.nvidia.com/cuda-12-8-0-download-archive
+    # Install NVIDIA drivers and CUDA toolkit from official repository
+    # Required for GPU-accelerated Ollama/BrowserUse/SmolAgents
+    # Ref: https://docs.nvidia.com/cuda/cuda-installation-guide-linux/
+    # Ref: https://developer.nvidia.com/cuda-downloads
 
     # Check if GPU is present
     if ! lspci | grep -qi nvidia; then
@@ -332,33 +333,48 @@ install_cuda() {
         return 0
     fi
 
-    log "NVIDIA GPU detected, installing CUDA 12.8..."
+    log "NVIDIA GPU detected: $(lspci | grep -i nvidia | head -1)"
 
-    # Install CUDA keyring
+    # Step 1: Install kernel headers and build tools (REQUIRED for DKMS)
+    log "Installing kernel headers and build tools for $(uname -r)..."
+    sudo apt-get install -y build-essential linux-headers-$(uname -r)
+
+    # Step 2: Setup NVIDIA CUDA repository
+    log "Setting up NVIDIA CUDA repository..."
     wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
     sudo dpkg -i /tmp/cuda-keyring.deb
     rm -f /tmp/cuda-keyring.deb
-
-    # Update and install CUDA toolkit + drivers
-    # Note: cuda-drivers triggers modprobe which fails before reboot - this is expected
     sudo apt-get update -y
-    sudo apt-get install -y cuda-toolkit-12-8
-    sudo apt-get install -y cuda-drivers || {
-        log "CUDA drivers installed (modprobe fails until reboot - this is normal)"
+
+    # Step 3: Install CUDA toolkit FIRST (per NVIDIA docs)
+    # Using latest CUDA 13.1 for best compatibility
+    # Ref: https://docs.nvidia.com/grace/ubuntu-install-guide/appendix-a.html
+    log "Installing CUDA toolkit 13.1 (latest)..."
+    sudo apt-get install -y cuda-toolkit-13-1
+
+    # Step 4: Install NVIDIA open kernel modules AFTER toolkit
+    # Note: nvidia-open provides open-source kernel modules, better for datacenter/Tesla GPUs
+    log "Installing NVIDIA open kernel modules..."
+    sudo apt-get install -y nvidia-open || {
+        log "nvidia-open install completed (modprobe may fail until reboot - this is normal)"
     }
 
-    # Add CUDA to PATH for current session
-    export PATH=/usr/local/cuda-12.8/bin:${PATH:-}
-    export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH:-}
+    # Step 5: Enable nvidia-persistenced for better GPU management
+    log "Enabling nvidia-persistenced..."
+    sudo systemctl enable nvidia-persistenced || true
+
+    # Add CUDA to PATH for current session (use generic cuda symlink)
+    export PATH=/usr/local/cuda/bin:${PATH:-}
+    export LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}
 
     # Add to bashrc for future sessions
-    if ! grep -q "cuda-12.8" ~/.bashrc; then
-        echo 'export PATH=/usr/local/cuda-12.8/bin:$PATH' >> ~/.bashrc
-        echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+    if ! grep -q "/usr/local/cuda/bin" ~/.bashrc; then
+        echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
+        echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
     fi
 
     CUDA_INSTALLED=true
-    log "CUDA 12.8 installed. Reboot required for driver to load."
+    log "NVIDIA drivers and CUDA 13.1 installed. Reboot required for driver to load."
 }
 
 install_firefox_deb() {
@@ -535,8 +551,8 @@ cd "$deploy_dir"
 source venv/bin/activate
 
 # Configuration
-export PATH="\$HOME/.local/bin:/usr/local/cuda-12.8/bin:\$PATH"
-export LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:\${LD_LIBRARY_PATH:-}"
+export PATH="\$HOME/.local/bin:/usr/local/cuda/bin:\$PATH"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}"
 export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
 export PYTHONPATH="$deploy_dir/src:\${PYTHONPATH:-}"
