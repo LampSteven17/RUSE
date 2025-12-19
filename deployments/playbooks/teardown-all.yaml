@@ -1,0 +1,208 @@
+---
+# Ansible Playbook: teardown-all.yaml
+# Destroy ALL SUP VMs and their volumes (not deployment-specific)
+#
+# Usage:
+#   ansible-playbook -i ../exp-1/hosts.ini teardown-all.yaml
+
+- name: Teardown ALL SUP VMs
+  hosts: openstack_controller
+  gather_facts: false
+
+  vars:
+    os_rc_file: "~/vxn3kr-bot-rc"
+    vm_prefix: "sup-"
+
+  tasks:
+    - name: Get list of ALL SUP servers
+      shell: |
+        source {{ os_rc_file }}
+        openstack server list -f value -c ID -c Name | grep "{{ vm_prefix }}" || true
+      args:
+        executable: /bin/bash
+      register: server_list
+
+    - name: Display servers to be deleted
+      pause:
+        seconds: 0
+        prompt: |
+          Found {{ server_list.stdout_lines | length }} servers to delete:
+          {{ server_list.stdout_lines | default(['(none)']) | join('\n') }}
+      when: server_list.stdout | length > 0
+
+    - name: No servers found
+      pause:
+        seconds: 0
+        prompt: "No SUP servers found to delete."
+      when: server_list.stdout | length == 0
+
+    - name: Get volume IDs attached to SUP servers
+      shell: |
+        source {{ os_rc_file }}
+        for server in $(openstack server list -f value -c Name | grep "{{ vm_prefix }}"); do
+          openstack server show "$server" -f json | jq -r '.volumes_attached[]?.id' 2>/dev/null || true
+        done
+      args:
+        executable: /bin/bash
+      register: attached_volume_ids
+      when: server_list.stdout | length > 0
+
+    # ─────────────────────────────────────────────────────────────────
+    # BATCHED VM DELETION: Delete VMs in batches to avoid overloading OpenStack
+    # Uses throttle to limit concurrent deletes, no --wait for faster submission
+    # ─────────────────────────────────────────────────────────────────
+    - name: Delete ALL SUP servers (batched, {{ vm_delete_batch_size | default(5) }} at a time)
+      shell: |
+        source {{ os_rc_file }}
+        openstack server delete "{{ item.split()[1] }}"
+      args:
+        executable: /bin/bash
+      loop: "{{ server_list.stdout_lines }}"
+      loop_control:
+        label: "{{ item.split()[1] | default(item) }}"
+      throttle: "{{ vm_delete_batch_size | default(5) }}"
+      when: server_list.stdout | length > 0
+      ignore_errors: yes
+
+    - name: Wait for all servers to be deleted (parallel polling)
+      shell: |
+        source {{ os_rc_file }}
+        VM_NAME="{{ item.split()[1] }}"
+        if ! openstack server show "$VM_NAME" &>/dev/null; then
+          echo "DELETED: $VM_NAME"
+          exit 0
+        else
+          echo "WAITING: $VM_NAME still exists"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ server_list.stdout_lines }}"
+      loop_control:
+        label: "{{ item.split()[1] | default(item) }}"
+      register: vm_delete_check
+      until: vm_delete_check.rc == 0
+      retries: 30
+      delay: 5
+      throttle: 10
+      when: server_list.stdout | length > 0
+      ignore_errors: yes
+
+    - name: Get ALL SUP volumes (including orphaned)
+      shell: |
+        source {{ os_rc_file }}
+        openstack volume list -f value -c ID -c Name | grep "{{ vm_prefix }}" | awk '{print $1}' || true
+      args:
+        executable: /bin/bash
+      register: all_volumes
+
+    - name: Build combined volume list
+      set_fact:
+        all_volume_ids: "{{ (all_volumes.stdout_lines | default([])) | union(attached_volume_ids.stdout_lines | default([]) | select('match', '.+') | list) | unique }}"
+
+    - name: Display volumes to be deleted
+      pause:
+        seconds: 0
+        prompt: |
+          Found {{ all_volume_ids | length }} volumes to delete:
+          {{ all_volume_ids | default(['(none)']) | join('\n') }}
+      when: all_volume_ids | length > 0
+
+    # ─────────────────────────────────────────────────────────────────
+    # BATCHED VOLUME DELETION: Delete volumes in batches to avoid overloading OpenStack
+    # Uses throttle to limit concurrent deletes
+    # ─────────────────────────────────────────────────────────────────
+    - name: Delete ALL SUP volumes (batched, {{ vol_delete_batch_size | default(5) }} at a time)
+      shell: |
+        source {{ os_rc_file }}
+        openstack volume delete "{{ item }}"
+      args:
+        executable: /bin/bash
+      loop: "{{ all_volume_ids }}"
+      loop_control:
+        label: "{{ item }}"
+      throttle: "{{ vol_delete_batch_size | default(5) }}"
+      when: all_volume_ids | length > 0
+      ignore_errors: yes
+
+    - name: Wait for all volumes to be deleted (parallel polling)
+      shell: |
+        source {{ os_rc_file }}
+        if ! openstack volume show "{{ item }}" &>/dev/null; then
+          echo "DELETED: {{ item }}"
+          exit 0
+        else
+          echo "WAITING: {{ item }} still exists"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ all_volume_ids }}"
+      loop_control:
+        label: "{{ item }}"
+      register: vol_delete_check
+      until: vol_delete_check.rc == 0
+      retries: 30
+      delay: 5
+      throttle: 10
+      when: all_volume_ids | length > 0
+      ignore_errors: yes
+
+    # ─────────────────────────────────────────────────────────────────
+    # ORPHAN VOLUME CLEANUP: Delete nameless volumes matching SUP boot volume size
+    # These are left behind when VMs are deleted but volumes aren't cleaned up
+    # ─────────────────────────────────────────────────────────────────
+    - name: Find orphaned SUP boot volumes (nameless, 200GB, available)
+      shell: |
+        source {{ os_rc_file }}
+        openstack volume list -f json | jq -r '.[] | select(.Name == "" and .Size == 200 and .Status == "available") | .ID'
+      args:
+        executable: /bin/bash
+      register: orphan_volumes
+
+    - name: Display orphaned volumes to be deleted
+      pause:
+        seconds: 0
+        prompt: |
+          Found {{ orphan_volumes.stdout_lines | length }} orphaned boot volumes (nameless, 200GB):
+          {{ orphan_volumes.stdout_lines | default(['(none)']) | join('\n') }}
+      when: orphan_volumes.stdout_lines | length > 0
+
+    - name: Delete orphaned boot volumes (batched)
+      shell: |
+        source {{ os_rc_file }}
+        openstack volume delete "{{ item }}"
+      args:
+        executable: /bin/bash
+      loop: "{{ orphan_volumes.stdout_lines }}"
+      loop_control:
+        label: "{{ item }}"
+      throttle: "{{ vol_delete_batch_size | default(5) }}"
+      when: orphan_volumes.stdout_lines | length > 0
+      ignore_errors: yes
+
+    - name: Verify cleanup
+      shell: |
+        source {{ os_rc_file }}
+        echo "=== Remaining SUP servers ==="
+        openstack server list -f value -c Name | grep "{{ vm_prefix }}" || echo "(none)"
+        echo ""
+        echo "=== Remaining SUP volumes ==="
+        openstack volume list -f value -c Name | grep "{{ vm_prefix }}" || echo "(none)"
+        echo ""
+        echo "=== Remaining orphaned volumes (nameless, 200GB) ==="
+        openstack volume list -f json | jq -r '.[] | select(.Name == "" and .Size == 200) | .ID' || echo "(none)"
+      args:
+        executable: /bin/bash
+      register: cleanup_status
+
+    - name: Display cleanup status
+      pause:
+        seconds: 0
+        prompt: "{{ cleanup_status.stdout }}"
+
+    - name: Remove ALL local inventory files
+      delegate_to: localhost
+      shell: |
+        find "{{ playbook_dir }}/.." -name "inventory.ini" -type f -delete 2>/dev/null || true
+      ignore_errors: yes

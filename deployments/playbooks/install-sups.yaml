@@ -15,8 +15,12 @@
 - name: Install SUPs
   hosts: sup_hosts
   become: yes
-
+  # SSH keepalive to prevent timeout during long-running tasks (CUDA install, model downloads)
+  # SSH retries for initial connection failures (VMs may not be ready immediately)
   vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -o ConnectTimeout=30'
+    ansible_ssh_retries: 5
+
     # Default paths (can be overridden via -e)
     deployment_dir: "{{ playbook_dir }}"
     config_file: "{{ deployment_dir }}/config.yaml"
@@ -27,6 +31,13 @@
     dolos_path: "/opt/dolos-deploy"
 
   pre_tasks:
+    - name: Wait for SSH to become available
+      wait_for_connection:
+        delay: 5
+        timeout: 300
+      retries: 3
+      delay: 10
+
     - name: Load deployment configuration
       include_vars:
         file: "{{ config_file }}"

@@ -38,8 +38,33 @@ if command -v ollama &> /dev/null; then
     ollama --version
 else
     log "Installing Ollama..."
-    curl -fsSL https://ollama.com/install.sh | sh
-    success "Ollama installed successfully"
+    # Retry loop for entire installation (handles transient network failures)
+    max_install_attempts=3
+    install_attempt=1
+    while [ $install_attempt -le $max_install_attempts ]; do
+        log "Installation attempt $install_attempt/$max_install_attempts..."
+        INSTALL_SCRIPT=$(mktemp)
+        if curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused https://ollama.com/install.sh -o "$INSTALL_SCRIPT"; then
+            if sh "$INSTALL_SCRIPT"; then
+                rm -f "$INSTALL_SCRIPT"
+                success "Ollama installed successfully"
+                break
+            else
+                warning "Ollama installation failed, retrying..."
+                rm -f "$INSTALL_SCRIPT"
+            fi
+        else
+            warning "Failed to download install script, retrying..."
+            rm -f "$INSTALL_SCRIPT"
+        fi
+        install_attempt=$((install_attempt + 1))
+        [ $install_attempt -le $max_install_attempts ] && sleep 10
+    done
+
+    if [ $install_attempt -gt $max_install_attempts ]; then
+        error "Failed to install Ollama after $max_install_attempts attempts"
+        exit 1
+    fi
 fi
 
 # Start and enable Ollama service
