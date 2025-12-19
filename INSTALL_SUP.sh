@@ -341,23 +341,18 @@ install_cuda() {
 
     # Step 2: Setup NVIDIA CUDA repository
     log "Setting up NVIDIA CUDA repository..."
-    wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
+    wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
     sudo dpkg -i /tmp/cuda-keyring.deb
     rm -f /tmp/cuda-keyring.deb
     sudo apt-get update -y
 
-    # Step 3: Install CUDA toolkit FIRST (per NVIDIA docs)
-    # Using latest CUDA 13.1 for best compatibility
-    # Ref: https://docs.nvidia.com/grace/ubuntu-install-guide/appendix-a.html
-    log "Installing CUDA toolkit 13.1 (latest)..."
-    sudo apt-get install -y cuda-toolkit-13-1
+    # Step 3: Install NVIDIA driver (specific version for compatibility)
+    log "Installing NVIDIA driver 580..."
+    sudo apt-get install -y nvidia-driver-580
 
-    # Step 4: Install NVIDIA open kernel modules AFTER toolkit
-    # Note: nvidia-open provides open-source kernel modules, better for datacenter/Tesla GPUs
-    log "Installing NVIDIA open kernel modules..."
-    sudo apt-get install -y nvidia-open || {
-        log "nvidia-open install completed (modprobe may fail until reboot - this is normal)"
-    }
+    # Step 4: Install CUDA toolkit 12.9
+    log "Installing CUDA toolkit 12.9..."
+    sudo apt-get install -y cuda-toolkit-12-9
 
     # Step 5: Enable nvidia-persistenced for better GPU management
     log "Enabling nvidia-persistenced..."
@@ -374,7 +369,7 @@ install_cuda() {
     fi
 
     CUDA_INSTALLED=true
-    log "NVIDIA drivers and CUDA 13.1 installed. Reboot required for driver to load."
+    log "NVIDIA driver 580 and CUDA toolkit 12.9 installed. Reboot required for driver to load."
 }
 
 install_firefox_deb() {
