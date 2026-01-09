@@ -4,8 +4,9 @@
 
 # Available SUP Behaviors
 behaviors:
-  # MCHP Series (scripted automation, no LLM required)
-  - M1           # Pure MCHP, no LLM
+  # MCHP Series - Baseline (scripted automation)
+  - M0           # Upstream MITRE pyhuman (control - DO NOT MODIFY)
+  - M1           # DOLOS MCHP baseline, no LLM
   - M2.llama     # MCHP + SmolAgents (content + mechanics)
   - M2a.llama    # MCHP + SmolAgents (content only)
   - M2b.llama    # MCHP + SmolAgents (mechanics only)
@@ -13,21 +14,33 @@ behaviors:
   - M3a.llama    # MCHP + BrowserUse (content only)
   - M3b.llama    # MCHP + BrowserUse (mechanics only)
 
-  # BrowserUse Series (LLM-driven browser automation)
+  # MCHP Series - Improved (with PHASE timing)
+  - M4.llama     # MCHP + SmolAgents (content + mechanics) + PHASE timing
+  - M4a.llama    # MCHP + SmolAgents (content only) + PHASE timing
+  - M4b.llama    # MCHP + SmolAgents (mechanics only) + PHASE timing
+  - M5.llama     # MCHP + BrowserUse (content + mechanics) + PHASE timing
+  - M5a.llama    # MCHP + BrowserUse (content only) + PHASE timing
+  - M5b.llama    # MCHP + BrowserUse (mechanics only) + PHASE timing
+
+  # BrowserUse Series - Baseline (LLM-driven browser automation)
   - B1.llama     # BrowserUse + llama3.1:8b
   - B2.gemma     # BrowserUse + gemma3:4b
   - B3.deepseek  # BrowserUse + deepseek-r1:8b
-  - B1.llama+    # BrowserUse + llama3.1:8b + PHASE timing
-  - B2.gemma+    # BrowserUse + gemma3:4b + PHASE timing
-  - B3.deepseek+ # BrowserUse + deepseek-r1:8b + PHASE timing
 
-  # SmolAgents Series (HuggingFace smolagents)
+  # BrowserUse Series - Improved (Loop mode + MCHP workflows + PHASE timing)
+  - B4.llama     # BrowserUseLoop + llama3.1:8b + PHASE timing
+  - B5.gemma     # BrowserUseLoop + gemma3:4b + PHASE timing
+  - B6.deepseek  # BrowserUseLoop + deepseek-r1:8b + PHASE timing
+
+  # SmolAgents Series - Baseline (HuggingFace smolagents)
   - S1.llama     # SmolAgents + llama3.1:8b
   - S2.gemma     # SmolAgents + gemma3:4b
   - S3.deepseek  # SmolAgents + deepseek-r1:8b
-  - S1.llama+    # SmolAgents + llama3.1:8b + PHASE timing
-  - S2.gemma+    # SmolAgents + gemma3:4b + PHASE timing
-  - S3.deepseek+ # SmolAgents + deepseek-r1:8b + PHASE timing
+
+  # SmolAgents Series - Improved (Loop mode + MCHP workflows + PHASE timing)
+  - S4.llama     # SmolAgentLoop + llama3.1:8b + PHASE timing
+  - S5.gemma     # SmolAgentLoop + gemma3:4b + PHASE timing
+  - S6.deepseek  # SmolAgentLoop + deepseek-r1:8b + PHASE timing
 
 # Available OpenStack Flavors
 # See docs/OPENSTACK_FLAVORS.md for full details
@@ -36,5 +49,5 @@ flavors:
   - rtx2080ti-1gpu.14vcpu.28g      # pci_passthrough:alias='rtx2080ti:1'
   - rtx2080ti-A-1gpu.14vcpu.28g    # pci_passthrough:alias='2080ti-rtx-a:1'
   - v100-1gpu.14vcpu.28g           # pci_passthrough:alias='v100:1'
-  # Non-GPU flavors (M1 only)
+  # Non-GPU flavors (M0, M1 only)
   - v1.14vcpu.28g
