@@ -66,10 +66,17 @@ class BrowsingWorkflow(BUWorkflow):
         return self._llm
 
     def _get_browser_session(self):
-        """Create browser session with Firefox for consistency with MCHP."""
+        """Create browser session with container-safe configuration."""
         return BrowserSession(
             headless=self.headless,
-            browser_type="firefox",
+            channel="chromium",
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-extensions',
+                '--disable-gpu',
+            ]
         )
 
     async def _run_task_async(self, task: str, logger: Optional["AgentLogger"] = None) -> Optional[str]:
