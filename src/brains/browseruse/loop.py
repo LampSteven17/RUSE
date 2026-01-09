@@ -1,65 +1,86 @@
 """
-MCHP Brain - Human behavior emulation agent.
+BrowserUseLoop - MCHP-style continuous execution for BrowserUse.
 
-This is a thin wrapper around the original human.py logic,
-providing a class-based interface for the unified SUP runner.
-
-Configurations:
-- M0: Upstream MITRE pyhuman (control - DO NOT MODIFY)
-- M1: DOLOS MCHP baseline (original timing)
-- M1+: DOLOS MCHP with PHASE timing (time-of-day awareness)
-- M2/M3: MCHP with LLM augmentations
+This module provides a loop-based agent that runs BrowserUse browsing
+tasks interleaved with MCHP workflows for activity diversity.
 """
 import signal
-import os
 import random
 import sys
 from datetime import datetime
-from importlib import import_module
 from time import sleep
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
     from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
 
-# Default timing parameters (original MCHP)
+from brains.browseruse.prompts import BUPrompts
+
+# Default timing parameters (matching MCHP defaults)
 DEFAULT_CLUSTER_SIZE = 5
 DEFAULT_TASK_INTERVAL = 10
 DEFAULT_GROUP_INTERVAL = 500
 
 
-class MCHPAgent:
+class BrowserUseLoop:
     """
-    MCHP (Human Emulation) Agent.
+    BrowserUse agent with MCHP-style continuous execution.
 
-    Runs workflows in random clusters with configurable timing.
+    Runs workflows in random clusters with configurable timing,
+    mixing BrowserUse browsing tasks with MCHP workflows for
+    diverse, human-like activity patterns.
 
-    Timing Modes:
-    - use_phase_timing=False: Original random timing (M1 baseline)
-    - use_phase_timing=True: PHASE timing with time-of-day awareness (M1+)
+    Configurations:
+    - B1-B3: BrowserUse browsing only (single task mode)
+    - B4-B6: BrowserUse + MCHP workflows + PHASE timing (diverse activities)
     """
 
     def __init__(
         self,
+        model: str = None,
+        prompts: BUPrompts = None,
+        headless: bool = True,
+        max_steps: int = 10,
+        include_mchp: bool = True,
+        mchp_categories: Optional[List[str]] = None,
         cluster_size: int = DEFAULT_CLUSTER_SIZE,
         task_interval: int = DEFAULT_TASK_INTERVAL,
         group_interval: int = DEFAULT_GROUP_INTERVAL,
-        extra: list = None,
         logger: Optional["AgentLogger"] = None,
-        use_phase_timing: bool = False,
-        phase_config: Optional["PhaseTimingConfig"] = None,
+        use_phase_timing: bool = True,
     ):
+        """
+        Initialize the BrowserUseLoop.
+
+        Args:
+            model: Model name for BrowserUse (llama, gemma, deepseek)
+            prompts: Prompts configuration for browsing
+            headless: Run browser in headless mode
+            max_steps: Maximum steps per browsing task
+            include_mchp: Include MCHP workflows for diversity
+            mchp_categories: Which MCHP categories to include
+            cluster_size: Max workflows per cluster (used if phase_timing disabled)
+            task_interval: Max seconds between tasks (used if phase_timing disabled)
+            group_interval: Max seconds between clusters (used if phase_timing disabled)
+            logger: AgentLogger for structured logging
+            use_phase_timing: Enable PHASE timing with time-of-day awareness
+        """
+        self.model = model
+        self.prompts = prompts
+        self.headless = headless
+        self.max_steps = max_steps
+        self.include_mchp = include_mchp
+        self.mchp_categories = mchp_categories
         self.cluster_size = cluster_size
         self.task_interval = task_interval
         self.group_interval = group_interval
-        self.extra = extra or []
-        self.workflows = []
-        self._running = False
         self.logger = logger
         self.use_phase_timing = use_phase_timing
+
+        self.workflows = []
+        self._running = False
         self._phase_timing = None
-        self._phase_config = phase_config
         self._tasks_completed = 0
 
         # Initialize PHASE timing if enabled
@@ -70,20 +91,16 @@ class MCHPAgent:
         """Initialize PHASE timing module."""
         from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
 
-        if self._phase_config is None:
-            # Use default config with time-of-day awareness enabled
-            self._phase_config = PhaseTimingConfig(
-                min_cluster_size=3,
-                max_cluster_size=8,
-                min_task_delay=5.0,
-                max_task_delay=30.0,
-                min_cluster_delay=120.0,
-                max_cluster_delay=600.0,
-                enable_hourly_adjustment=True,
-            )
-
-        self._phase_timing = PhaseTiming(self._phase_config)
-        print(f"PHASE timing enabled - current activity level: {self._phase_timing.get_activity_level()}")
+        config = PhaseTimingConfig(
+            min_cluster_size=3,
+            max_cluster_size=8,
+            min_task_delay=5.0,
+            max_task_delay=30.0,
+            min_cluster_delay=120.0,
+            max_cluster_delay=600.0,
+            enable_hourly_adjustment=True,
+        )
+        self._phase_timing = PhaseTiming(config)
 
     def _get_cluster_size(self) -> int:
         """Get cluster size based on timing mode."""
@@ -100,44 +117,38 @@ class MCHPAgent:
     def _get_cluster_delay(self) -> float:
         """Get inter-cluster delay based on timing mode."""
         if self.use_phase_timing and self._phase_timing:
-            # Check if we should take a longer break
             if self._phase_timing.should_take_break(self._tasks_completed):
-                self._tasks_completed = 0  # Reset counter
-                delay = self._phase_timing.get_break_duration()
-                if self.logger:
-                    self.logger.timing_delay(delay, reason="extended_break")
-                return delay
+                self._tasks_completed = 0
+                return self._phase_timing.get_break_duration()
             return self._phase_timing.get_cluster_delay()
         return random.randrange(self.group_interval)
 
-    def _import_workflows(self):
-        """Dynamically load all workflow modules."""
-        extensions = []
-        workflows_dir = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), 'app', 'workflows'
+    def _load_workflows(self):
+        """Load all workflows for the loop."""
+        from brains.browseruse.workflows.loader import load_diverse_workflows
+
+        print("Loading workflows...")
+        workflows = load_diverse_workflows(
+            model=self.model,
+            prompts=self.prompts,
+            headless=self.headless,
+            max_steps=self.max_steps,
+            include_mchp=self.include_mchp,
+            mchp_categories=self.mchp_categories,
         )
+        print(f"Loaded {len(workflows)} workflows")
 
-        for root, dirs, files in os.walk(workflows_dir):
-            files = [f for f in files if not f[0] == '.' and not f[0] == "_"]
-            dirs[:] = [d for d in dirs if not d[0] == '.' and not d[0] == "_"]
+        # Log workflow distribution
+        categories = {}
+        for w in workflows:
+            cat = getattr(w, 'category', 'Unknown')
+            categories[cat] = categories.get(cat, 0) + 1
+        print(f"Workflow distribution: {categories}")
 
-            for file in files:
-                try:
-                    extensions.append(self._load_module('app.workflows', file))
-                except Exception as e:
-                    print(f'Error could not load workflow: {e}')
-
-        return extensions
-
-    def _load_module(self, root: str, file: str):
-        """Load a single workflow module."""
-        module_name = file.split('.')[0]
-        full_module = f"brains.mchp.{root}.{module_name}"
-        workflow_module = import_module(full_module)
-        return getattr(workflow_module, 'load')()
+        return workflows
 
     def _emulation_loop(self):
-        """Main emulation loop - runs workflows in clusters."""
+        """Main emulation loop - runs workflows in clusters like MCHP."""
         while self._running:
             # Log activity level if using PHASE timing
             if self.use_phase_timing and self._phase_timing:
@@ -162,26 +173,27 @@ class MCHPAgent:
                 # Select and run workflow
                 index = random.randrange(len(self.workflows))
                 workflow = self.workflows[index]
-                # Use description for consistency with S/B agents (they use task as workflow name)
                 workflow_name = workflow.description
 
                 print(workflow.display)
 
                 if self.logger:
                     self.logger.workflow_start(workflow_name, params={
-                        "agent_type": "mchp",
+                        "agent_type": "browseruse_loop",
                         "workflow_class": workflow.__class__.__name__,
+                        "category": getattr(workflow, 'category', 'Unknown'),
                         "phase_timing": self.use_phase_timing
                     })
 
                 try:
-                    workflow.action(self.extra, logger=self.logger)
+                    workflow.action(logger=self.logger)
                     self._tasks_completed += 1
                     if self._phase_timing:
                         self._phase_timing.record_activity()
                     if self.logger:
                         self.logger.workflow_end(workflow_name, success=True)
                 except Exception as e:
+                    print(f"Workflow error: {e}")
                     if self.logger:
                         self.logger.workflow_end(workflow_name, success=False, error=str(e))
                     # Don't re-raise - continue with next workflow
@@ -198,15 +210,21 @@ class MCHPAgent:
         sys.exit(0)
 
     def run(self):
-        """Start the MCHP emulation loop."""
+        """Start the BrowserUseLoop emulation."""
         random.seed()
-        self.workflows = self._import_workflows()
+        self.workflows = self._load_workflows()
+
+        if not self.workflows:
+            print("Error: No workflows loaded!")
+            return
+
         self._running = True
 
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-        print(f"\nStarting MCHP agent with {len(self.workflows)} workflows")
+        print(f"\nStarting BrowserUseLoop with {len(self.workflows)} workflows")
+        print(f"MCHP integration: {self.include_mchp}")
         print(f"PHASE timing: {self.use_phase_timing}")
         if not self.use_phase_timing:
             print(f"Timing: cluster_size={self.cluster_size}, task_interval={self.task_interval}, group_interval={self.group_interval}")
@@ -221,25 +239,36 @@ class MCHPAgent:
     def stop(self):
         """Stop the emulation and cleanup workflows."""
         if not self._running:
-            return  # Already stopped
+            return
         self._running = False
-        print("\nTerminating MCHP agent...")
+        print("\nTerminating BrowserUseLoop...")
         for workflow in self.workflows:
             try:
                 workflow.cleanup()
             except Exception:
-                pass  # Ignore cleanup errors on shutdown
+                pass
 
 
-def run(cluster_size=DEFAULT_CLUSTER_SIZE, task_interval=DEFAULT_TASK_INTERVAL,
-        group_interval=DEFAULT_GROUP_INTERVAL, extra=None, use_phase_timing=False):
-    """Convenience function to run MCHP agent."""
-    agent = MCHPAgent(
+def run(
+    model: str = None,
+    prompts: BUPrompts = None,
+    headless: bool = True,
+    max_steps: int = 10,
+    include_mchp: bool = True,
+    cluster_size: int = DEFAULT_CLUSTER_SIZE,
+    task_interval: int = DEFAULT_TASK_INTERVAL,
+    group_interval: int = DEFAULT_GROUP_INTERVAL,
+):
+    """Convenience function to run BrowserUseLoop."""
+    agent = BrowserUseLoop(
+        model=model,
+        prompts=prompts,
+        headless=headless,
+        max_steps=max_steps,
+        include_mchp=include_mchp,
         cluster_size=cluster_size,
         task_interval=task_interval,
         group_interval=group_interval,
-        extra=extra,
-        use_phase_timing=use_phase_timing,
     )
     agent.run()
 
@@ -247,19 +276,22 @@ def run(cluster_size=DEFAULT_CLUSTER_SIZE, task_interval=DEFAULT_TASK_INTERVAL,
 if __name__ == '__main__':
     import argparse
 
-    parser = argparse.ArgumentParser(description='MCHP Human Emulation Agent')
+    parser = argparse.ArgumentParser(description='BrowserUse Loop Agent')
+    parser.add_argument('--model', choices=['llama', 'gemma', 'deepseek'], default='llama')
+    parser.add_argument('--no-mchp', action='store_true', help='Disable MCHP workflow integration')
+    parser.add_argument('--no-headless', action='store_true', help='Run browser with GUI')
+    parser.add_argument('--max-steps', type=int, default=10)
     parser.add_argument('--clustersize', type=int, default=DEFAULT_CLUSTER_SIZE)
     parser.add_argument('--taskinterval', type=int, default=DEFAULT_TASK_INTERVAL)
     parser.add_argument('--taskgroupinterval', type=int, default=DEFAULT_GROUP_INTERVAL)
-    parser.add_argument('--extra', nargs='*', default=[])
-    parser.add_argument('--phase-timing', action='store_true',
-                        help='Enable PHASE timing with time-of-day awareness')
     args = parser.parse_args()
 
     run(
+        model=args.model,
+        headless=not args.no_headless,
+        max_steps=args.max_steps,
+        include_mchp=not args.no_mchp,
         cluster_size=args.clustersize,
         task_interval=args.taskinterval,
         group_interval=args.taskgroupinterval,
-        extra=args.extra,
-        use_phase_timing=args.phase_timing,
     )

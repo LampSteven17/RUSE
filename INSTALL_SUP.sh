@@ -47,27 +47,45 @@ dolos-engine Unified Installer
 
 Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 
-=== Configuration Keys (from EXPERIMENTAL_PLAN.md) ===
+=== Configuration Keys ===
 
-  PRE-PHASE (13 configs):
-    --M1                Pure MCHP (no LLM)
+  MCHP Series (Baseline):
+    --M0                Upstream MITRE pyhuman (control - DO NOT MODIFY)
+    --M1                DOLOS MCHP baseline (no LLM)
     --M2.llama          MCHP + SmolAgents content/mechanics
     --M2a.llama         MCHP + SmolAgents content only
     --M2b.llama         MCHP + SmolAgents mechanics only
     --M3.llama          MCHP + BrowserUse content/mechanics
     --M3a.llama         MCHP + BrowserUse content only
     --M3b.llama         MCHP + BrowserUse mechanics only
+
+  MCHP Series (Improved - with PHASE timing):
+    --M4.llama          MCHP + SmolAgents content/mechanics + PHASE timing
+    --M4a.llama         MCHP + SmolAgents content only + PHASE timing
+    --M4b.llama         MCHP + SmolAgents mechanics only + PHASE timing
+    --M5.llama          MCHP + BrowserUse content/mechanics + PHASE timing
+    --M5a.llama         MCHP + BrowserUse content only + PHASE timing
+    --M5b.llama         MCHP + BrowserUse mechanics only + PHASE timing
+
+  BrowserUse Series (Baseline):
     --B1.llama          BrowserUse + llama3.1:8b
     --B2.gemma          BrowserUse + gemma3:4b
     --B3.deepseek       BrowserUse + deepseek-r1:8b
+
+  BrowserUse Series (Improved - Loop mode + PHASE timing):
+    --B4.llama          BrowserUseLoop + llama3.1:8b + PHASE timing
+    --B5.gemma          BrowserUseLoop + gemma3:4b + PHASE timing
+    --B6.deepseek       BrowserUseLoop + deepseek-r1:8b + PHASE timing
+
+  SmolAgents Series (Baseline):
     --S1.llama          SmolAgents + llama3.1:8b
     --S2.gemma          SmolAgents + gemma3:4b
     --S3.deepseek       SmolAgents + deepseek-r1:8b
 
-  POST-PHASE (with + suffix):
-    --B1.llama+         BrowserUse + llama + PHASE timing
-    --S1.llama+         SmolAgents + llama + PHASE timing
-    (etc.)
+  SmolAgents Series (Improved - Loop mode + PHASE timing):
+    --S4.llama          SmolAgentLoop + llama3.1:8b + PHASE timing
+    --S5.gemma          SmolAgentLoop + gemma3:4b + PHASE timing
+    --S6.deepseek       SmolAgentLoop + deepseek-r1:8b + PHASE timing
 
 === Long-Form Options ===
 
@@ -114,7 +132,8 @@ STAGE=0  # 0=full install, 1=pre-reboot only, 2=post-reboot only
 # Pre-defined configurations matching EXPERIMENTAL_PLAN.md
 declare -A CONFIGS
 CONFIGS=(
-    # M Series - MCHP brain
+    # M Series - MCHP brain (Baseline)
+    ["M0"]="upstream:upstream:upstream:none:false"  # Upstream MITRE pyhuman (control)
     ["M1"]="mchp:mchp:mchp:none:false"
     ["M2.llama"]="mchp:smolagents:smolagents:llama:false"
     ["M2a.llama"]="mchp:smolagents:mchp:llama:false"
@@ -123,23 +142,33 @@ CONFIGS=(
     ["M3a.llama"]="mchp:browseruse:mchp:llama:false"
     ["M3b.llama"]="mchp:mchp:browseruse:llama:false"
 
-    # B Series - BrowserUse brain
+    # M Series - MCHP brain (Improved: with PHASE timing)
+    ["M4.llama"]="mchp:smolagents:smolagents:llama:true"
+    ["M4a.llama"]="mchp:smolagents:mchp:llama:true"
+    ["M4b.llama"]="mchp:mchp:smolagents:llama:true"
+    ["M5.llama"]="mchp:browseruse:browseruse:llama:true"
+    ["M5a.llama"]="mchp:browseruse:mchp:llama:true"
+    ["M5b.llama"]="mchp:mchp:browseruse:llama:true"
+
+    # B Series - BrowserUse brain (Baseline)
     ["B1.llama"]="browseruse:browseruse:browseruse:llama:false"
     ["B2.gemma"]="browseruse:browseruse:browseruse:gemma:false"
     ["B3.deepseek"]="browseruse:browseruse:browseruse:deepseek:false"
 
-    # S Series - SmolAgents brain
+    # B Series - BrowserUseLoop (Improved: Loop mode + PHASE timing)
+    ["B4.llama"]="browseruse:browseruse:browseruse:llama:true"
+    ["B5.gemma"]="browseruse:browseruse:browseruse:gemma:true"
+    ["B6.deepseek"]="browseruse:browseruse:browseruse:deepseek:true"
+
+    # S Series - SmolAgents brain (Baseline)
     ["S1.llama"]="smolagents:smolagents:smolagents:llama:false"
     ["S2.gemma"]="smolagents:smolagents:smolagents:gemma:false"
     ["S3.deepseek"]="smolagents:smolagents:smolagents:deepseek:false"
 
-    # POST-PHASE configurations (+ suffix)
-    ["B1.llama+"]="browseruse:browseruse:browseruse:llama:true"
-    ["B2.gemma+"]="browseruse:browseruse:browseruse:gemma:true"
-    ["B3.deepseek+"]="browseruse:browseruse:browseruse:deepseek:true"
-    ["S1.llama+"]="smolagents:smolagents:smolagents:llama:true"
-    ["S2.gemma+"]="smolagents:smolagents:smolagents:gemma:true"
-    ["S3.deepseek+"]="smolagents:smolagents:smolagents:deepseek:true"
+    # S Series - SmolAgentLoop (Improved: Loop mode + PHASE timing)
+    ["S4.llama"]="smolagents:smolagents:smolagents:llama:true"
+    ["S5.gemma"]="smolagents:smolagents:smolagents:gemma:true"
+    ["S6.deepseek"]="smolagents:smolagents:smolagents:deepseek:true"
 )
 
 # Model name mappings
@@ -154,16 +183,43 @@ MODEL_NAMES=(
 list_configs() {
     echo "Available configurations:"
     echo ""
-    echo "PRE-PHASE:"
-    for key in M1 M2.llama M2a.llama M2b.llama M3.llama M3a.llama M3b.llama \
-               B1.llama B2.gemma B3.deepseek S1.llama S2.gemma S3.deepseek; do
+    echo "MCHP Series (Baseline):"
+    for key in M0 M1 M2.llama M2a.llama M2b.llama M3.llama M3a.llama M3b.llama; do
         IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
         printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
             "--$key" "$brain" "$content" "$mechanics" "$model"
     done
     echo ""
-    echo "POST-PHASE:"
-    for key in B1.llama+ B2.gemma+ B3.deepseek+ S1.llama+ S2.gemma+ S3.deepseek+; do
+    echo "MCHP Series (Improved - with PHASE timing):"
+    for key in M4.llama M4a.llama M4b.llama M5.llama M5a.llama M5b.llama; do
+        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
+        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s phase=true\n" \
+            "--$key" "$brain" "$content" "$mechanics" "$model"
+    done
+    echo ""
+    echo "BrowserUse Series (Baseline):"
+    for key in B1.llama B2.gemma B3.deepseek; do
+        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
+        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
+            "--$key" "$brain" "$content" "$mechanics" "$model"
+    done
+    echo ""
+    echo "BrowserUse Series (Improved - Loop mode + PHASE timing):"
+    for key in B4.llama B5.gemma B6.deepseek; do
+        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
+        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s phase=true\n" \
+            "--$key" "$brain" "$content" "$mechanics" "$model"
+    done
+    echo ""
+    echo "SmolAgents Series (Baseline):"
+    for key in S1.llama S2.gemma S3.deepseek; do
+        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
+        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
+            "--$key" "$brain" "$content" "$mechanics" "$model"
+    done
+    echo ""
+    echo "SmolAgents Series (Improved - Loop mode + PHASE timing):"
+    for key in S4.llama S5.gemma S6.deepseek; do
         IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
         printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s phase=true\n" \
             "--$key" "$brain" "$content" "$mechanics" "$model"
@@ -184,10 +240,11 @@ parse_config_key() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
-            # Config key shortcuts (e.g., --M1, --S1.llama, --B2.gemma+)
-            --M1|--M2.llama|--M2a.llama|--M2b.llama|--M3.llama|--M3a.llama|--M3b.llama|\
-            --B1.llama|--B2.gemma|--B3.deepseek|--S1.llama|--S2.gemma|--S3.deepseek|\
-            --B1.llama+|--B2.gemma+|--B3.deepseek+|--S1.llama+|--S2.gemma+|--S3.deepseek+)
+            # Config key shortcuts (e.g., --M1, --S1.llama, --B4.llama)
+            --M0|--M1|--M2.llama|--M2a.llama|--M2b.llama|--M3.llama|--M3a.llama|--M3b.llama|\
+            --M4.llama|--M4a.llama|--M4b.llama|--M5.llama|--M5a.llama|--M5b.llama|\
+            --B1.llama|--B2.gemma|--B3.deepseek|--B4.llama|--B5.gemma|--B6.deepseek|\
+            --S1.llama|--S2.gemma|--S3.deepseek|--S4.llama|--S5.gemma|--S6.deepseek)
                 parse_config_key "${1#--}"
                 ;;
 
@@ -522,15 +579,34 @@ create_run_script() {
     local xvfb_prefix=""
 
     case "$BRAIN" in
+        upstream)
+            # M0: Run upstream MITRE pyhuman via DOLOS wrapper
+            runner_cmd="python3 -m runners.run_m0"
+            xvfb_prefix=""  # xvfb is handled inside run_m0.py
+            ;;
         mchp)
-            runner_cmd="python3 -m runners.run_mchp --content=$content_arg --mechanics=$mechanics_arg $model_arg $phase_arg"
+            local mchp_phase_arg=""
+            $PHASE && mchp_phase_arg="--phase-timing"
+            runner_cmd="python3 -m runners.run_mchp --content=$content_arg --mechanics=$mechanics_arg $model_arg $mchp_phase_arg"
             xvfb_prefix="xvfb-run -a "
             ;;
         smolagents)
-            runner_cmd="python3 -m runners.run_smolagents \"\$TASK\" $model_arg $phase_arg"
+            if $PHASE; then
+                # S4-S6: Loop mode with MCHP workflows and PHASE timing
+                runner_cmd="python3 -m runners.run_smolagents --loop $model_arg"
+            else
+                # S1-S3: Single task mode
+                runner_cmd="python3 -m runners.run_smolagents \"\$TASK\" $model_arg"
+            fi
             ;;
         browseruse)
-            runner_cmd="python3 -m runners.run_browseruse $model_arg $phase_arg"
+            if $PHASE; then
+                # B4-B6: Loop mode with MCHP workflows and PHASE timing
+                runner_cmd="python3 -m runners.run_browseruse --loop $model_arg"
+            else
+                # B1-B3: Single task mode
+                runner_cmd="python3 -m runners.run_browseruse $model_arg"
+            fi
             xvfb_prefix="xvfb-run -a "
             ;;
     esac
@@ -627,19 +703,62 @@ run_directly() {
 
     case "$BRAIN" in
         mchp)
+            local mchp_phase_arg=""
+            $PHASE && mchp_phase_arg="--phase-timing"
             log "Running MCHP agent..."
-            exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" --mechanics="$mechanics_arg" $model_arg $phase_arg
+            exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" --mechanics="$mechanics_arg" $model_arg $mchp_phase_arg
             ;;
         smolagents)
-            local task="${TASK:-What is the latest news in technology?}"
-            log "Running SmolAgents with task: $task"
-            exec python3 -m runners.run_smolagents "$task" $model_arg $phase_arg
+            if $PHASE; then
+                log "Running SmolAgents loop mode..."
+                exec python3 -m runners.run_smolagents --loop $model_arg
+            else
+                local task="${TASK:-What is the latest news in technology?}"
+                log "Running SmolAgents with task: $task"
+                exec python3 -m runners.run_smolagents "$task" $model_arg
+            fi
             ;;
         browseruse)
-            log "Running BrowserUse agent..."
-            exec xvfb-run -a python3 -m runners.run_browseruse $model_arg $phase_arg
+            if $PHASE; then
+                log "Running BrowserUse loop mode..."
+                exec xvfb-run -a python3 -m runners.run_browseruse --loop $model_arg
+            else
+                log "Running BrowserUse agent..."
+                exec xvfb-run -a python3 -m runners.run_browseruse $model_arg
+            fi
             ;;
     esac
+}
+
+# ============================================================================
+# M0 Upstream MITRE pyhuman Installation
+# ============================================================================
+
+install_m0_upstream() {
+    log "Installing M0 upstream MITRE pyhuman..."
+
+    # Clone upstream MITRE repo if not already present
+    if [[ ! -d "/opt/human" ]]; then
+        log "Cloning upstream MITRE pyhuman..."
+        sudo git clone https://github.com/mitre/human.git /opt/human
+        sudo chown -R "$USER:$USER" /opt/human
+    else
+        log "Upstream MITRE pyhuman already present at /opt/human"
+    fi
+
+    # Create venv and install deps for upstream pyhuman
+    if [[ ! -d "/opt/human/pyhuman/venv" ]]; then
+        log "Creating upstream pyhuman virtual environment..."
+        python3 -m venv /opt/human/pyhuman/venv
+        source /opt/human/pyhuman/venv/bin/activate
+        pip install --upgrade pip
+        pip install -r /opt/human/pyhuman/requirements.txt
+        deactivate
+    else
+        log "Upstream pyhuman venv already exists"
+    fi
+
+    log "M0 upstream installation complete"
 }
 
 # ============================================================================
@@ -698,7 +817,12 @@ install_agent() {
         # Ensure deploy dir exists (may be running stage 2 after reboot)
         mkdir -p "$deploy_dir/logs"
 
-        # Install Ollama if needed
+        # M0 special handling: Install upstream MITRE pyhuman
+        if [[ "$CONFIG_KEY" == "M0" ]]; then
+            install_m0_upstream
+        fi
+
+        # Install Ollama if needed (skip for M0 - no LLM)
         if [[ "$MODEL" != "none" ]]; then
             install_ollama
         fi

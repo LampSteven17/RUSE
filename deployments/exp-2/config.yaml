@@ -1,0 +1,160 @@
+---
+# exp-2: POST-PHASE Experimental Deployment
+# Tests improved configurations with MCHP workflow integration and PHASE timing
+#
+# Key Changes from exp-1:
+#   - M0: Upstream MITRE pyhuman (control - unmodified)
+#   - B4-B6: BrowserUseLoop + MCHP workflows + PHASE timing (replaces B1-B3+)
+#   - S4-S6: SmolAgentLoop + MCHP workflows + PHASE timing (replaces S1-S3+)
+#
+# Comparison Goals:
+#   - M0 vs M1: Upstream MITRE vs DOLOS MCHP
+#   - B1 vs B4: Baseline BrowserUse vs improved loop mode
+#   - S1 vs S4: Baseline SmolAgents vs improved loop mode
+#   - V100 vs RTX 2080 TI A: GPU hardware comparison
+#
+# Total VMs: 24 (2 non-GPU, 14 V100, 2 RTX non-A, 6 RTX A)
+
+deployment_name: exp-2
+
+# ═══════════════════════════════════════════════════════════════════
+# GPU CAPACITY - Adjust these based on your available hardware
+# ═══════════════════════════════════════════════════════════════════
+flavor_capacity:
+  rtx2080ti-1gpu.14vcpu.28g: 4        # RTX 2080 TI non-A variant
+  rtx2080ti-A-1gpu.14vcpu.28g: 6      # RTX 2080 TI A variant
+  v100-1gpu.14vcpu.28g: 19            # V100 GPUs
+  v1.14vcpu.28g: 20                   # Non-GPU (M0, M1 only)
+
+# ═══════════════════════════════════════════════════════════════════
+# DEPLOYMENTS
+# ═══════════════════════════════════════════════════════════════════
+deployments:
+  # ─────────────────────────────────────────────────────────────────
+  # CONTROL: M0 (Upstream MITRE pyhuman - DO NOT MODIFY)
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: M0
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # BASELINE: M1 (DOLOS MCHP)
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: M1
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # IMPROVED: M4 Series (MCHP + SmolAgents + PHASE timing)
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: M4.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: M4a.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: M4b.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # IMPROVED: M5 Series (MCHP + BrowserUse + PHASE timing)
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: M5.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: M5a.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: M5b.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # IMPROVED: BrowserUse Loop Mode (B4-B6)
+  # BrowserUseLoop + MCHP workflows + PHASE timing
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: B4.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: B5.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: B6.deepseek
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # IMPROVED: SmolAgents Loop Mode (S4-S6)
+  # SmolAgentLoop + MCHP workflows + PHASE timing
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: S4.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: S5.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: S6.deepseek
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # BASELINE COMPARISON: B1 and S1 (same as exp-1)
+  # Run alongside improved versions for A/B comparison
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: B1.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: S1.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # RTX 2080 TI (non-A): DUPLICATES of Baselines (B1, S1)
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: B1.llama
+    flavor: rtx2080ti-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: S1.llama
+    flavor: rtx2080ti-1gpu.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # RTX 2080 TI A: DUPLICATES of BrowserUse Improved (B4-B6)
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: B4.llama
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: B5.gemma
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: B6.deepseek
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+
+  # ─────────────────────────────────────────────────────────────────
+  # RTX 2080 TI A: DUPLICATES of SmolAgents Improved (S4-S6)
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: S4.llama
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: S5.gemma
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+
+  - behavior: S6.deepseek
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
