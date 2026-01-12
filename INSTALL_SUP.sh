@@ -466,6 +466,68 @@ Pin-Priority: 1000
     log "Firefox deb installed: $(firefox --version)"
 }
 
+install_chrome() {
+    # Install Google Chrome from official repository
+    # Required for M0 upstream MITRE pyhuman (uses Chrome by default)
+    # Ref: https://github.com/mitre/human/wiki#installation--setup
+
+    log "Setting up Google Chrome APT repository..."
+
+    # Add Google's signing key
+    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+
+    # Add Chrome repository
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | \
+        sudo tee /etc/apt/sources.list.d/google-chrome.list > /dev/null
+
+    # Install Chrome
+    sudo apt-get update -y
+    sudo apt-get install -y google-chrome-stable
+
+    log "Google Chrome installed: $(google-chrome --version)"
+}
+
+install_chromedriver() {
+    # Install ChromeDriver matching Chrome version
+    # Required for Selenium-based automation with Chrome
+
+    log "Installing ChromeDriver..."
+
+    # Get Chrome version
+    CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+' | head -1)
+    CHROME_MAJOR=$(echo "$CHROME_VERSION" | cut -d. -f1)
+
+    log "Chrome version: $CHROME_VERSION (major: $CHROME_MAJOR)"
+
+    # For Chrome 115+, use Chrome for Testing repository
+    if [[ "$CHROME_MAJOR" -ge 115 ]]; then
+        # Get the latest chromedriver version for this Chrome major version
+        CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+
+        # Try to download, fall back to latest stable if specific version fails
+        if ! wget -q "$CHROMEDRIVER_URL" -O /tmp/chromedriver.zip 2>/dev/null; then
+            log "Specific version not found, fetching latest stable ChromeDriver..."
+            LATEST_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_${CHROME_MAJOR}")
+            CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${LATEST_VERSION}/linux64/chromedriver-linux64.zip"
+            wget -q "$CHROMEDRIVER_URL" -O /tmp/chromedriver.zip
+        fi
+
+        sudo unzip -o /tmp/chromedriver.zip -d /tmp/
+        sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/
+        sudo chmod +x /usr/local/bin/chromedriver
+        rm -rf /tmp/chromedriver.zip /tmp/chromedriver-linux64
+    else
+        # Legacy chromedriver download for older Chrome versions
+        CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}")
+        wget -q "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip" -O /tmp/chromedriver.zip
+        sudo unzip -o /tmp/chromedriver.zip -d /usr/local/bin/
+        sudo chmod +x /usr/local/bin/chromedriver
+        rm -f /tmp/chromedriver.zip
+    fi
+
+    log "ChromeDriver installed: $(chromedriver --version)"
+}
+
 install_system_deps() {
     log "Installing system dependencies for $BRAIN..."
 
@@ -473,6 +535,13 @@ install_system_deps() {
     sudo apt-get install -y python3-pip python3-venv python3-dev build-essential
 
     case "$BRAIN" in
+        upstream)
+            # M0: Upstream MITRE pyhuman requires Chrome (not Firefox)
+            # Ref: https://github.com/mitre/human/wiki#installation--setup
+            sudo apt-get install -y xvfb xdg-utils libxml2-dev libxslt-dev python3-tk scrot unzip
+            install_chrome
+            install_chromedriver
+            ;;
         mchp)
             sudo apt-get install -y xvfb xdg-utils libxml2-dev libxslt-dev python3-tk scrot
             # Install Firefox from Mozilla deb repo (not snap)
