@@ -6,7 +6,10 @@ Supports three-prompt configuration for content and mechanics control.
 import os
 import asyncio
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from common.logging.agent_logger import AgentLogger
 
 
 def log(msg: str):
@@ -38,11 +41,13 @@ class BrowserUseAgent:
         model: str = None,
         headless: bool = True,
         max_steps: int = 10,
+        logger: Optional["AgentLogger"] = None,
     ):
         self.prompts = prompts
         self.model_name = get_model(model)
         self.headless = headless
         self.max_steps = max_steps
+        self.logger = logger
         self._llm = None
         self._browser_session = None
 
@@ -87,6 +92,15 @@ class BrowserUseAgent:
         log(f"Starting BrowserUse agent with model: {self.model_name}")
         log(f"Task: {task}")
 
+        # Use the task itself as workflow name for better queryability
+        workflow_name = task[:100] if len(task) > 100 else task
+
+        if self.logger:
+            self.logger.workflow_start(workflow_name, params={
+                "agent_type": "browseruse",
+                "model": self.model_name
+            })
+
         try:
             browser_session = self._get_browser_session()
             agent = Agent(
@@ -96,11 +110,18 @@ class BrowserUseAgent:
             )
             result = await agent.run(max_steps=self.max_steps)
             log("Task completed successfully!")
+
+            if self.logger:
+                self.logger.workflow_end(workflow_name, success=True,
+                                        result=str(result)[:500] if result else None)
             return result
         except Exception as e:
             log(f"Error running agent: {e}")
             import traceback
             traceback.print_exc()
+
+            if self.logger:
+                self.logger.workflow_end(workflow_name, success=False, error=str(e))
             return None
 
     def run(self, task: str) -> Optional[str]:
