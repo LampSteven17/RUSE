@@ -26,12 +26,14 @@ class msPaint(BaseWorkflow):
         self.input_wait_time = input_wait_time
         self.paint_path = paint_path
 
-    def action(self, extra=None):
-        self._ms_paint()
+    def action(self, extra=None, logger=None):
+        self._ms_paint(logger=logger)
 
     """ PRIVATE """
 
-    def _ms_paint(self):
+    def _ms_paint(self, logger=None):
+        if logger:
+            logger.gui_action("open_application", target="mspaint.exe")
         os.startfile(self.paint_path)
         self.pyautogui.getWindowsWithTitle('Paint')
         sleep(self.input_wait_time)

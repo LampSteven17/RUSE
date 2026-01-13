@@ -6,7 +6,10 @@ Supports three-prompt configuration for content and mechanics control.
 import os
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from common.logging.agent_logger import AgentLogger
 
 # Configure logging to show smolagents library output (like browser_use does)
 logging.basicConfig(
@@ -42,10 +45,12 @@ class SmolAgent:
         prompts: SMOLPrompts = DEFAULT_PROMPTS,
         model: str = None,
         tools: list = None,
+        logger: Optional["AgentLogger"] = None,
     ):
         self.prompts = prompts
         self.model_name = get_model(model)
         self.tools = tools
+        self.logger = logger
 
         # Build the LiteLLM model ID (Ollama format)
         model_id = f"ollama/{self.model_name}"
@@ -79,14 +84,31 @@ class SmolAgent:
         log(f"Starting SmolAgents agent with model: {self.model_name}")
         log(f"Task: {task}")
 
+        # Use the task itself as workflow name for better queryability
+        workflow_name = task[:100] if len(task) > 100 else task
+
+        if self.logger:
+            self.logger.workflow_start(workflow_name, params={
+                "agent_type": "smolagents",
+                "model": self.model_name
+            })
+
         try:
             result = self._agent.run(task)
             log("Task completed successfully!")
+
+            if self.logger:
+                self.logger.workflow_end(workflow_name, success=True,
+                                        result=str(result)[:500] if result else None)
             return result
         except Exception as e:
             log(f"Error running agent: {e}")
             import traceback
             traceback.print_exc()
+
+            if self.logger:
+                self.logger.workflow_end(workflow_name, success=False, error=str(e))
+                self.logger.error(f"SmolAgents task failed", exception=e)
             return None
 
 

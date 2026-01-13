@@ -128,6 +128,8 @@ class BrowserUseLoop:
         from brains.browseruse.workflows.loader import load_diverse_workflows
 
         print("Loading workflows...")
+        if self.logger:
+            self.logger.info("Loading workflows")
         workflows = load_diverse_workflows(
             model=self.model,
             prompts=self.prompts,
@@ -144,6 +146,12 @@ class BrowserUseLoop:
             cat = getattr(w, 'category', 'Unknown')
             categories[cat] = categories.get(cat, 0) + 1
         print(f"Workflow distribution: {categories}")
+
+        if self.logger:
+            self.logger.info("Workflows loaded", details={
+                "count": len(workflows),
+                "distribution": categories
+            })
 
         return workflows
 
@@ -196,6 +204,7 @@ class BrowserUseLoop:
                     print(f"Workflow error: {e}")
                     if self.logger:
                         self.logger.workflow_end(workflow_name, success=False, error=str(e))
+                        self.logger.error(f"Workflow '{workflow_name}' failed", exception=e)
                     # Don't re-raise - continue with next workflow
 
             # Inter-cluster delay
@@ -216,6 +225,8 @@ class BrowserUseLoop:
 
         if not self.workflows:
             print("Error: No workflows loaded!")
+            if self.logger:
+                self.logger.error("No workflows loaded", fatal=True)
             return
 
         self._running = True
@@ -230,6 +241,13 @@ class BrowserUseLoop:
             print(f"Timing: cluster_size={self.cluster_size}, task_interval={self.task_interval}, group_interval={self.group_interval}")
         print("-" * 60)
 
+        if self.logger:
+            self.logger.info("BrowserUseLoop started", details={
+                "workflow_count": len(self.workflows),
+                "mchp_integration": self.include_mchp,
+                "phase_timing": self.use_phase_timing
+            })
+
         try:
             self._emulation_loop()
         except KeyboardInterrupt:
@@ -242,6 +260,8 @@ class BrowserUseLoop:
             return
         self._running = False
         print("\nTerminating BrowserUseLoop...")
+        if self.logger:
+            self.logger.info("BrowserUseLoop terminating")
         for workflow in self.workflows:
             try:
                 workflow.cleanup()

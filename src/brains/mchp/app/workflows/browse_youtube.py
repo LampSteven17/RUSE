@@ -35,17 +35,19 @@ class YoutubeSearch(BaseWorkflow):
         self.input_wait_time = input_wait_time
         self.search_list = self._load_search_list()
 
-    def action(self, extra=None):
+    def action(self, extra=None, logger=None):
         if self.driver is None:
             self.driver = WebDriverHelper()
-        self._search_web()
+        self._search_web(logger=logger)
 
     """ PRIVATE """
 
-    def _search_web(self):
+    def _search_web(self, logger=None):
         random_search = self._get_random_search()
 
         # Navigate to youtube
+        if logger:
+            logger.browser_action("navigate", target="https://www.youtube.com")
         self.driver.driver.get('https://www.youtube.com')
         sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
 

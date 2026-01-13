@@ -17,6 +17,8 @@ class ExecuteCommand(BaseWorkflow):
         super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION)
 
     @staticmethod
-    def action(extra=None):
+    def action(extra=None, logger=None):
         for c in extra:
+            if logger:
+                logger.gui_action("execute_command", target=c)
             subprocess.Popen(c, shell=True)
