@@ -21,10 +21,12 @@ class OpenOfficeCalc(BaseWorkflow):
         self.default_wait_time = default_wait_time
         self.open_office_path = open_office_path
 
-    def action(self, extra=None):
-        self._create_spreadsheet()
+    def action(self, extra=None, logger=None):
+        self._create_spreadsheet(logger=logger)
 
-    def _create_spreadsheet(self):
+    def _create_spreadsheet(self, logger=None):
+        if logger:
+            logger.gui_action("open_application", target="OpenOffice Calc")
         self._new_spreadsheet()
         self._move_to_cell([random.choice('abcde'),random.randrange(6)]) # move to random cell, given column & row parameters
         sleep(1)

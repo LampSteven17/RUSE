@@ -1,5 +1,9 @@
 from abc import abstractmethod
 from datetime import datetime
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from common.logging.agent_logger import AgentLogger
 
 
 class BaseWorkflow(object):
@@ -18,9 +22,16 @@ class BaseWorkflow(object):
         self.driver = driver
 
     @abstractmethod
-    def action(self, extra=None):
+    def action(self, extra=None, logger: Optional["AgentLogger"] = None):
+        """
+        Execute the workflow action.
+
+        Args:
+            extra: Extra parameters passed from the agent
+            logger: Optional AgentLogger for structured logging
+        """
         pass
-    
+
     def cleanup(self):
         if self.driver is None:
             return

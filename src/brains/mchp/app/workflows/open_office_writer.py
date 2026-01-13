@@ -21,10 +21,12 @@ class OpenOfficeWriter(BaseWorkflow):
         self.default_wait_time = default_wait_time
         self.open_office_path = open_office_path
 
-    def action(self, extra=None):
-        self._create_document()
+    def action(self, extra=None, logger=None):
+        self._create_document(logger=logger)
 
-    def _create_document(self):
+    def _create_document(self, logger=None):
+        if logger:
+            logger.gui_action("open_application", target="OpenOffice Writer")
         self._new_document()
         # Type random paragrahs and sentences
         for i in range(0, random.randint(2,10)):

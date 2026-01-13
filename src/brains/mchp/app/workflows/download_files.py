@@ -27,17 +27,20 @@ class DownloadFiles(BaseWorkflow):
         super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION)
         self.input_wait_time = input_wait_time
 
-    def action(self, extra=None):
-        self._download_files()
+    def action(self, extra=None, logger=None):
+        self._download_files(logger=logger)
 
 
     """ PRIVATE """
 
-    def _download_files(self):
+    def _download_files(self, logger=None):
         random_function_selector = [self._download_xkcd, self._download_wikipedia, self._download_nist]
         directory = os.path.join(os.path.expanduser("~"), "Downloads")
         os.makedirs(directory, exist_ok=True)
-        random.choice(random_function_selector)(directory)
+        download_func = random.choice(random_function_selector)
+        if logger:
+            logger.browser_action("download", target=download_func.__name__)
+        download_func(directory)
         sleep(self.input_wait_time)
 
     def _download_wikipedia(self, directory):
