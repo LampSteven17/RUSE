@@ -20,6 +20,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLAYBOOKS_DIR="$SCRIPT_DIR/playbooks"
 SSH_CONFIG="${SSH_CONFIG:-$HOME/.ssh/config}"
 
+# Logging setup
+LOGS_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOGS_DIR"
+LOG_FILE="$LOGS_DIR/deploy-$(date +%Y%m%d-%H%M%S).log"
+
+# Logging functions
+log_to_file() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+start_logging() {
+    # Redirect stdout and stderr to both console and log file
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    log_to_file "=== Deployment started ==="
+    log_to_file "Command: $0 $*"
+    log_to_file "Working directory: $(pwd)"
+    log_to_file "User: $(whoami)"
+    log_to_file "Host: $(hostname)"
+}
+
+end_logging() {
+    local exit_code=${1:-0}
+    log_to_file "=== Deployment finished with exit code: $exit_code ==="
+}
+
+# Clean up logs older than 30 days
+cleanup_old_logs() {
+    find "$LOGS_DIR" -name "deploy-*.log" -mtime +30 -delete 2>/dev/null || true
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -180,6 +210,49 @@ run_teardown() {
     print_step "Teardown complete!"
 }
 
+# Run teardown-all playbook (delete ALL servers and volumes)
+run_teardown_all() {
+    # Find any hosts.ini to use for the openstack_controller connection
+    local hosts_ini=""
+    for dir in "$SCRIPT_DIR"/*/; do
+        if [[ -f "${dir}hosts.ini" ]]; then
+            hosts_ini="${dir}hosts.ini"
+            break
+        fi
+    done
+
+    if [[ -z "$hosts_ini" ]]; then
+        print_error "No hosts.ini found in any deployment. Need at least one to connect to OpenStack."
+        return 1
+    fi
+
+    print_warn "This will DELETE ALL sup-* servers and volumes!"
+    print_warn "This is NOT deployment-specific - it will remove EVERYTHING."
+    echo ""
+    read -p "Type 'DELETE ALL' to confirm: " confirm
+    if [[ "$confirm" != "DELETE ALL" ]]; then
+        print_step "Teardown cancelled."
+        return 0
+    fi
+
+    print_step "Deleting ALL SUP servers and volumes..."
+    echo ""
+
+    cd "$PLAYBOOKS_DIR"
+
+    if [[ -f "$SSH_CONFIG" ]]; then
+        ANSIBLE_SSH_ARGS="-F $SSH_CONFIG" ansible-playbook \
+            -i "$hosts_ini" \
+            teardown-all.yaml
+    else
+        ansible-playbook \
+            -i "$hosts_ini" \
+            teardown-all.yaml
+    fi
+
+    print_step "Teardown complete!"
+}
+
 # Show deployment info
 show_deployment_info() {
     local deployment=$1
@@ -226,7 +299,7 @@ main_menu() {
         read -p "Select option [1-6]: " choice
 
         case $choice in
-            1|2|3|4|5)
+            1|2|3|5)
                 echo ""
                 list_deployments
                 echo ""
@@ -266,15 +339,34 @@ main_menu() {
                         3)
                             run_install "$deployment"
                             ;;
-                        4)
-                            run_teardown "$deployment"
-                            echo "Goodbye!"
-                            exit 0
-                            ;;
                         5)
                             show_deployment_info "$deployment"
                             ;;
                     esac
+                else
+                    print_error "Invalid selection"
+                fi
+
+                echo ""
+                read -p "Press Enter to continue..."
+                ;;
+            4)
+                echo ""
+                echo -e "${BLUE}Teardown options:${NC}"
+                list_deployments
+                echo "  A) Delete ALL servers and volumes"
+                echo ""
+                read -p "Select deployment or 'A' for all: " teardown_choice
+
+                if [[ "$teardown_choice" == "A" || "$teardown_choice" == "a" ]]; then
+                    run_teardown_all
+                    echo "Goodbye!"
+                    exit 0
+                elif [[ $teardown_choice -ge 1 && $teardown_choice -le ${#deployments[@]} ]]; then
+                    deployment="${deployments[$((teardown_choice-1))]}"
+                    run_teardown "$deployment"
+                    echo "Goodbye!"
+                    exit 0
                 else
                     print_error "Invalid selection"
                 fi
@@ -312,8 +404,12 @@ cli_mode() {
         teardown)
             run_teardown "$deployment"
             ;;
+        teardown-all)
+            run_teardown_all
+            ;;
         *)
             echo "Usage: $0 [provision|install|deploy|teardown] <deployment-name>"
+            echo "       $0 teardown-all"
             echo "       $0  (interactive mode)"
             exit 1
             ;;
@@ -323,8 +419,24 @@ cli_mode() {
 # Entry point
 check_prereqs
 
-if [[ $# -ge 2 ]]; then
-    cli_mode "$1" "$2"
+# Start logging and set up cleanup trap
+start_logging "$@"
+cleanup_old_logs
+trap 'end_logging $?' EXIT
+
+print_step "Logging to: $LOG_FILE"
+
+if [[ $# -ge 1 ]]; then
+    if [[ "$1" == "teardown-all" ]]; then
+        cli_mode "$1"
+    elif [[ $# -ge 2 ]]; then
+        cli_mode "$1" "$2"
+    else
+        echo "Usage: $0 [provision|install|deploy|teardown] <deployment-name>"
+        echo "       $0 teardown-all"
+        echo "       $0  (interactive mode)"
+        exit 1
+    fi
 else
     main_menu
 fi
