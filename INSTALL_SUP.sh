@@ -49,6 +49,9 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 
 === Configuration Keys ===
 
+  Control Series:
+    --C0                Bare Ubuntu VM (no software - pure control)
+
   MCHP Series (Baseline):
     --M0                Upstream MITRE pyhuman (control - DO NOT MODIFY)
     --M1                DOLOS MCHP baseline (no LLM)
@@ -240,6 +243,13 @@ parse_config_key() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
+            # C0 - Control VM (bare Ubuntu, no installation)
+            --C0)
+                log "C0 Control VM - no software installation required"
+                log "This is a bare Ubuntu control system"
+                exit 0
+                ;;
+
             # Config key shortcuts (e.g., --M1, --S1.llama, --B4.llama)
             --M0|--M1|--M2.llama|--M2a.llama|--M2b.llama|--M3.llama|--M3a.llama|--M3b.llama|\
             --M4.llama|--M4a.llama|--M4b.llama|--M5.llama|--M5a.llama|--M5b.llama|\
