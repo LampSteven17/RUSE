@@ -11,18 +11,18 @@ Host sup-*
     ServerAliveInterval 120
 
 Host sup-S1-llama-0
-    HostName 10.246.115.63
+    HostName 10.246.118.160
 
 Host sup-B1-llama-0
-    HostName 10.246.116.122
+    HostName 10.246.117.196
 
 Host sup-B1-llama-1
-    HostName 10.246.116.143
+    HostName 10.246.115.109
 
 Host sup-M1-0
-    HostName 10.246.117.213
+    HostName 10.246.117.153
 
 Host sup-M1-1
-    HostName 10.246.116.206
+    HostName 10.246.116.130
 
 #############################################

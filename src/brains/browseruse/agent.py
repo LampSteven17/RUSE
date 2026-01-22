@@ -11,6 +11,8 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
 
+from common.logging.llm_callbacks import create_langchain_callback
+
 
 def log(msg: str):
     """Print with timestamp."""
@@ -52,10 +54,14 @@ class BrowserUseAgent:
         self._browser_session = None
 
     def _get_llm(self):
-        """Lazy-load the LLM."""
+        """Lazy-load the LLM with logging callbacks."""
         if self._llm is None:
             from browser_use import ChatOllama
-            self._llm = ChatOllama(model=self.model_name)
+            # Set up LangChain logging callbacks if logger is provided
+            callbacks = None
+            if self.logger:
+                callbacks = [create_langchain_callback(self.logger)]
+            self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
         return self._llm
 
     def _get_browser_session(self):

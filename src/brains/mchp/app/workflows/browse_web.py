@@ -42,11 +42,24 @@ class WebBrowse(BaseWorkflow):
     def _web_browse(self, logger=None):
         self.driver.driver.set_page_load_timeout(self.default_timeout)
         website = self._get_random_website()
+
+        # Semantic step: Load website
         if logger:
-            logger.browser_action("navigate", target=website.rstrip())
+            logger.step_start("load_website", category="browser",
+                              message=website.rstrip())
         self._browse(website, logger=logger)
+        if logger:
+            logger.step_success("load_website")
+
         sleep(random.randint(1,self.max_sleep_time))
+
+        # Semantic step: Browse site
+        if logger:
+            logger.step_start("browse_site", category="browser",
+                              message="Navigating through website")
         self._navigate_website(logger=logger)
+        if logger:
+            logger.step_success("browse_site")
 
 
     def _get_random_website(self):
@@ -56,20 +69,25 @@ class WebBrowse(BaseWorkflow):
 
     def _browse(self, random_website, logger=None):
         print("Browsing to", random_website.rstrip())
+        if logger:
+            logger.step_start("navigate", category="browser",
+                              message=f"https://{random_website.rstrip()}")
         try:
             self.driver.driver.get('https://' + random_website)
+            if logger:
+                logger.step_success("navigate")
         except TimeoutException as error:
             print(f"Timeout loading {random_website.rstrip()}: {error}")
             if logger:
-                logger.error(f"Timeout loading {random_website.rstrip()}", exception=error)
+                logger.step_error("navigate", f"Timeout loading {random_website.rstrip()}", exception=error)
         except WebDriverException as error:
             print(f"Error loading {random_website.rstrip()}: {error}")
             if logger:
-                logger.error(f"WebDriver error loading {random_website.rstrip()}", exception=error)
+                logger.step_error("navigate", f"WebDriver error loading {random_website.rstrip()}", exception=error)
         except Exception as error:
             print(f"Error loading {random_website.rstrip()}: {error}")
             if logger:
-                logger.error(f"Error loading {random_website.rstrip()}", exception=error)
+                logger.step_error("navigate", f"Error loading {random_website.rstrip()}", exception=error)
 
     @staticmethod
     def _load_website_list():
@@ -100,24 +118,24 @@ class WebBrowse(BaseWorkflow):
                     if logger:
                         logger.warning("Invalid URL encountered", details={"click_num": num_click})
                     continue
+                step_name = f"nav_click_{num_click}"
                 try:
+                    if logger:
+                        logger.step_start(step_name, category="browser", message=url)
                     self.driver.driver.get(url)
                     print(f"... {num_click}. Navigated to {url}")
                     if logger:
-                        logger.browser_action("click", target=url, success=True)
+                        logger.step_success(step_name)
                     sleep(random.randint(1,self.max_sleep_time))
                 except TimeoutException as error:
                     print(f"Timeout loading {url.rstrip()}: {error}")
                     if logger:
-                        logger.browser_action("click", target=url, success=False)
-                        logger.error(f"Timeout during navigation click", exception=error)
+                        logger.step_error(step_name, f"Timeout during navigation click", exception=error)
                 except InvalidArgumentException as error:
                     print(f"Error loading {url}: {error}")
                     if logger:
-                        logger.browser_action("click", target=url, success=False)
-                        logger.error(f"Invalid argument error during navigation", exception=error)
+                        logger.step_error(step_name, f"Invalid argument error during navigation", exception=error)
                 except Exception as error:
                     print(f"Error loading {url}: {error}")
                     if logger:
-                        logger.browser_action("click", target=url, success=False)
-                        logger.error(f"Navigation error", exception=error)
+                        logger.step_error(step_name, f"Navigation error", exception=error)

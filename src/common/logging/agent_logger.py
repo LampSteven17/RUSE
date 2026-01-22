@@ -20,6 +20,7 @@ import json
 import os
 import uuid
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -29,20 +30,45 @@ from enum import Enum
 
 class EventType(str, Enum):
     """Types of events that can be logged."""
+    # Session events
     SESSION_START = "session_start"
+    SESSION_SUCCESS = "session_success"  # Explicit success marker (call before session_end)
+    SESSION_FAIL = "session_fail"        # Explicit failure marker (call before session_end)
     SESSION_END = "session_end"
+
+    # Workflow events
     WORKFLOW_START = "workflow_start"
     WORKFLOW_END = "workflow_end"
+
+    # Step events (replaces BROWSER_ACTION/GUI_ACTION)
+    STEP_START = "step_start"
+    STEP_SUCCESS = "step_success"
+    STEP_ERROR = "step_error"
+
+    # LLM events
     LLM_REQUEST = "llm_request"
     LLM_RESPONSE = "llm_response"
     LLM_ERROR = "llm_error"
+
+    # Other events
     DECISION = "decision"
-    BROWSER_ACTION = "browser_action"
-    GUI_ACTION = "gui_action"
     TIMING_DELAY = "timing_delay"
-    ERROR = "error"
+
+    # Diagnostic events
     WARNING = "warning"
     INFO = "info"
+
+
+class StepCategory(str, Enum):
+    """Categories for step-level actions."""
+    BROWSER = "browser"           # Web browsing, search, navigation
+    VIDEO = "video"               # YouTube, video players
+    OFFICE = "office"             # Word processors, spreadsheets, paint
+    SHELL = "shell"               # Command execution, terminals
+    PROGRAMMING = "programming"   # Code editing, building software
+    EMAIL = "email"               # Email clients
+    AUTHENTICATION = "authentication"  # Login, SSO, Shibboleth
+    OTHER = "other"               # Uncategorized actions
 
 
 @dataclass
@@ -96,6 +122,14 @@ class AgentLogger:
         self.current_workflow: Optional[str] = None
         self._workflow_start_time: Optional[float] = None
         self._session_start_time: Optional[float] = None
+
+        # Step tracking
+        self._step_start_times: Dict[str, float] = {}
+        self._step_categories: Dict[str, str] = {}
+        self._current_step: Optional[str] = None
+
+        # Session outcome tracking
+        self._session_outcome: Optional[str] = None  # "success" or "fail"
 
         # Set up log directory
         if log_dir:
@@ -162,7 +196,57 @@ class AgentLogger:
         details = summary or {}
         if self._session_start_time:
             details["total_duration_ms"] = int((time.time() - self._session_start_time) * 1000)
+        if self._session_outcome:
+            details["outcome"] = self._session_outcome
         return self._log(EventType.SESSION_END, details=details)
+
+    def session_success(self, message: str = "Session completed successfully",
+                        details: Optional[Dict[str, Any]] = None) -> LogEvent:
+        """
+        Log explicit session success. Call BEFORE session_end().
+
+        Args:
+            message: Success message
+            details: Additional details to log
+        """
+        self._session_outcome = "success"
+        event_details = {
+            "message": message,
+            "status": "success"
+        }
+        if self._session_start_time:
+            event_details["duration_ms"] = int((time.time() - self._session_start_time) * 1000)
+        if details:
+            event_details.update(details)
+        return self._log(EventType.SESSION_SUCCESS, details=event_details)
+
+    def session_fail(self, message: str, error: Optional[str] = None,
+                     exception: Optional[Exception] = None,
+                     details: Optional[Dict[str, Any]] = None) -> LogEvent:
+        """
+        Log explicit session failure. Call BEFORE session_end().
+
+        Args:
+            message: Failure message
+            error: Error string (alternative to exception)
+            exception: Original exception if available
+            details: Additional details to log
+        """
+        self._session_outcome = "fail"
+        event_details = {
+            "message": message,
+            "status": "fail"
+        }
+        if error:
+            event_details["error"] = error
+        if exception:
+            event_details["exception_type"] = type(exception).__name__
+            event_details["exception_str"] = str(exception)
+        if self._session_start_time:
+            event_details["duration_ms"] = int((time.time() - self._session_start_time) * 1000)
+        if details:
+            event_details.update(details)
+        return self._log(EventType.SESSION_FAIL, details=event_details)
 
     # =========================================================================
     # Workflow Events
@@ -289,7 +373,151 @@ class AgentLogger:
         return self._log(EventType.DECISION, details=details)
 
     # =========================================================================
-    # Action Events
+    # Step Events (replaces BROWSER_ACTION/GUI_ACTION)
+    # =========================================================================
+
+    def step_start(self, step_name: str, category: str = "other",
+                   message: Optional[str] = None,
+                   details: Optional[Dict[str, Any]] = None) -> LogEvent:
+        """
+        Log step start with category. Tracks start time for duration.
+
+        Args:
+            step_name: Name of the step (e.g., "navigate", "click", "login")
+            category: Step category (browser, video, office, shell, etc.)
+            message: Optional description message
+            details: Additional details to log
+        """
+        self._step_start_times[step_name] = time.time()
+        self._step_categories[step_name] = category
+        self._current_step = step_name
+
+        event_details = {
+            "step_name": step_name,
+            "category": category,
+            "status": "start"
+        }
+        if message:
+            event_details["message"] = message[:200] if len(message) > 200 else message
+        if details:
+            event_details.update(details)
+
+        return self._log(EventType.STEP_START, details=event_details)
+
+    def step_success(self, step_name: str, category: Optional[str] = None,
+                     message: Optional[str] = None,
+                     duration_ms: Optional[int] = None,
+                     details: Optional[Dict[str, Any]] = None) -> LogEvent:
+        """
+        Log step success. Category optional (uses stored value from step_start).
+
+        Args:
+            step_name: Name of the step
+            category: Step category (optional, uses stored value if not provided)
+            message: Optional success message
+            duration_ms: Duration in milliseconds (auto-calculated if not provided)
+            details: Additional details to log
+        """
+        # Use stored category if not provided
+        if category is None:
+            category = self._step_categories.get(step_name, "other")
+
+        # Calculate duration if not provided
+        if duration_ms is None and step_name in self._step_start_times:
+            duration_ms = int((time.time() - self._step_start_times[step_name]) * 1000)
+
+        event_details = {
+            "step_name": step_name,
+            "category": category,
+            "status": "success"
+        }
+        if duration_ms is not None:
+            event_details["duration_ms"] = duration_ms
+        if message:
+            event_details["message"] = message[:200] if len(message) > 200 else message
+        if details:
+            event_details.update(details)
+
+        # Clean up tracking
+        self._step_start_times.pop(step_name, None)
+        self._step_categories.pop(step_name, None)
+        if self._current_step == step_name:
+            self._current_step = None
+
+        return self._log(EventType.STEP_SUCCESS, details=event_details)
+
+    def step_error(self, step_name: str, message: str,
+                   category: Optional[str] = None,
+                   exception: Optional[Exception] = None,
+                   duration_ms: Optional[int] = None,
+                   details: Optional[Dict[str, Any]] = None) -> LogEvent:
+        """
+        Log step error. Category optional (uses stored value from step_start).
+
+        Args:
+            step_name: Name of the step
+            message: Error message
+            category: Step category (optional, uses stored value if not provided)
+            exception: Original exception if available
+            duration_ms: Duration in milliseconds (auto-calculated if not provided)
+            details: Additional details to log
+        """
+        # Use stored category if not provided
+        if category is None:
+            category = self._step_categories.get(step_name, "other")
+
+        # Calculate duration if not provided
+        if duration_ms is None and step_name in self._step_start_times:
+            duration_ms = int((time.time() - self._step_start_times[step_name]) * 1000)
+
+        event_details = {
+            "step_name": step_name,
+            "category": category,
+            "status": "error",
+            "message": message
+        }
+        if exception:
+            event_details["exception_type"] = type(exception).__name__
+            event_details["exception_str"] = str(exception)
+        if duration_ms is not None:
+            event_details["duration_ms"] = duration_ms
+        if details:
+            event_details.update(details)
+
+        # Clean up tracking
+        self._step_start_times.pop(step_name, None)
+        self._step_categories.pop(step_name, None)
+        if self._current_step == step_name:
+            self._current_step = None
+
+        return self._log(EventType.STEP_ERROR, details=event_details)
+
+    @contextmanager
+    def step(self, step_name: str, category: str = "other",
+             message: Optional[str] = None):
+        """
+        Context manager for automatic step success/error logging with category.
+
+        Usage:
+            with logger.step("login", category="authentication", message="Logging in"):
+                perform_login()
+            # Automatically logs step_success or step_error
+
+        Args:
+            step_name: Name of the step
+            category: Step category (browser, video, office, shell, etc.)
+            message: Optional description message
+        """
+        self.step_start(step_name, category=category, message=message)
+        try:
+            yield
+            self.step_success(step_name)
+        except Exception as e:
+            self.step_error(step_name, str(e), exception=e)
+            raise
+
+    # =========================================================================
+    # Deprecated Methods (for backwards compatibility)
     # =========================================================================
 
     def browser_action(
@@ -299,16 +527,17 @@ class AgentLogger:
         success: bool = True,
         duration_ms: Optional[int] = None
     ) -> LogEvent:
-        """Log browser action (Selenium/Playwright)."""
-        details = {
-            "action": action,
-            "success": success
-        }
-        if target:
-            details["target"] = target[:200] if len(target) > 200 else target
-        if duration_ms:
-            details["duration_ms"] = duration_ms
-        return self._log(EventType.BROWSER_ACTION, details=details)
+        """
+        DEPRECATED: Use step() or step_start/step_success/step_error instead.
+
+        Maps to: step(action, category="browser", message=target)
+        """
+        if success:
+            return self.step_success(action, category="browser", message=target,
+                                     duration_ms=duration_ms)
+        else:
+            return self.step_error(action, message=f"Failed: {target or 'unknown'}",
+                                   category="browser", duration_ms=duration_ms)
 
     def gui_action(
         self,
@@ -316,14 +545,50 @@ class AgentLogger:
         params: Optional[Dict[str, Any]] = None,
         success: bool = True
     ) -> LogEvent:
-        """Log GUI action (pyautogui)."""
+        """
+        DEPRECATED: Use step() or step_start/step_success/step_error instead.
+
+        Maps to: step(action, category="office", details=params)
+        """
+        target = params.get("target") if params else None
+        if success:
+            return self.step_success(action, category="office", message=target,
+                                     details=params)
+        else:
+            return self.step_error(action, message=f"Failed: {target or 'unknown'}",
+                                   category="office", details=params)
+
+    def error(
+        self,
+        message: str,
+        fatal: bool = False,
+        exception: Optional[Exception] = None
+    ) -> LogEvent:
+        """
+        DEPRECATED: Use step_error() within a step, or session_fail() at session level.
+
+        This method logs a warning with the error details for backwards compatibility.
+        """
         details = {
-            "action": action,
-            "success": success
+            "message": message,
+            "fatal": fatal,
+            "deprecated": True,
+            "migration_hint": "Use step_error() within a step, or session_fail() at session level"
         }
-        if params:
-            details["params"] = params
-        return self._log(EventType.GUI_ACTION, details=details)
+        if exception:
+            details["exception_type"] = type(exception).__name__
+            details["exception_str"] = str(exception)
+
+        event = self._log(EventType.WARNING, details=details)
+
+        if fatal:
+            raise RuntimeError(f"FATAL ERROR [{self.agent_type}]: {message}")
+
+        return event
+
+    # =========================================================================
+    # Other Events
+    # =========================================================================
 
     def timing_delay(
         self,
@@ -337,39 +602,6 @@ class AgentLogger:
             "reason": reason
         }
         return self._log(EventType.TIMING_DELAY, details=details)
-
-    # =========================================================================
-    # Error/Warning Events
-    # =========================================================================
-
-    def error(
-        self,
-        message: str,
-        fatal: bool = False,
-        exception: Optional[Exception] = None
-    ) -> LogEvent:
-        """
-        Log error event.
-
-        Args:
-            message: Error message
-            fatal: If True, raises exception after logging
-            exception: Original exception if available
-        """
-        details = {
-            "message": message,
-            "fatal": fatal
-        }
-        if exception:
-            details["exception_type"] = type(exception).__name__
-            details["exception_str"] = str(exception)
-
-        event = self._log(EventType.ERROR, details=details)
-
-        if fatal:
-            raise RuntimeError(f"FATAL ERROR [{self.agent_type}]: {message}")
-
-        return event
 
     def warning(self, message: str, details: Optional[Dict[str, Any]] = None) -> LogEvent:
         """Log warning event."""
@@ -401,9 +633,8 @@ class AgentLogger:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Context manager exit."""
         if exc_type is not None:
-            self.error(
-                f"Session ended with exception: {exc_val}",
-                fatal=False,
+            self.session_fail(
+                message=f"Session ended with exception: {exc_val}",
                 exception=exc_val
             )
         self.close()
@@ -440,29 +671,69 @@ def summarize_session(log_path: str) -> Dict[str, Any]:
         log_path: Path to the .jsonl log file
 
     Returns:
-        Dictionary with session statistics
+        Dictionary with session statistics including:
+        - session_outcome: "success" | "fail" | None
+        - steps_executed: count of STEP_START events
+        - steps_successful: count of STEP_SUCCESS events
+        - steps_failed: count of STEP_ERROR events
+        - steps_by_category: dict of category -> {executed, successful, failed}
     """
     events = read_log_file(log_path)
 
     summary = {
         "total_events": len(events),
+        # Session outcome
+        "session_outcome": None,
+        # Workflow stats
         "workflows_executed": 0,
         "workflows_successful": 0,
         "workflows_failed": 0,
+        # Step stats
+        "steps_executed": 0,
+        "steps_successful": 0,
+        "steps_failed": 0,
+        "steps_by_category": {},
+        # LLM stats
         "llm_requests": 0,
         "llm_errors": 0,
         "total_llm_duration_ms": 0,
-        "errors": 0,
+        # Diagnostic stats
         "warnings": 0
     }
 
     for event in events:
-        if event.event_type == EventType.WORKFLOW_END.value:
+        # Session outcome
+        if event.event_type == EventType.SESSION_SUCCESS.value:
+            summary["session_outcome"] = "success"
+        elif event.event_type == EventType.SESSION_FAIL.value:
+            summary["session_outcome"] = "fail"
+        # Workflow stats
+        elif event.event_type == EventType.WORKFLOW_END.value:
             summary["workflows_executed"] += 1
             if event.details and event.details.get("success"):
                 summary["workflows_successful"] += 1
             else:
                 summary["workflows_failed"] += 1
+        # Step stats
+        elif event.event_type == EventType.STEP_START.value:
+            summary["steps_executed"] += 1
+            category = event.details.get("category", "other") if event.details else "other"
+            if category not in summary["steps_by_category"]:
+                summary["steps_by_category"][category] = {"executed": 0, "successful": 0, "failed": 0}
+            summary["steps_by_category"][category]["executed"] += 1
+        elif event.event_type == EventType.STEP_SUCCESS.value:
+            summary["steps_successful"] += 1
+            category = event.details.get("category", "other") if event.details else "other"
+            if category not in summary["steps_by_category"]:
+                summary["steps_by_category"][category] = {"executed": 0, "successful": 0, "failed": 0}
+            summary["steps_by_category"][category]["successful"] += 1
+        elif event.event_type == EventType.STEP_ERROR.value:
+            summary["steps_failed"] += 1
+            category = event.details.get("category", "other") if event.details else "other"
+            if category not in summary["steps_by_category"]:
+                summary["steps_by_category"][category] = {"executed": 0, "successful": 0, "failed": 0}
+            summary["steps_by_category"][category]["failed"] += 1
+        # LLM stats
         elif event.event_type == EventType.LLM_REQUEST.value:
             summary["llm_requests"] += 1
         elif event.event_type == EventType.LLM_RESPONSE.value:
@@ -470,8 +741,7 @@ def summarize_session(log_path: str) -> Dict[str, Any]:
                 summary["total_llm_duration_ms"] += event.details["duration_ms"]
         elif event.event_type == EventType.LLM_ERROR.value:
             summary["llm_errors"] += 1
-        elif event.event_type == EventType.ERROR.value:
-            summary["errors"] += 1
+        # Diagnostic stats
         elif event.event_type == EventType.WARNING.value:
             summary["warnings"] += 1
 

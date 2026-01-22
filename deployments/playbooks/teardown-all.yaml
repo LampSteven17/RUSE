@@ -54,7 +54,7 @@
     - name: Delete ALL SUP servers (batched, {{ vm_delete_batch_size | default(5) }} at a time)
       shell: |
         source {{ os_rc_file }}
-        openstack server delete "{{ item.split()[1] }}"
+        openstack server delete "{{ item.split()[0] }}"
       args:
         executable: /bin/bash
       loop: "{{ server_list.stdout_lines }}"
@@ -67,12 +67,13 @@
     - name: Wait for all servers to be deleted (parallel polling)
       shell: |
         source {{ os_rc_file }}
-        VM_NAME="{{ item.split()[1] }}"
-        if ! openstack server show "$VM_NAME" &>/dev/null; then
-          echo "DELETED: $VM_NAME"
+        SERVER_ID="{{ item.split()[0] }}"
+        SERVER_NAME="{{ item.split()[1] }}"
+        if ! openstack server show "$SERVER_ID" &>/dev/null; then
+          echo "DELETED: $SERVER_NAME ($SERVER_ID)"
           exit 0
         else
-          echo "WAITING: $VM_NAME still exists"
+          echo "WAITING: $SERVER_NAME ($SERVER_ID) still exists"
           exit 1
         fi
       args:

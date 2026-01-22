@@ -57,7 +57,8 @@
     - name: Delete SUP servers
       shell: |
         source {{ os_rc_file }}
-        openstack server delete --wait "{{ item.split()[1] }}"
+        SERVER_ID="{{ item.split()[0] }}"
+        openstack server delete --wait "$SERVER_ID"
       args:
         executable: /bin/bash
       loop: "{{ server_list.stdout_lines }}"

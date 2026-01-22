@@ -13,7 +13,8 @@
 #   - S1 vs S4: Baseline SmolAgents vs improved loop mode
 #   - V100 vs RTX 2080 TI A: GPU hardware comparison
 #
-# Total VMs: 24 (2 non-GPU, 14 V100, 2 RTX non-A, 6 RTX A)
+# Total VMs: 26 (3 non-GPU, 15 V100, 2 RTX non-A, 6 RTX A)
+# Including: 2 C0 control VMs (bare Ubuntu - 1 non-GPU, 1 V100)
 
 deployment_name: exp-2
 
@@ -30,6 +31,18 @@ flavor_capacity:
 # DEPLOYMENTS
 # ═══════════════════════════════════════════════════════════════════
 deployments:
+  # ─────────────────────────────────────────────────────────────────
+  # CONTROL: C0 (Bare Ubuntu VM - absolutely nothing installed)
+  # Used as baseline control systems
+  # ─────────────────────────────────────────────────────────────────
+  - behavior: C0
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  - behavior: C0
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
   # ─────────────────────────────────────────────────────────────────
   # CONTROL: M0 (Upstream MITRE pyhuman - DO NOT MODIFY)
   # ─────────────────────────────────────────────────────────────────

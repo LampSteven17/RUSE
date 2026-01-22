@@ -12,9 +12,13 @@ from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool
 from brains.smolagents.workflows.base import SmolWorkflow
 from brains.smolagents.tasks import DEFAULT_TASKS, TECHNICAL_TASKS, GENERAL_TASKS
 from common.config.model_config import get_model
+from common.logging.llm_callbacks import setup_litellm_callbacks
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
+
+# Track if LiteLLM callbacks have been registered (they're global)
+_litellm_callbacks_registered = False
 
 
 WORKFLOW_NAME = 'SmolResearch'
@@ -73,6 +77,13 @@ class ResearchWorkflow(SmolWorkflow):
             extra: Extra parameters (can include 'task' to override random selection)
             logger: Optional AgentLogger for structured logging
         """
+        global _litellm_callbacks_registered
+
+        # Set up LiteLLM callbacks if logger provided and not already registered
+        if logger and not _litellm_callbacks_registered:
+            setup_litellm_callbacks(logger)
+            _litellm_callbacks_registered = True
+
         # Get task from extra or pick random
         task = None
         if extra and isinstance(extra, dict):

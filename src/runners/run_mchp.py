@@ -82,10 +82,12 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
     try:
         agent = MCHPAgent(logger=logger, use_phase_timing=use_phase_timing)
         agent.run()
+        logger.session_success(message="MCHP agent completed successfully")
     except KeyboardInterrupt:
         logger.info("Agent stopped by user (KeyboardInterrupt)")
+        # No session_fail - interruption is not failure
     except Exception as e:
-        logger.error(str(e), fatal=True, exception=e)
+        logger.session_fail(message="MCHP agent failed", exception=e)
         raise
     finally:
         logger.session_end()
