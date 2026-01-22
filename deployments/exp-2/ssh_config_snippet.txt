@@ -10,76 +10,82 @@ Host sup-*
     StrictHostKeyChecking no
     ServerAliveInterval 120
 
+Host sup-C0-0
+    HostName 10.246.116.87
+
+Host sup-C0-1
+    HostName 10.246.115.174
+
 Host sup-M0-0
-    HostName 10.246.118.230
+    HostName 10.246.116.43
 
 Host sup-M1-0
-    HostName 10.246.116.23
+    HostName 10.246.115.96
 
 Host sup-M4-llama-0
-    HostName 10.246.118.19
+    HostName 10.246.118.74
 
 Host sup-M4a-llama-0
-    HostName 10.246.116.104
+    HostName 10.246.115.86
 
 Host sup-M4b-llama-0
-    HostName 10.246.118.53
+    HostName 10.246.116.228
 
 Host sup-M5-llama-0
-    HostName 10.246.117.161
+    HostName 10.246.115.156
 
 Host sup-M5a-llama-0
-    HostName 10.246.116.122
+    HostName 10.246.116.10
 
 Host sup-M5b-llama-0
-    HostName 10.246.115.41
+    HostName 10.246.116.249
 
 Host sup-B4-llama-0
-    HostName 10.246.119.63
+    HostName 10.246.116.248
 
 Host sup-B5-gemma-0
-    HostName 10.246.117.168
+    HostName 10.246.118.34
 
 Host sup-B6-deepseek-0
-    HostName 10.246.117.231
+    HostName 10.246.118.215
 
 Host sup-S4-llama-0
-    HostName 10.246.116.44
+    HostName 10.246.116.242
 
 Host sup-S5-gemma-0
-    HostName 10.246.118.68
+    HostName 10.246.115.171
 
 Host sup-S6-deepseek-0
-    HostName 10.246.119.83
+    HostName 10.246.119.93
 
 Host sup-B1-llama-0
-    HostName 10.246.119.47
+    HostName 10.246.118.148
 
 Host sup-S1-llama-0
-    HostName 10.246.117.77
+    HostName 10.246.118.154
 
 Host sup-B1-llama-1
-    HostName 10.246.117.87
+    HostName 10.246.118.180
 
 Host sup-S1-llama-1
-    HostName 10.246.116.202
+    HostName 10.246.115.227
 
 Host sup-B4-llama-1
-    HostName 10.246.117.141
+    HostName 10.246.118.29
 
 Host sup-B5-gemma-1
-    HostName 10.246.117.248
+    HostName 10.246.117.247
 
 Host sup-B6-deepseek-1
-    HostName 10.246.117.64
+    HostName 10.246.117.229
 
 Host sup-S4-llama-1
-    HostName 10.246.119.51
+    HostName 10.246.115.125
 
 Host sup-S5-gemma-1
-    HostName 10.246.117.224
+    HostName 10.246.117.92
 
 Host sup-S6-deepseek-1
-    HostName 10.246.117.144
+    HostName 10.246.117.41
 
 #############################################

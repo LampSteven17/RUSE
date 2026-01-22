@@ -25,27 +25,59 @@ class OpenOfficeWriter(BaseWorkflow):
         self._create_document(logger=logger)
 
     def _create_document(self, logger=None):
+        # Semantic step: Create document
         if logger:
-            logger.gui_action("open_application", target="OpenOffice Writer")
+            logger.step_start("create_document", category="office",
+                              message="Creating new OpenOffice Writer document")
+
+        if logger:
+            logger.step_start("open_application", category="office",
+                              message="OpenOffice Writer")
         self._new_document()
+        if logger:
+            logger.step_success("open_application")
+
+        # Semantic step: Edit content
+        if logger:
+            logger.step_start("edit_content", category="office",
+                              message="Typing paragraphs and sentences")
         # Type random paragrahs and sentences
         for i in range(0, random.randint(2,10)):
             random.choice([pyautogui.typewrite(TextLorem().paragraph()), pyautogui.typewrite(TextLorem().sentence())])
             pyautogui.press('enter')
         sleep(self.default_wait_time)
+        if logger:
+            logger.step_success("edit_content")
+
+        # Semantic step: Format and modify
+        if logger:
+            logger.step_start("format_and_modify", category="office",
+                              message="Performing random document actions")
         # Randomly perform actions
         for i in range(0, random.randint(6,15)):
             random.choice([self._save_pdf,
                            self._write_sentence,
                            self._write_paragraph,
-                           self._copy_paste, 
+                           self._copy_paste,
                            self._insert_comment,
                            self._find,
                            self._delete_text,
                            self._format_text])()
             sleep(self.default_wait_time)
+        if logger:
+            logger.step_success("format_and_modify")
+
+        # Semantic step: Save document
+        if logger:
+            logger.step_start("save_document", category="office",
+                              message="Saving and closing document")
         # Save and quit the document
         self._save_quit()
+        if logger:
+            logger.step_success("save_document")
+
+        if logger:
+            logger.step_success("create_document")
 
     def _insert_comment(self):
         pyautogui.hotkey('ctrl', 'alt', 'c') # insert comment

@@ -64,15 +64,17 @@ def run_smolagents(config: SUPConfig, task: str = None):
             logger=logger,
         )
         result = agent.run(task)
-        logger.session_end(summary={"result": str(result)[:500] if result else None})
+        logger.session_success(message="SmolAgents agent completed successfully",
+                               details={"result": str(result)[:500] if result else None})
         return result
     except KeyboardInterrupt:
         logger.info("Agent stopped by user (KeyboardInterrupt)")
-        logger.session_end()
+        # No session_fail - interruption is not failure
     except Exception as e:
-        logger.error(str(e), fatal=True, exception=e)
-        logger.session_end()
+        logger.session_fail(message="SmolAgents agent failed", exception=e)
         raise
+    finally:
+        logger.session_end()
 
 
 def run_smolagents_loop(config: SUPConfig, include_mchp: bool = True, use_phase_timing: bool = True):
@@ -124,10 +126,12 @@ def run_smolagents_loop(config: SUPConfig, include_mchp: bool = True, use_phase_
             use_phase_timing=use_phase_timing,
         )
         agent.run()
+        logger.session_success(message="SmolAgents loop completed successfully")
     except KeyboardInterrupt:
         logger.info("Agent stopped by user (KeyboardInterrupt)")
+        # No session_fail - interruption is not failure
     except Exception as e:
-        logger.error(str(e), fatal=True, exception=e)
+        logger.session_fail(message="SmolAgents loop failed", exception=e)
         raise
     finally:
         logger.session_end()

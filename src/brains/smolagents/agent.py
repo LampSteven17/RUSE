@@ -11,6 +11,8 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
 
+from common.logging.llm_callbacks import setup_litellm_callbacks
+
 # Configure logging to show smolagents library output (like browser_use does)
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +53,10 @@ class SmolAgent:
         self.model_name = get_model(model)
         self.tools = tools
         self.logger = logger
+
+        # Set up LLM logging callbacks if logger is provided
+        if self.logger:
+            setup_litellm_callbacks(self.logger)
 
         # Build the LiteLLM model ID (Ollama format)
         model_id = f"ollama/{self.model_name}"

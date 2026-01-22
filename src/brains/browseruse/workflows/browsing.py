@@ -15,6 +15,7 @@ from brains.browseruse.workflows.base import BUWorkflow
 from brains.browseruse.tasks import DEFAULT_TASKS, RESEARCH_TASKS, BROWSING_TASKS
 from brains.browseruse.prompts import BUPrompts
 from common.config.model_config import get_model
+from common.logging.llm_callbacks import create_langchain_callback
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -54,15 +55,24 @@ class BrowsingWorkflow(BUWorkflow):
         self.headless = headless
         self.max_steps = max_steps
         self._llm = None
+        self._logger = None  # Store logger for LLM callback setup
 
         # Combine all task lists for variety
         self.all_tasks = DEFAULT_TASKS + RESEARCH_TASKS + BROWSING_TASKS
 
-    def _get_llm(self):
-        """Lazy-load the LLM."""
+    def _get_llm(self, logger: Optional["AgentLogger"] = None):
+        """Lazy-load the LLM with logging callbacks."""
+        # If logger changed, recreate LLM with new callbacks
+        if logger and logger != self._logger:
+            self._llm = None
+            self._logger = logger
+
         if self._llm is None:
             from browser_use import ChatOllama
-            self._llm = ChatOllama(model=self.model_name)
+            callbacks = None
+            if self._logger:
+                callbacks = [create_langchain_callback(self._logger)]
+            self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
         return self._llm
 
     def _get_browser_session(self):
@@ -95,7 +105,7 @@ class BrowsingWorkflow(BUWorkflow):
             browser_session = self._get_browser_session()
             agent = Agent(
                 task=full_prompt,
-                llm=self._get_llm(),
+                llm=self._get_llm(logger),
                 browser_session=browser_session,
             )
             result = await agent.run(max_steps=self.max_steps)

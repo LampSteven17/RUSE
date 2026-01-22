@@ -84,9 +84,11 @@ def main():
 
     # Run the upstream pyhuman
     # Note: The upstream code is expected to be at /opt/human/pyhuman
+    # IMPORTANT: Must use the upstream pyhuman venv's Python, not system/DOLOS venv Python.
+    # The upstream venv has selenium, pyautogui, requests etc. installed from requirements.txt.
     try:
         proc = subprocess.Popen(
-            ["xvfb-run", "-a", "python3", "human.py"],
+            ["xvfb-run", "-a", "/opt/human/pyhuman/venv/bin/python3", "human.py"],
             cwd="/opt/human/pyhuman",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -105,6 +107,14 @@ def main():
         proc.wait()
         parser.finalize()
 
+        # Determine session outcome based on exit code
+        if proc.returncode == 0:
+            logger.session_success(message="M0 completed successfully",
+                                   details={"exit_code": proc.returncode})
+        else:
+            logger.session_fail(message=f"M0 exited with non-zero code: {proc.returncode}",
+                                details={"exit_code": proc.returncode})
+
         logger.session_end(summary={
             "exit_code": proc.returncode,
             "status": "completed" if proc.returncode == 0 else "error"
@@ -113,9 +123,15 @@ def main():
         return proc.returncode
 
     except FileNotFoundError as e:
-        error_msg = f"M0 upstream pyhuman not found at /opt/human/pyhuman: {e}"
+        # Provide actionable error message based on what's missing
+        if "xvfb-run" in str(e):
+            error_msg = f"xvfb-run not found. Install with: sudo apt-get install xvfb"
+        elif "venv/bin/python3" in str(e):
+            error_msg = f"Upstream pyhuman venv not found at /opt/human/pyhuman/venv. Run INSTALL_SUP.sh --M0 to create it."
+        else:
+            error_msg = f"M0 upstream pyhuman not found at /opt/human/pyhuman: {e}"
         print(f"ERROR: {error_msg}")
-        logger.error(error_msg, fatal=True)
+        logger.session_fail(message=error_msg, exception=e)
         logger.session_end(summary={"exit_code": -1, "error": error_msg})
         return 1
 
@@ -123,13 +139,14 @@ def main():
         print("\nM0 interrupted by user")
         logger.info("M0 stopped by user (KeyboardInterrupt)")
         parser.finalize()
+        # No session_fail - interruption is not failure
         logger.session_end(summary={"exit_code": -2, "status": "interrupted"})
         return 0
 
     except Exception as e:
         error_msg = str(e)
         print(f"ERROR: {error_msg}")
-        logger.error(error_msg, fatal=True, exception=e)
+        logger.session_fail(message=error_msg, exception=e)
         logger.session_end(summary={"exit_code": -1, "error": error_msg})
         return 1
 
