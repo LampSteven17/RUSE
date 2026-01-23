@@ -90,12 +90,28 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --S5.gemma          SmolAgentLoop + gemma3:4b + PHASE timing
     --S6.deepseek       SmolAgentLoop + deepseek-r1:8b + PHASE timing
 
+  BrowserUse CPU Series (Baseline - no GPU):
+    --BC1.llama         BrowserUse + llama3.1:8b (CPU)
+    --BC2.gemma         BrowserUse + gemma3:4b (CPU)
+    --BC3.deepseek      BrowserUse + deepseek-r1:8b (CPU)
+    --BC7.lfm           BrowserUse + lfm2.5-thinking (CPU)
+    --BC8.ministral     BrowserUse + ministral:3b (CPU)
+    --BC9.qwen          BrowserUse + qwen2.5:3b (CPU)
+
+  SmolAgents CPU Series (Baseline - no GPU):
+    --SC1.llama         SmolAgents + llama3.1:8b (CPU)
+    --SC2.gemma         SmolAgents + gemma3:4b (CPU)
+    --SC3.deepseek      SmolAgents + deepseek-r1:8b (CPU)
+    --SC7.lfm           SmolAgents + lfm2.5-thinking (CPU)
+    --SC8.ministral     SmolAgents + ministral:3b (CPU)
+    --SC9.qwen          SmolAgents + qwen2.5:3b (CPU)
+
 === Long-Form Options ===
 
   --brain <TYPE>        Brain type: mchp, smolagents, browseruse
   --content <TYPE>      Content controller: mchp, smolagents, browseruse
   --mechanics <TYPE>    Mechanics controller: mchp, smolagents, browseruse
-  --model <MODEL>       Model: none, llama, gemma, deepseek
+  --model <MODEL>       Model: none, llama, gemma, deepseek, lfm, ministral, qwen
   --phase               Enable PHASE timing/prompts (adds + suffix)
 
 === Execution Options ===
@@ -172,15 +188,36 @@ CONFIGS=(
     ["S4.llama"]="smolagents:smolagents:smolagents:llama:true"
     ["S5.gemma"]="smolagents:smolagents:smolagents:gemma:true"
     ["S6.deepseek"]="smolagents:smolagents:smolagents:deepseek:true"
+
+    # BC Series - BrowserUse CPU (Baseline, no GPU)
+    ["BC1.llama"]="browseruse:browseruse:browseruse:llama:false"
+    ["BC2.gemma"]="browseruse:browseruse:browseruse:gemma:false"
+    ["BC3.deepseek"]="browseruse:browseruse:browseruse:deepseek:false"
+    ["BC7.lfm"]="browseruse:browseruse:browseruse:lfm:false"
+    ["BC8.ministral"]="browseruse:browseruse:browseruse:ministral:false"
+    ["BC9.qwen"]="browseruse:browseruse:browseruse:qwen:false"
+
+    # SC Series - SmolAgents CPU (Baseline, no GPU)
+    ["SC1.llama"]="smolagents:smolagents:smolagents:llama:false"
+    ["SC2.gemma"]="smolagents:smolagents:smolagents:gemma:false"
+    ["SC3.deepseek"]="smolagents:smolagents:smolagents:deepseek:false"
+    ["SC7.lfm"]="smolagents:smolagents:smolagents:lfm:false"
+    ["SC8.ministral"]="smolagents:smolagents:smolagents:ministral:false"
+    ["SC9.qwen"]="smolagents:smolagents:smolagents:qwen:false"
 )
 
 # Model name mappings
 declare -A MODEL_NAMES
 MODEL_NAMES=(
     ["none"]=""
+    # GPU-optimized models
     ["llama"]="llama3.1:8b"
     ["gemma"]="gemma3:4b"
     ["deepseek"]="deepseek-r1:8b"
+    # CPU-friendly models
+    ["lfm"]="lfm2.5-thinking:latest"
+    ["ministral"]="ministral:3b"
+    ["qwen"]="qwen2.5:3b"
 )
 
 list_configs() {
@@ -227,6 +264,20 @@ list_configs() {
         printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s phase=true\n" \
             "--$key" "$brain" "$content" "$mechanics" "$model"
     done
+    echo ""
+    echo "BrowserUse CPU Series (Baseline - no GPU):"
+    for key in BC1.llama BC2.gemma BC3.deepseek BC7.lfm BC8.ministral BC9.qwen; do
+        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
+        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
+            "--$key" "$brain" "$content" "$mechanics" "$model"
+    done
+    echo ""
+    echo "SmolAgents CPU Series (Baseline - no GPU):"
+    for key in SC1.llama SC2.gemma SC3.deepseek SC7.lfm SC8.ministral SC9.qwen; do
+        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
+        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
+            "--$key" "$brain" "$content" "$mechanics" "$model"
+    done
 }
 
 parse_config_key() {
@@ -250,11 +301,13 @@ parse_args() {
                 exit 0
                 ;;
 
-            # Config key shortcuts (e.g., --M1, --S1.llama, --B4.llama)
+            # Config key shortcuts (e.g., --M1, --S1.llama, --B4.llama, --BC1.llama, --SC1.llama)
             --M0|--M1|--M2.llama|--M2a.llama|--M2b.llama|--M3.llama|--M3a.llama|--M3b.llama|\
             --M4.llama|--M4a.llama|--M4b.llama|--M5.llama|--M5a.llama|--M5b.llama|\
             --B1.llama|--B2.gemma|--B3.deepseek|--B4.llama|--B5.gemma|--B6.deepseek|\
-            --S1.llama|--S2.gemma|--S3.deepseek|--S4.llama|--S5.gemma|--S6.deepseek)
+            --S1.llama|--S2.gemma|--S3.deepseek|--S4.llama|--S5.gemma|--S6.deepseek|\
+            --BC1.llama|--BC2.gemma|--BC3.deepseek|--BC7.lfm|--BC8.ministral|--BC9.qwen|\
+            --SC1.llama|--SC2.gemma|--SC3.deepseek|--SC7.lfm|--SC8.ministral|--SC9.qwen)
                 parse_config_key "${1#--}"
                 ;;
 

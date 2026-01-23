@@ -8,7 +8,7 @@ from typing import Optional, Literal
 
 BrainType = Literal["mchp", "browseruse", "smolagents"]
 ControllerType = Literal["none", "smolagents", "browseruse"]
-ModelType = Literal["llama", "gemma", "deepseek"]
+ModelType = Literal["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"]
 
 
 @dataclass
@@ -102,6 +102,22 @@ CONFIGS = {
     "S4.llama": SUPConfig(brain="smolagents", model="llama", phase=True),
     "S5.gemma": SUPConfig(brain="smolagents", model="gemma", phase=True),
     "S6.deepseek": SUPConfig(brain="smolagents", model="deepseek", phase=True),
+
+    # BC Series - BrowserUse CPU (Baseline, no GPU)
+    "BC1.llama": SUPConfig(brain="browseruse", model="llama"),
+    "BC2.gemma": SUPConfig(brain="browseruse", model="gemma"),
+    "BC3.deepseek": SUPConfig(brain="browseruse", model="deepseek"),
+    "BC7.lfm": SUPConfig(brain="browseruse", model="lfm"),
+    "BC8.ministral": SUPConfig(brain="browseruse", model="ministral"),
+    "BC9.qwen": SUPConfig(brain="browseruse", model="qwen"),
+
+    # SC Series - SmolAgents CPU (Baseline, no GPU)
+    "SC1.llama": SUPConfig(brain="smolagents", model="llama"),
+    "SC2.gemma": SUPConfig(brain="smolagents", model="gemma"),
+    "SC3.deepseek": SUPConfig(brain="smolagents", model="deepseek"),
+    "SC7.lfm": SUPConfig(brain="smolagents", model="lfm"),
+    "SC8.ministral": SUPConfig(brain="smolagents", model="ministral"),
+    "SC9.qwen": SUPConfig(brain="smolagents", model="qwen"),
 }
 
 
