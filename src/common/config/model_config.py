@@ -10,9 +10,14 @@ DEFAULT_MODEL = "llama3.1:8b"
 
 # Available models for experiments
 MODELS = {
+    # GPU-optimized models
     "llama": "llama3.1:8b",
     "gemma": "gemma3:4b",
     "deepseek": "deepseek-r1:8b",
+    # CPU-friendly models
+    "lfm": "lfm2.5-thinking:latest",
+    "ministral": "ministral:3b",
+    "qwen": "qwen2.5:3b",
 }
 
 # Reverse mapping for CLI display
