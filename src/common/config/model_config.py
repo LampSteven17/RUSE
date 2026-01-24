@@ -16,7 +16,7 @@ MODELS = {
     "deepseek": "deepseek-r1:8b",
     # CPU-friendly models
     "lfm": "lfm2.5-thinking:latest",
-    "ministral": "ministral:3b",
+    "ministral": "ministral-3:3b",
     "qwen": "qwen2.5:3b",
 }
 

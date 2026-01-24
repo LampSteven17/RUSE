@@ -95,7 +95,7 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --BC2.gemma         BrowserUse + gemma3:4b (CPU)
     --BC3.deepseek      BrowserUse + deepseek-r1:8b (CPU)
     --BC7.lfm           BrowserUse + lfm2.5-thinking (CPU)
-    --BC8.ministral     BrowserUse + ministral:3b (CPU)
+    --BC8.ministral     BrowserUse + ministral-3:3b (CPU)
     --BC9.qwen          BrowserUse + qwen2.5:3b (CPU)
 
   SmolAgents CPU Series (Baseline - no GPU):
@@ -103,7 +103,7 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --SC2.gemma         SmolAgents + gemma3:4b (CPU)
     --SC3.deepseek      SmolAgents + deepseek-r1:8b (CPU)
     --SC7.lfm           SmolAgents + lfm2.5-thinking (CPU)
-    --SC8.ministral     SmolAgents + ministral:3b (CPU)
+    --SC8.ministral     SmolAgents + ministral-3:3b (CPU)
     --SC9.qwen          SmolAgents + qwen2.5:3b (CPU)
 
 === Long-Form Options ===
@@ -216,7 +216,7 @@ MODEL_NAMES=(
     ["deepseek"]="deepseek-r1:8b"
     # CPU-friendly models
     ["lfm"]="lfm2.5-thinking:latest"
-    ["ministral"]="ministral:3b"
+    ["ministral"]="ministral-3:3b"
     ["qwen"]="qwen2.5:3b"
 )
 
