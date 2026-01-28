@@ -18,7 +18,18 @@ class ExecuteCommand(BaseWorkflow):
 
     @staticmethod
     def action(extra=None, logger=None):
+        if not extra:
+            if logger:
+                logger.warning("ExecuteCommand called with no commands")
+            return
         for c in extra:
             if logger:
-                logger.gui_action("execute_command", target=c)
-            subprocess.Popen(c, shell=True)
+                logger.step_start("execute_command", category="shell", message=c)
+            try:
+                subprocess.Popen(c, shell=True)
+                if logger:
+                    logger.step_success("execute_command")
+            except Exception as e:
+                if logger:
+                    logger.step_error("execute_command", str(e), exception=e)
+                raise
