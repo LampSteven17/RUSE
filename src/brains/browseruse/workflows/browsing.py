@@ -16,6 +16,7 @@ from brains.browseruse.tasks import DEFAULT_TASKS, RESEARCH_TASKS, BROWSING_TASK
 from brains.browseruse.prompts import BUPrompts
 from common.config.model_config import get_model
 from common.logging.llm_callbacks import create_langchain_callback
+from common.logging.task_categorizer import categorize_task
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -34,8 +35,8 @@ class BrowsingWorkflow(BUWorkflow):
     """
     Browsing workflow using BrowserUse.
 
-    Performs AI-powered web browsing tasks, categorized as
-    "Web Browsing" to match MCHP's workflow categories.
+    Performs AI-powered web browsing tasks with dynamic categorization
+    based on task content (browser, video, office, etc.).
     """
 
     def __init__(
@@ -48,7 +49,7 @@ class BrowsingWorkflow(BUWorkflow):
         super().__init__(
             name=WORKFLOW_NAME,
             description=WORKFLOW_DESCRIPTION,
-            category="Web Browsing"
+            category="browser"  # Default, will be updated per-task
         )
         self.model_name = get_model(model)
         self.prompts = prompts
@@ -71,8 +72,25 @@ class BrowsingWorkflow(BUWorkflow):
             from browser_use import ChatOllama
             callbacks = None
             if self._logger:
-                callbacks = [create_langchain_callback(self._logger)]
-            self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
+                handler = create_langchain_callback(self._logger)
+                if handler is not None:
+                    callbacks = [handler]
+
+            # Create base LLM - callbacks are added via with_config for compatibility
+            # with different langchain-ollama versions
+            llm = ChatOllama(model=self.model_name)
+
+            # Attach callbacks using with_config (works across langchain versions)
+            if callbacks:
+                try:
+                    self._llm = llm.with_config({"callbacks": callbacks})
+                except Exception:
+                    # Fallback: some versions don't support with_config for callbacks
+                    self._llm = llm
+                    if self._logger:
+                        self._logger.warning("Could not attach LLM callbacks via with_config")
+            else:
+                self._llm = llm
         return self._llm
 
     def _get_browser_session(self):
@@ -128,6 +146,18 @@ class BrowsingWorkflow(BUWorkflow):
             task = extra.get('task')
         if task is None:
             task = random.choice(self.all_tasks)
+            # Log task selection decision
+            if logger:
+                logger.decision(
+                    choice="browsing_task",
+                    options=self.all_tasks[:5] if len(self.all_tasks) > 5 else self.all_tasks,
+                    selected=task,
+                    context=f"Task from {len(self.all_tasks)} available tasks",
+                    method="random"
+                )
+
+        # Dynamically categorize based on task content
+        self.category = categorize_task(task, default="browser")
 
         # Update description for logging
         self.description = task[:50] + "..." if len(task) > 50 else task

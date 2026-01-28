@@ -150,7 +150,12 @@ CREATE TABLE IF NOT EXISTS events (
     -- New columns for step-based logging framework
     category             VARCHAR,      -- Step category: browser, video, office, shell, etc.
     step_name            VARCHAR,      -- Name of the step (navigate, click, login, etc.)
-    status               VARCHAR       -- Step status: start, success, error
+    status               VARCHAR,      -- Step status: start, success, error
+    -- LLM-specific columns for fast querying
+    input_tokens         INTEGER,      -- Token count for LLM input/prompt
+    output_tokens        INTEGER,      -- Token count for LLM output/completion
+    total_tokens         INTEGER,      -- Total tokens used
+    llm_output           VARCHAR       -- Truncated LLM response text (for llm_response events)
 );
 """
 
@@ -309,11 +314,14 @@ def collect_logs_from_vm(
     """SSH to VM and collect all JSONL logs."""
     result = CollectionResult(experiment=experiment, vm=vm)
 
-    # The log directory is based on sup_behavior
+    # Try multiple potential log paths for backwards compatibility
+    # 1. Expected path: /opt/dolos-deploy/deployed_sups/{behavior}/logs
+    # 2. Legacy nested path: /opt/dolos-deploy/deployed_sups/{behavior}/deployed_sups/*/logs
     remote_log_dir = f"{REMOTE_LOG_BASE}/{vm.sup_behavior}/logs"
+    legacy_nested_pattern = f"{REMOTE_LOG_BASE}/{vm.sup_behavior}/deployed_sups/*/logs"
 
-    # List remote log files - both systemd logs and any JSONL files
-    list_cmd = f"ls -1 {remote_log_dir}/*.log {remote_log_dir}/*.jsonl 2>/dev/null || echo ''"
+    # List remote log files from both potential locations
+    list_cmd = f"ls -1 {remote_log_dir}/*.log {remote_log_dir}/*.jsonl {legacy_nested_pattern}/*.log {legacy_nested_pattern}/*.jsonl 2>/dev/null || echo ''"
     success, output = ssh_command(vm.ip, list_cmd)
 
     if not success:
@@ -569,6 +577,18 @@ def parse_jsonl_file(
                 event['category'] = details.get('category')
                 event['step_name'] = details.get('step_name')
                 event['status'] = details.get('status')
+                # LLM-specific fields (for llm_response events)
+                tokens = details.get('tokens', {})
+                if isinstance(tokens, dict):
+                    event['input_tokens'] = tokens.get('input')
+                    event['output_tokens'] = tokens.get('output')
+                    event['total_tokens'] = tokens.get('total')
+                else:
+                    event['input_tokens'] = None
+                    event['output_tokens'] = None
+                    event['total_tokens'] = None
+                # LLM output text (truncated in logger, store as-is)
+                event['llm_output'] = details.get('output')
             else:
                 event['duration_ms'] = None
                 event['success'] = None
@@ -578,6 +598,10 @@ def parse_jsonl_file(
                 event['category'] = None
                 event['step_name'] = None
                 event['status'] = None
+                event['input_tokens'] = None
+                event['output_tokens'] = None
+                event['total_tokens'] = None
+                event['llm_output'] = None
 
             yield event
 
@@ -693,7 +717,12 @@ def load_events_to_duckdb(
             # New step-based logging fields
             'category': event.get('category'),
             'step_name': event.get('step_name'),
-            'status': event.get('status')
+            'status': event.get('status'),
+            # LLM-specific fields
+            'input_tokens': event.get('input_tokens'),
+            'output_tokens': event.get('output_tokens'),
+            'total_tokens': event.get('total_tokens'),
+            'llm_output': event.get('llm_output')
         })
 
         if len(rows) >= batch_size:
@@ -854,10 +883,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python log_retrieval/collect_sup_logs.py                              # All experiments
-    python log_retrieval/collect_sup_logs.py --experiments exp-1          # Specific experiment
-    python log_retrieval/collect_sup_logs.py --db-name exp1_2026-01-07    # Custom DB name
+    python log_retrieval/collect_sup_logs.py                              # All experiments (sup_logs.duckdb)
+    python log_retrieval/collect_sup_logs.py --experiments exp-1          # Single experiment (sup-logs-exp-1.duckdb)
+    python log_retrieval/collect_sup_logs.py --experiments exp-1 exp-2    # Multiple experiments (sup_logs.duckdb)
+    python log_retrieval/collect_sup_logs.py --db-name custom             # Custom DB name
+    python log_retrieval/collect_sup_logs.py --experiments exp-1 --clean  # Delete and rebuild DB
     python log_retrieval/collect_sup_logs.py --dry-run                    # Preview only
+
+Database naming:
+    - Single experiment: sup-logs-{experiment}.duckdb (automatic)
+    - Multiple experiments or --db-name: uses specified name or sup_logs.duckdb
         """
     )
     parser.add_argument(
@@ -877,8 +912,12 @@ Examples:
         help='Skip loading into DuckDB (only collect raw files)'
     )
     parser.add_argument(
-        '--db-name', type=str, default='sup_logs.duckdb',
-        help='Name for the DuckDB file (default: sup_logs.duckdb)'
+        '--db-name', type=str, default=None,
+        help='Name for the DuckDB file (default: auto-generated based on experiments)'
+    )
+    parser.add_argument(
+        '--clean', action='store_true',
+        help='Delete existing database before collecting (rebuild from scratch)'
     )
     args = parser.parse_args()
 
@@ -912,13 +951,44 @@ Examples:
     collection_date = datetime.now().strftime("%Y-%m-%d")
     raw_dir = BASE_OUTPUT_DIR / "raw" / collection_date
 
-    # Ensure db name ends with .duckdb
-    db_name = args.db_name if args.db_name.endswith('.duckdb') else f"{args.db_name}.duckdb"
+    # Determine database name:
+    # - If --db-name provided, use it
+    # - If single experiment, use sup-logs-{experiment}.duckdb
+    # - If multiple experiments or all, use sup_logs.duckdb
+    if args.db_name:
+        db_name = args.db_name if args.db_name.endswith('.duckdb') else f"{args.db_name}.duckdb"
+    elif len(experiments) == 1:
+        db_name = f"sup-logs-{experiments[0]}.duckdb"
+    else:
+        db_name = "sup_logs.duckdb"
+
     db_path = BASE_OUTPUT_DIR / db_name
 
     # Manifest named to match db
     manifest_name = db_name.replace('.duckdb', '_manifest.json')
     manifest_path = BASE_OUTPUT_DIR / manifest_name
+
+    # Show database configuration
+    print(f"\nDatabase: {db_path}")
+    if db_path.exists():
+        print(f"  Status: EXISTS (will append data)")
+        if not args.clean:
+            print(f"  Tip: Use --clean to rebuild from scratch")
+    else:
+        print(f"  Status: NEW (will be created)")
+
+    # Handle --clean flag: delete existing database
+    if args.clean and not args.dry_run:
+        if db_path.exists():
+            print(f"\n[--clean] Deleting existing database: {db_path}")
+            db_path.unlink()
+        if manifest_path.exists():
+            print(f"[--clean] Deleting existing manifest: {manifest_path}")
+            manifest_path.unlink()
+        # Also clean up any local /tmp version
+        local_tmp_db = Path("/tmp") / db_name
+        if local_tmp_db.exists():
+            local_tmp_db.unlink()
 
     if not args.dry_run:
         BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1229,7 +1299,12 @@ Examples:
             -- New columns for step-based logging
             category_extracted as category,
             step_name_extracted as step_name,
-            status_extracted as status
+            status_extracted as status,
+            -- LLM-specific columns (NULL for raw logs)
+            NULL as input_tokens,
+            NULL as output_tokens,
+            NULL as total_tokens,
+            NULL as llm_output
         FROM events_from_raw
     """)
     print("  View created: unified_events")
@@ -1547,23 +1622,58 @@ Examples:
             success,
             error_message,
             action,
-            -- Extract LLM-specific fields from details
+            -- LLM token columns (now stored directly)
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            -- LLM output text
+            llm_output,
+            -- Calculate tokens per second (for llm_response events)
             CASE
-                WHEN details IS NOT NULL THEN json_extract_string(details, '$.tokens.input')
+                WHEN event_type = 'llm_response' AND duration_ms > 0 AND output_tokens IS NOT NULL
+                THEN ROUND(output_tokens * 1000.0 / duration_ms, 2)
                 ELSE NULL
-            END as input_tokens,
+            END as tokens_per_second,
+            -- Extract fatal flag from details for llm_error events
             CASE
-                WHEN details IS NOT NULL THEN json_extract_string(details, '$.tokens.output')
-                ELSE NULL
-            END as output_tokens,
-            CASE
-                WHEN details IS NOT NULL THEN json_extract_string(details, '$.fatal')
+                WHEN details IS NOT NULL THEN CAST(json_extract(details, '$.fatal') AS BOOLEAN)
                 ELSE NULL
             END as fatal
         FROM unified_events
         WHERE event_type IN ('llm_request', 'llm_response', 'llm_error')
     """)
     print("  View created: llm_analysis")
+
+    # Create llm_performance view for aggregate LLM metrics per model/SUP
+    print("  Creating llm_performance view...")
+    conn.execute("""
+        CREATE OR REPLACE VIEW llm_performance AS
+        SELECT
+            experiment_name,
+            sup_behavior,
+            model,
+            COUNT(*) FILTER (WHERE event_type = 'llm_request') as request_count,
+            COUNT(*) FILTER (WHERE event_type = 'llm_response') as response_count,
+            COUNT(*) FILTER (WHERE event_type = 'llm_error') as error_count,
+            -- Timing stats (from llm_response events)
+            ROUND(AVG(duration_ms) FILTER (WHERE event_type = 'llm_response'), 0) as avg_duration_ms,
+            MIN(duration_ms) FILTER (WHERE event_type = 'llm_response') as min_duration_ms,
+            MAX(duration_ms) FILTER (WHERE event_type = 'llm_response') as max_duration_ms,
+            ROUND(STDDEV(duration_ms) FILTER (WHERE event_type = 'llm_response'), 0) as stddev_duration_ms,
+            -- Token stats
+            SUM(input_tokens) FILTER (WHERE event_type = 'llm_response') as total_input_tokens,
+            SUM(output_tokens) FILTER (WHERE event_type = 'llm_response') as total_output_tokens,
+            ROUND(AVG(input_tokens) FILTER (WHERE event_type = 'llm_response'), 0) as avg_input_tokens,
+            ROUND(AVG(output_tokens) FILTER (WHERE event_type = 'llm_response'), 0) as avg_output_tokens,
+            -- Throughput (tokens per second)
+            ROUND(AVG(
+                CASE WHEN duration_ms > 0 AND output_tokens IS NOT NULL
+                THEN output_tokens * 1000.0 / duration_ms ELSE NULL END
+            ) FILTER (WHERE event_type = 'llm_response'), 2) as avg_tokens_per_second
+        FROM llm_analysis
+        GROUP BY experiment_name, sup_behavior, model
+    """)
+    print("  View created: llm_performance")
 
     total_converted_events = 0  # Conversion happens at query time now
 
@@ -1597,7 +1707,8 @@ Examples:
     print(f"  step_analysis       - VIEW: step events filtered (step_start/success/error)")
     print(f"  step_durations      - VIEW: step start/end pairs with duration_ms by category")
     print(f"  session_outcomes    - VIEW: session-level success/fail with workflow/step counts")
-    print(f"  llm_analysis        - VIEW: LLM events (request/response/error) with tokens")
+    print(f"  llm_analysis        - VIEW: LLM events with tokens, duration, tokens/sec")
+    print(f"  llm_performance     - VIEW: Aggregate LLM metrics per model/SUP")
     print(f"\nExample queries:")
     print(f"  duckdb {db_path}")
     print(f"  -- Event type breakdown")
@@ -1616,9 +1727,12 @@ Examples:
     print(f"  -- Average step duration by category")
     print(f"  SELECT category, sup_behavior, AVG(duration_ms) as avg_ms, COUNT(*) as n")
     print(f"    FROM step_durations WHERE duration_ms IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 3;")
-    print(f"  -- LLM error rate by SUP")
-    print(f"  SELECT sup_behavior, COUNT(*) FILTER (WHERE event_type = 'llm_error') as errors,")
-    print(f"         COUNT(*) FILTER (WHERE event_type = 'llm_request') as requests FROM llm_analysis GROUP BY 1;")
+    print(f"  -- LLM performance by model (timing + tokens)")
+    print(f"  SELECT model, sup_behavior, request_count, avg_duration_ms, avg_tokens_per_second,")
+    print(f"         total_input_tokens, total_output_tokens FROM llm_performance;")
+    print(f"  -- LLM response times distribution")
+    print(f"  SELECT sup_behavior, model, MIN(duration_ms), AVG(duration_ms)::INT, MAX(duration_ms)")
+    print(f"    FROM llm_analysis WHERE event_type='llm_response' GROUP BY 1, 2;")
 
     return 0
 

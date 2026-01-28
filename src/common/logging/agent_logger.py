@@ -135,9 +135,19 @@ class AgentLogger:
         if log_dir:
             self.log_dir = Path(log_dir)
         else:
-            # Default to deployed_sups/{agent_type}/logs/
-            base_dir = Path(__file__).parent.parent.parent.parent / "deployed_sups" / agent_type / "logs"
-            self.log_dir = base_dir
+            # Check for DOLOS_LOG_DIR environment variable first (set by deployment)
+            env_log_dir = os.environ.get("DOLOS_LOG_DIR")
+            if env_log_dir:
+                self.log_dir = Path(env_log_dir)
+            else:
+                # Default: Use /opt/dolos-deploy if it exists (deployed), otherwise relative
+                deployed_base = Path("/opt/dolos-deploy/deployed_sups")
+                if deployed_base.exists():
+                    self.log_dir = deployed_base / agent_type / "logs"
+                else:
+                    # Development fallback: relative to project root
+                    base_dir = Path(__file__).parent.parent.parent.parent / "deployed_sups" / agent_type / "logs"
+                    self.log_dir = base_dir
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -543,19 +553,29 @@ class AgentLogger:
         self,
         action: str,
         params: Optional[Dict[str, Any]] = None,
-        success: bool = True
+        success: bool = True,
+        target: Optional[str] = None  # Backwards compatibility with old API
     ) -> LogEvent:
         """
         DEPRECATED: Use step() or step_start/step_success/step_error instead.
 
         Maps to: step(action, category="office", details=params)
+
+        Args:
+            action: Action name
+            params: Optional parameters dict
+            success: Whether action succeeded
+            target: Backwards-compatible alias for message (old API used target=)
         """
-        target = params.get("target") if params else None
+        # Handle backwards-compatible target parameter
+        msg = target
+        if params and not msg:
+            msg = params.get("target")
         if success:
-            return self.step_success(action, category="office", message=target,
+            return self.step_success(action, category="office", message=msg,
                                      details=params)
         else:
-            return self.step_error(action, message=f"Failed: {target or 'unknown'}",
+            return self.step_error(action, message=f"Failed: {msg or 'unknown'}",
                                    category="office", details=params)
 
     def error(
