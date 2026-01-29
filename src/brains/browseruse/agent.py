@@ -67,6 +67,11 @@ class BrowserUseAgent:
 
             # Create LLM with callbacks in constructor (langchain_ollama supports this)
             self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
+
+            # Add 'provider' attribute that browser_use expects
+            # browser_use checks: if llm.provider == 'browser-use'
+            # We set to 'ollama' to indicate standard LangChain Ollama model
+            self._llm.provider = 'ollama'
         return self._llm
 
     def _get_browser_session(self):
