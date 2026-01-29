@@ -110,6 +110,7 @@ if __name__ == "__main__":
         content=args.content,
         mechanics=args.mechanics,
         model=args.model,
+        phase=args.phase_timing,  # Pass phase_timing to get correct config key (M2 vs M4, M3 vs M5)
     )
 
     run_mchp(config, use_phase_timing=args.phase_timing)
