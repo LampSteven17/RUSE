@@ -32,9 +32,21 @@ if TYPE_CHECKING:
 # LiteLLM Callbacks (for SmolAgents)
 # =============================================================================
 
-class LiteLLMLoggingCallback:
+# Try to import CustomLogger base class from LiteLLM
+try:
+    from litellm.integrations.custom_logger import CustomLogger as LiteLLMCustomLogger
+    _LITELLM_CUSTOM_LOGGER_AVAILABLE = True
+except ImportError:
+    LiteLLMCustomLogger = object
+    _LITELLM_CUSTOM_LOGGER_AVAILABLE = False
+
+
+class LiteLLMLoggingCallback(LiteLLMCustomLogger):
     """
     Custom callback handler for LiteLLM using the CustomLogger interface.
+
+    IMPORTANT: Must inherit from litellm.integrations.custom_logger.CustomLogger
+    for LiteLLM to recognize and invoke the callback methods.
 
     LiteLLM's CustomLogger supports these methods:
     - log_pre_api_call(model, messages, kwargs)
@@ -45,6 +57,8 @@ class LiteLLMLoggingCallback:
     """
 
     def __init__(self, logger: "AgentLogger"):
+        if _LITELLM_CUSTOM_LOGGER_AVAILABLE:
+            super().__init__()
         self.logger = logger
         self._start_times: Dict[str, float] = {}
         self._request_data: Dict[str, Dict] = {}
