@@ -1,9 +1,16 @@
 import os
+import sys
 import random
+import subprocess
 import pyautogui
 from lorem.text import TextLorem
 from time import sleep
 from ..utility.base_workflow import BaseWorkflow
+
+
+# Platform detection
+IS_WINDOWS = sys.platform == 'win32'
+IS_LINUX = sys.platform.startswith('linux')
 
 
 # LLM augmentation - only used for M4/M5 configurations
@@ -44,33 +51,37 @@ def _get_filename():
     return TextLorem(wsep='-', srange=(1,3)).sentence()[:-1]
 
 
-WORKFLOW_NAME = 'OpenOfficeWriter'
-WORKFLOW_DESCRIPTION = 'Create documents with Apache OpenOffice Writer (Windows)'
+WORKFLOW_NAME = 'DocumentEditor'
+WORKFLOW_DESCRIPTION = 'Create documents with LibreOffice Writer (Linux) or OpenOffice Writer (Windows)'
 DEFAULT_WAIT_TIME = 2
 OPEN_OFFICE_PATH = r"C:\Program Files (x86)\OpenOffice 4\program\soffice"
+LIBREOFFICE_CMD = "libreoffice"
 
 def load():
-    return OpenOfficeWriter()
+    return DocumentEditor()
 
-class OpenOfficeWriter(BaseWorkflow):
+class DocumentEditor(BaseWorkflow):
 
     def __init__(self, default_wait_time=DEFAULT_WAIT_TIME, open_office_path=OPEN_OFFICE_PATH):
         super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION)
         self.default_wait_time = default_wait_time
         self.open_office_path = open_office_path
+        self._process = None
 
     def action(self, extra=None, logger=None):
         self._create_document(logger=logger)
 
     def _create_document(self, logger=None):
+        app_name = "LibreOffice Writer" if IS_LINUX else "OpenOffice Writer"
+
         # Semantic step: Create document
         if logger:
             logger.step_start("create_document", category="office",
-                              message="Creating new OpenOffice Writer document")
+                              message=f"Creating new {app_name} document")
 
         if logger:
             logger.step_start("open_application", category="office",
-                              message="OpenOffice Writer")
+                              message=app_name)
         self._new_document()
         if logger:
             logger.step_success("open_application")
@@ -128,7 +139,7 @@ class OpenOfficeWriter(BaseWorkflow):
         sleep(self.default_wait_time)
         pyautogui.typewrite(_get_word()) # type random word
         sleep(self.default_wait_time)
-        pyautogui.press('enter') 
+        pyautogui.press('enter')
         sleep(self.default_wait_time)
         pyautogui.hotkey('alt','y') # close pop up box that may appear
         sleep(self.default_wait_time)
@@ -155,7 +166,7 @@ class OpenOfficeWriter(BaseWorkflow):
             ['shift' , 'left'], # move cursor & select to left
             ['shift' , 'up'] # move cursor & select up
         ]
-        pyautogui.hotkey(*random.choice(selection_params)) 
+        pyautogui.hotkey(*random.choice(selection_params))
 
     def _format_text(self):
         self._select_text()
@@ -171,7 +182,7 @@ class OpenOfficeWriter(BaseWorkflow):
 
     def _delete_text(self):
         pyautogui.hotkey('ctrl', 'shift', 'delete') # Delete text to beginning of line
-        pyautogui.hotkey('ctrl', 'backspace') # Delete text to beginning of word 
+        pyautogui.hotkey('ctrl', 'backspace') # Delete text to beginning of word
 
     def _save_pdf(self):
         # Export a pdf
@@ -186,25 +197,41 @@ class OpenOfficeWriter(BaseWorkflow):
         pyautogui.hotkey('alt','y') # choose "yes" if a popup asks if you'd like to overwrite another file
 
     def _new_document(self):
-        # Open new document in OpenOffice
-        os.startfile(self.open_office_path) # open OpenOffice
-        sleep(self.default_wait_time)
-        pyautogui.press('d') # choose document editing
-        sleep(self.default_wait_time)
-        # pyautogui.hotkey('ctrl','shift', 'j') # full screen mode
+        if IS_LINUX:
+            # Launch LibreOffice Writer directly on Linux
+            self._process = subprocess.Popen(
+                [LIBREOFFICE_CMD, '--writer'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            sleep(self.default_wait_time + 2)  # LibreOffice may take longer to start
+        else:
+            # Windows: Use OpenOffice start menu
+            os.startfile(self.open_office_path)
+            sleep(self.default_wait_time)
+            pyautogui.press('d')  # choose document editing
+            sleep(self.default_wait_time)
 
     def _save_quit(self):
         pyautogui.hotkey('ctrl', 's') # save
         sleep(self.default_wait_time)
         pyautogui.typewrite(_get_filename()) # type random file name
         sleep(self.default_wait_time)
-        pyautogui.press('enter') 
+        pyautogui.press('enter')
         pyautogui.hotkey('alt','y') # choose "yes" if a popup asks if you'd like to overwrite another file
         sleep(self.default_wait_time)
-        pyautogui.hotkey('ctrl','q') # quit OpenOffice
+        pyautogui.hotkey('ctrl','q') # quit
 
     def _write_paragraph(self):
         pyautogui.typewrite(_get_paragraph())
 
     def _write_sentence(self):
         pyautogui.typewrite(_get_sentence())
+
+    def cleanup(self):
+        """Clean up any running processes."""
+        if self._process:
+            try:
+                self._process.terminate()
+            except Exception:
+                pass

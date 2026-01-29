@@ -30,10 +30,9 @@ DEFAULT_GROUP_INTERVAL = 500
 
 # Windows-only workflows (use os.startfile or other Windows-specific APIs)
 # These are excluded for M2+ configs which run on Linux with LLM augmentation
+# Note: open_office_calc.py and open_office_writer.py now support LibreOffice on Linux
 WINDOWS_ONLY_WORKFLOWS = {
     'ms_paint.py',
-    'open_office_calc.py',
-    'open_office_writer.py',
 }
 
 

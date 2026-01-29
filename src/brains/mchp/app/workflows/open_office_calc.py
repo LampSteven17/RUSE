@@ -1,9 +1,16 @@
 import os
+import sys
 import random
+import subprocess
 import pyautogui
 from lorem.text import TextLorem
 from time import sleep
 from ..utility.base_workflow import BaseWorkflow
+
+
+# Platform detection
+IS_WINDOWS = sys.platform == 'win32'
+IS_LINUX = sys.platform.startswith('linux')
 
 
 # LLM augmentation - only used for M4/M5 configurations
@@ -36,28 +43,32 @@ def _get_filename():
     return TextLorem(wsep='-', srange=(1,3)).sentence()[:-1]
 
 
-WORKFLOW_NAME = 'OpenOfficeCalc'
-WORKFLOW_DESCRIPTION = 'Create spreadsheets with Apache OpenOffice Calc (Windows)'
+WORKFLOW_NAME = 'SpreadsheetEditor'
+WORKFLOW_DESCRIPTION = 'Create spreadsheets with LibreOffice Calc (Linux) or OpenOffice Calc (Windows)'
 DEFAULT_WAIT_TIME = 2
 OPEN_OFFICE_PATH = r"C:\Program Files (x86)\OpenOffice 4\program\soffice"
+LIBREOFFICE_CMD = "libreoffice"
 
 def load():
-    return OpenOfficeCalc()
+    return SpreadsheetEditor()
 
-class OpenOfficeCalc(BaseWorkflow):
+class SpreadsheetEditor(BaseWorkflow):
 
     def __init__(self, default_wait_time=DEFAULT_WAIT_TIME, open_office_path=OPEN_OFFICE_PATH):
         super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION)
         self.default_wait_time = default_wait_time
         self.open_office_path = open_office_path
+        self._process = None
 
     def action(self, extra=None, logger=None):
         self._create_spreadsheet(logger=logger)
 
     def _create_spreadsheet(self, logger=None):
+        app_name = "LibreOffice Calc" if IS_LINUX else "OpenOffice Calc"
+
         # Open application
         if logger:
-            logger.step_start("open_application", category="office", message="OpenOffice Calc")
+            logger.step_start("open_application", category="office", message=app_name)
         try:
             self._new_spreadsheet()
             if logger:
@@ -115,10 +126,20 @@ class OpenOfficeCalc(BaseWorkflow):
         sleep(self.default_wait_time)
 
     def _new_spreadsheet(self):
-        os.startfile(self.open_office_path) # start OpenOffice
-        sleep(self.default_wait_time)
-        pyautogui.press('s') # choose new spreadsheet
-        sleep(self.default_wait_time)
+        if IS_LINUX:
+            # Launch LibreOffice Calc directly on Linux
+            self._process = subprocess.Popen(
+                [LIBREOFFICE_CMD, '--calc'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            sleep(self.default_wait_time + 2)  # LibreOffice may take longer to start
+        else:
+            # Windows: Use OpenOffice start menu
+            os.startfile(self.open_office_path)
+            sleep(self.default_wait_time)
+            pyautogui.press('s')  # choose new spreadsheet
+            sleep(self.default_wait_time)
 
     def _save_quit(self):
         pyautogui.hotkey('ctrl', 's') # save
@@ -128,16 +149,18 @@ class OpenOfficeCalc(BaseWorkflow):
         pyautogui.press('enter')
         pyautogui.hotkey('alt','y') # choose "yes" if a popup asks if you'd like to overwrite another file
         sleep(self.default_wait_time)
-        pyautogui.hotkey('ctrl','q') # quit OpenOffice
+        pyautogui.hotkey('ctrl','q') # quit
 
     def _move_to_cell(self, cell_coordinate):
-        pyautogui.press('f5') # open navigator
-        pyautogui.hotkey('ctrl','a') # select column value
-        pyautogui.write(str(cell_coordinate[0])) # enter new column value
-        pyautogui.press('tab') # select row value
-        pyautogui.write(str(cell_coordinate[1])) # enter new row value
+        # Use Ctrl+G for Go To dialog (works in both LibreOffice and OpenOffice)
+        pyautogui.hotkey('ctrl', 'g') if IS_LINUX else pyautogui.press('f5')
+        sleep(0.5)
+        # Type cell reference directly (e.g., "A1")
+        cell_ref = f"{cell_coordinate[0].upper()}{cell_coordinate[1]}"
+        pyautogui.typewrite(cell_ref)
         pyautogui.press('enter')
-        pyautogui.press('f5') # close navigator
+        sleep(0.5)
+        pyautogui.press('esc')  # close dialog
 
     def _insert_table(self):
         row_length = random.randint(3,10)
@@ -149,3 +172,11 @@ class OpenOfficeCalc(BaseWorkflow):
             for k in range(0, row_length):
                 pyautogui.write(str(random.randint(0,10000))) # type a random number
                 pyautogui.press('tab')
+
+    def cleanup(self):
+        """Clean up any running processes."""
+        if self._process:
+            try:
+                self._process.terminate()
+            except Exception:
+                pass
