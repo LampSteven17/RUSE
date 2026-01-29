@@ -56,7 +56,8 @@ class BrowserUseAgent:
     def _get_llm(self):
         """Lazy-load the LLM with logging callbacks."""
         if self._llm is None:
-            from browser_use import ChatOllama
+            # Import from langchain_ollama directly (NOT browser_use) to support callbacks
+            from langchain_ollama import ChatOllama
             # Set up LangChain logging callbacks if logger is provided
             callbacks = None
             if self.logger:
@@ -64,21 +65,8 @@ class BrowserUseAgent:
                 if handler is not None:
                     callbacks = [handler]
 
-            # Create base LLM - callbacks are added via with_config for compatibility
-            # with different langchain-ollama versions
-            llm = ChatOllama(model=self.model_name)
-
-            # Attach callbacks using with_config (works across langchain versions)
-            if callbacks:
-                try:
-                    self._llm = llm.with_config({"callbacks": callbacks})
-                except Exception:
-                    # Fallback: some versions don't support with_config for callbacks
-                    self._llm = llm
-                    if self.logger:
-                        self.logger.warning("Could not attach LLM callbacks via with_config")
-            else:
-                self._llm = llm
+            # Create LLM with callbacks in constructor (langchain_ollama supports this)
+            self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
         return self._llm
 
     def _get_browser_session(self):

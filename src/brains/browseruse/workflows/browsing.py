@@ -69,28 +69,16 @@ class BrowsingWorkflow(BUWorkflow):
             self._logger = logger
 
         if self._llm is None:
-            from browser_use import ChatOllama
+            # Import from langchain_ollama directly (NOT browser_use) to support callbacks
+            from langchain_ollama import ChatOllama
             callbacks = None
             if self._logger:
                 handler = create_langchain_callback(self._logger)
                 if handler is not None:
                     callbacks = [handler]
 
-            # Create base LLM - callbacks are added via with_config for compatibility
-            # with different langchain-ollama versions
-            llm = ChatOllama(model=self.model_name)
-
-            # Attach callbacks using with_config (works across langchain versions)
-            if callbacks:
-                try:
-                    self._llm = llm.with_config({"callbacks": callbacks})
-                except Exception:
-                    # Fallback: some versions don't support with_config for callbacks
-                    self._llm = llm
-                    if self._logger:
-                        self._logger.warning("Could not attach LLM callbacks via with_config")
-            else:
-                self._llm = llm
+            # Create LLM with callbacks in constructor (langchain_ollama supports this)
+            self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
         return self._llm
 
     def _get_browser_session(self):
