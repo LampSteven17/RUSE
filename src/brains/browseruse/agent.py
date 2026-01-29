@@ -30,56 +30,77 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
     Create a browser_use.ChatOllama instance with logging wrapped around ainvoke.
 
     browser_use uses its own ChatOllama class (not LangChain) which directly calls
-    ollama.AsyncClient. We wrap the ainvoke method to log LLM requests/responses.
+    ollama.AsyncClient. We wrap the Ollama client's chat method to capture token
+    counts before browser_use discards them.
     """
     llm = ChatOllama(model=model)
 
     if logger is None:
         return llm
 
-    # Store the original ainvoke method
-    original_ainvoke = llm.ainvoke
+    # Store the original get_client method
+    original_get_client = llm.get_client
 
-    async def logged_ainvoke(messages, output_format=None, **kwargs):
-        """Wrapper around ainvoke that logs requests and responses."""
-        # Log the request
-        action = "generate"
-        if messages and len(messages) > 0:
-            last_msg = messages[-1]
-            if hasattr(last_msg, 'content'):
-                content = str(last_msg.content)
+    def get_logged_client():
+        """Return an Ollama client with logging wrapped around chat()."""
+        client = original_get_client()
+        original_chat = client.chat
+
+        async def logged_chat(*args, **kwargs):
+            """Wrapper that logs requests/responses with token counts."""
+            # Log the request
+            messages = kwargs.get('messages', args[1] if len(args) > 1 else [])
+            action = "generate"
+            if messages and len(messages) > 0:
+                last_msg = messages[-1]
+                content = last_msg.get('content', '') if isinstance(last_msg, dict) else str(last_msg)
                 action = content[:100] if len(content) > 100 else content
 
-        logger.llm_request(
-            action=action,
-            model=model,
-            input_data={"message_count": len(messages), "model": model}
-        )
-
-        # Call the original method
-        start_time = time.time()
-        try:
-            result = await original_ainvoke(messages, output_format, **kwargs)
-            duration_ms = int((time.time() - start_time) * 1000)
-
-            # Extract output
-            output = ""
-            if hasattr(result, 'completion'):
-                output = str(result.completion)[:500] if result.completion else ""
-
-            logger.llm_response(
-                output=output,
-                duration_ms=duration_ms,
+            logger.llm_request(
+                action=action,
                 model=model,
-                tokens=None  # browser_use ChatOllama doesn't track tokens
+                input_data={"message_count": len(messages), "model": model}
             )
-            return result
-        except Exception as e:
-            logger.llm_error(error=str(e), action=f"llm_call_{model}", fatal=True)
-            raise
 
-    # Replace the method
-    llm.ainvoke = logged_ainvoke
+            # Call the original method
+            start_time = time.time()
+            try:
+                response = await original_chat(*args, **kwargs)
+                duration_ms = int((time.time() - start_time) * 1000)
+
+                # Extract output and token counts from Ollama response
+                output = ""
+                if hasattr(response, 'message') and hasattr(response.message, 'content'):
+                    output = str(response.message.content)[:500] if response.message.content else ""
+
+                # Ollama provides token counts in the response
+                tokens = None
+                input_tokens = getattr(response, 'prompt_eval_count', None)
+                output_tokens = getattr(response, 'eval_count', None)
+                if input_tokens is not None or output_tokens is not None:
+                    tokens = {
+                        "input": input_tokens,
+                        "output": output_tokens,
+                        "total": (input_tokens or 0) + (output_tokens or 0)
+                    }
+
+                logger.llm_response(
+                    output=output,
+                    duration_ms=duration_ms,
+                    model=model,
+                    tokens=tokens
+                )
+                return response
+            except Exception as e:
+                logger.llm_error(error=str(e), action=f"llm_call_{model}", fatal=True)
+                raise
+
+        client.chat = logged_chat
+        return client
+
+    # Replace get_client with our logged version
+    llm.get_client = get_logged_client
+
     return llm
 
 
