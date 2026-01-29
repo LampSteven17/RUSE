@@ -74,22 +74,9 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
                     output = str(response.message.content)[:500] if response.message.content else ""
 
                 # Ollama provides token counts in the response
-                # Debug: log response attributes to understand structure
-                response_attrs = [a for a in dir(response) if not a.startswith('_')]
-                logger.info("Debug: Ollama response inspection", details={
-                    "response_type": str(type(response)),
-                    "response_attrs": response_attrs[:20],  # Limit to 20 attrs
-                    "has_prompt_eval_count": hasattr(response, 'prompt_eval_count'),
-                    "has_eval_count": hasattr(response, 'eval_count'),
-                })
-
                 tokens = None
                 input_tokens = getattr(response, 'prompt_eval_count', None)
                 output_tokens = getattr(response, 'eval_count', None)
-                logger.info("Debug: Token extraction", details={
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                })
                 if input_tokens is not None or output_tokens is not None:
                     tokens = {
                         "input": input_tokens,
