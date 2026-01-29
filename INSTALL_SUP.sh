@@ -606,7 +606,7 @@ install_system_deps() {
             install_chromedriver
             ;;
         mchp)
-            sudo apt-get install -y xvfb xdg-utils libxml2-dev libxslt-dev python3-tk scrot
+            sudo apt-get install -y xvfb xdg-utils libxml2-dev libxslt-dev python3-tk scrot libreoffice
             # Install Firefox from Mozilla deb repo (not snap)
             install_firefox_deb
             # Install Geckodriver
