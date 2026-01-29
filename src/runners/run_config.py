@@ -28,19 +28,25 @@ class SUPConfig:
             if self.content == "none" and self.mechanics == "none":
                 return "M1"
             elif self.content == "smolagents":
+                # M2 = SmolAgents baseline, M4 = SmolAgents + PHASE timing
+                base_num = "4" if self.phase else "2"
                 if self.mechanics == "smolagents":
-                    return f"M2.{self.model}"
+                    return f"M{base_num}.{self.model}"
                 elif self.mechanics == "none":
-                    return f"M2a.{self.model}"
+                    return f"M{base_num}a.{self.model}"
             elif self.content == "none" and self.mechanics == "smolagents":
-                return f"M2b.{self.model}"
+                base_num = "4" if self.phase else "2"
+                return f"M{base_num}b.{self.model}"
             elif self.content == "browseruse":
+                # M3 = BrowserUse baseline, M5 = BrowserUse + PHASE timing
+                base_num = "5" if self.phase else "3"
                 if self.mechanics == "browseruse":
-                    return f"M3.{self.model}"
+                    return f"M{base_num}.{self.model}"
                 elif self.mechanics == "none":
-                    return f"M3a.{self.model}"
+                    return f"M{base_num}a.{self.model}"
             elif self.content == "none" and self.mechanics == "browseruse":
-                return f"M3b.{self.model}"
+                base_num = "5" if self.phase else "3"
+                return f"M{base_num}b.{self.model}"
 
         elif self.brain == "browseruse":
             # B1-B3: Baseline, B4-B6: Improved (loop mode + PHASE timing)
