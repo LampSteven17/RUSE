@@ -74,9 +74,14 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
                     output = str(response.message.content)[:500] if response.message.content else ""
 
                 # Ollama provides token counts in the response
+                # Debug: log response attributes to understand structure
+                log(f"Ollama response type: {type(response)}")
+                log(f"Ollama response attrs: {[a for a in dir(response) if not a.startswith('_')]}")
+
                 tokens = None
                 input_tokens = getattr(response, 'prompt_eval_count', None)
                 output_tokens = getattr(response, 'eval_count', None)
+                log(f"Token counts: input={input_tokens}, output={output_tokens}")
                 if input_tokens is not None or output_tokens is not None:
                     tokens = {
                         "input": input_tokens,
