@@ -95,9 +95,20 @@ class LiteLLMLoggingCallback(LiteLLMCustomLogger):
         """Async version of log_pre_api_call."""
         self.log_pre_api_call(model, messages, kwargs)
 
-    def log_success_event(self, kwargs: Dict, response_obj: Any, start_time: float, end_time: float):
+    def log_success_event(self, kwargs: Dict, response_obj: Any, start_time, end_time):
         """Called on successful LLM response."""
-        duration_ms = int((end_time - start_time) * 1000)
+        # Handle both float timestamps and datetime objects
+        # LiteLLM may pass either depending on version
+        from datetime import datetime, timedelta
+        if isinstance(start_time, datetime) and isinstance(end_time, datetime):
+            delta = end_time - start_time
+            duration_ms = int(delta.total_seconds() * 1000)
+        elif isinstance(end_time - start_time, timedelta):
+            # Already a timedelta
+            duration_ms = int((end_time - start_time).total_seconds() * 1000)
+        else:
+            # Float timestamps
+            duration_ms = int((end_time - start_time) * 1000)
 
         # Extract response content
         output = ""
@@ -162,11 +173,11 @@ class LiteLLMLoggingCallback(LiteLLMCustomLogger):
 
         return tokens
 
-    async def async_log_success_event(self, kwargs: Dict, response_obj: Any, start_time: float, end_time: float):
+    async def async_log_success_event(self, kwargs: Dict, response_obj: Any, start_time, end_time):
         """Async version of log_success_event."""
         self.log_success_event(kwargs, response_obj, start_time, end_time)
 
-    def log_failure_event(self, kwargs: Dict, response_obj: Any, start_time: float, end_time: float):
+    def log_failure_event(self, kwargs: Dict, response_obj: Any, start_time, end_time):
         """Called on LLM error."""
         error_msg = str(response_obj) if response_obj else "Unknown error"
         model = kwargs.get("model", "unknown")
@@ -180,7 +191,7 @@ class LiteLLMLoggingCallback(LiteLLMCustomLogger):
             fatal=fatal
         )
 
-    async def async_log_failure_event(self, kwargs: Dict, response_obj: Any, start_time: float, end_time: float):
+    async def async_log_failure_event(self, kwargs: Dict, response_obj: Any, start_time, end_time):
         """Async version of log_failure_event."""
         self.log_failure_event(kwargs, response_obj, start_time, end_time)
 
