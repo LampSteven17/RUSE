@@ -6,6 +6,44 @@ from time import sleep
 from ..utility.base_workflow import BaseWorkflow
 
 
+# LLM augmentation - only used for M4/M5 configurations
+def _use_llm_augmentation():
+    """Check if LLM augmentation should be used (M4/M5 configs)."""
+    return os.environ.get("HYBRID_LLM_BACKEND") is not None
+
+
+def _get_paragraph():
+    """Get a paragraph - uses LLM for M4/M5, TextLorem for M1."""
+    if _use_llm_augmentation():
+        from augmentations.content import llm_paragraph
+        return llm_paragraph()
+    return TextLorem().paragraph()
+
+
+def _get_sentence():
+    """Get a sentence - uses LLM for M4/M5, TextLorem for M1."""
+    if _use_llm_augmentation():
+        from augmentations.content import llm_sentence
+        return llm_sentence()
+    return TextLorem().sentence()
+
+
+def _get_word():
+    """Get a word - uses LLM for M4/M5, TextLorem for M1."""
+    if _use_llm_augmentation():
+        from augmentations.content import llm_word
+        return llm_word()
+    return TextLorem()._word()
+
+
+def _get_filename():
+    """Get a filename - uses LLM for M4/M5, TextLorem for M1."""
+    if _use_llm_augmentation():
+        from augmentations.content import llm_filename
+        return llm_filename()
+    return TextLorem(wsep='-', srange=(1,3)).sentence()[:-1]
+
+
 WORKFLOW_NAME = 'OpenOfficeWriter'
 WORKFLOW_DESCRIPTION = 'Create documents with Apache OpenOffice Writer (Windows)'
 DEFAULT_WAIT_TIME = 2
@@ -41,9 +79,9 @@ class OpenOfficeWriter(BaseWorkflow):
         if logger:
             logger.step_start("edit_content", category="office",
                               message="Typing paragraphs and sentences")
-        # Type random paragrahs and sentences
+        # Type random paragraphs and sentences
         for i in range(0, random.randint(2,10)):
-            random.choice([pyautogui.typewrite(TextLorem().paragraph()), pyautogui.typewrite(TextLorem().sentence())])
+            random.choice([pyautogui.typewrite(_get_paragraph()), pyautogui.typewrite(_get_sentence())])
             pyautogui.press('enter')
         sleep(self.default_wait_time)
         if logger:
@@ -81,14 +119,14 @@ class OpenOfficeWriter(BaseWorkflow):
 
     def _insert_comment(self):
         pyautogui.hotkey('ctrl', 'alt', 'c') # insert comment
-        pyautogui.typewrite(TextLorem().sentence()) # type random sentence
+        pyautogui.typewrite(_get_sentence()) # type random sentence
         pyautogui.press('esc') # finish commenting
         sleep(self.default_wait_time)
 
     def _find(self):
         pyautogui.hotkey('ctrl', 'f') # open Find & Replace
         sleep(self.default_wait_time)
-        pyautogui.typewrite(TextLorem()._word()) # type random word
+        pyautogui.typewrite(_get_word()) # type random word
         sleep(self.default_wait_time)
         pyautogui.press('enter') 
         sleep(self.default_wait_time)
@@ -104,7 +142,7 @@ class OpenOfficeWriter(BaseWorkflow):
         sleep(self.default_wait_time)
         pyautogui.press('backspace') # delete text
         sleep(self.default_wait_time)
-        pyautogui.typewrite(TextLorem().paragraph()) # write text
+        pyautogui.typewrite(_get_paragraph()) # write text
         sleep(self.default_wait_time)
         pyautogui.press('enter') # insert new line
         pyautogui.press('enter') # insert new line
@@ -141,7 +179,7 @@ class OpenOfficeWriter(BaseWorkflow):
         pyautogui.hotkey('alt','d') # select to Export as PDF
         pyautogui.press('enter') # choose Export as PDF
         pyautogui.hotkey('alt','x') # choose Export
-        pyautogui.typewrite(TextLorem(wsep='-', srange=(1,3)).sentence()[:-1]) # type random file name
+        pyautogui.typewrite(_get_filename()) # type random file name
         sleep(self.default_wait_time)
         pyautogui.press('enter') # press enter
         sleep(self.default_wait_time)
@@ -158,7 +196,7 @@ class OpenOfficeWriter(BaseWorkflow):
     def _save_quit(self):
         pyautogui.hotkey('ctrl', 's') # save
         sleep(self.default_wait_time)
-        pyautogui.typewrite(TextLorem(wsep='-', srange=(1,3)).sentence()[:-1]) # type random file name
+        pyautogui.typewrite(_get_filename()) # type random file name
         sleep(self.default_wait_time)
         pyautogui.press('enter') 
         pyautogui.hotkey('alt','y') # choose "yes" if a popup asks if you'd like to overwrite another file
@@ -166,7 +204,7 @@ class OpenOfficeWriter(BaseWorkflow):
         pyautogui.hotkey('ctrl','q') # quit OpenOffice
 
     def _write_paragraph(self):
-        pyautogui.typewrite(TextLorem().paragraph())
+        pyautogui.typewrite(_get_paragraph())
 
     def _write_sentence(self):
-        pyautogui.typewrite(TextLorem().sentence())
+        pyautogui.typewrite(_get_sentence())
