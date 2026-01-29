@@ -48,9 +48,8 @@
 
   tasks:
     - name: Display target configuration
-      pause:
-        seconds: 0
-        prompt: "Installing {{ sup_behavior }} on {{ inventory_hostname }} ({{ ansible_host }})"
+      debug:
+        msg: "Installing {{ sup_behavior }} on {{ inventory_hostname }} ({{ ansible_host }})"
 
     - name: Wait for cloud-init to complete
       command: cloud-init status --wait
@@ -110,9 +109,8 @@
       register: stage2_result
 
     - name: Display install result
-      pause:
-        seconds: 0
-        prompt: "SUP {{ sup_behavior }} installed successfully on {{ inventory_hostname }}"
+      debug:
+        msg: "SUP {{ sup_behavior }} installed successfully on {{ inventory_hostname }}"
       when: stage2_result.rc == 0
 
     - name: Check SUP service status
