@@ -159,7 +159,7 @@
     # BATCHED VM CREATION: Create VMs in batches to avoid overloading OpenStack
     # Uses throttle to limit concurrent creates, no --wait for faster submission
     # ─────────────────────────────────────────────────────────────────
-    - name: Create OpenStack VMs (batched, {{ vm_create_batch_size | default(5) }} at a time)
+    - name: Create OpenStack VMs (batched, {{ vm_create_batch_size | default(10) }} at a time)
       shell: |
         source {{ os_rc_file }}
         VM_NAME="sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
@@ -184,7 +184,7 @@
       loop: "{{ vm_list }}"
       loop_control:
         label: "sup-{{ item.behavior }}-{{ item.index }}"
-      throttle: "{{ vm_create_batch_size | default(5) }}"
+      throttle: "{{ vm_create_batch_size | default(10) }}"
       register: created_vms
 
     - name: Wait for all VMs to become ACTIVE (parallel polling)
@@ -209,9 +209,9 @@
         label: "sup-{{ item.behavior }}-{{ item.index }}"
       register: vm_status_check
       until: vm_status_check.rc == 0
-      retries: 30
-      delay: 10
-      throttle: 10
+      retries: 60
+      delay: 5
+      throttle: 20
       failed_when: vm_status_check.rc == 1
 
     - name: Get VM IPs
@@ -367,9 +367,10 @@
       loop_control:
         label: "{{ item.name }} ({{ item.ip }})"
       register: ssh_test
-      retries: 10
-      delay: 30
+      retries: 30
+      delay: 10
       until: ssh_test.rc == 0
+      throttle: 20
 
     - name: Write SSH config snippet to file
       delegate_to: localhost
