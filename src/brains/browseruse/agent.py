@@ -5,13 +5,12 @@ Supports three-prompt configuration for content and mechanics control.
 """
 import os
 import asyncio
+import time
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
-
-from common.logging.llm_callbacks import create_langchain_callback
 
 
 def log(msg: str):
@@ -19,50 +18,69 @@ def log(msg: str):
     ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{ts}] {msg}")
 
-from browser_use import Agent
+from browser_use import Agent, ChatOllama
 from browser_use.browser.session import BrowserSession
 
 from common.config.model_config import get_model
 from brains.browseruse.prompts import BUPrompts, DEFAULT_PROMPTS
 
 
-class LLMWrapper:
+def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None):
     """
-    Wrapper for LangChain ChatOllama that allows arbitrary attribute assignment.
+    Create a browser_use.ChatOllama instance with logging wrapped around ainvoke.
 
-    browser_use's token_cost_service tries to monkey-patch 'ainvoke' and other
-    attributes on the LLM. Pydantic models block this with extra='ignore'.
-    This wrapper allows those dynamic attributes while delegating all other
-    operations to the wrapped LLM instance.
+    browser_use uses its own ChatOllama class (not LangChain) which directly calls
+    ollama.AsyncClient. We wrap the ainvoke method to log LLM requests/responses.
     """
+    llm = ChatOllama(model=model)
 
-    def __init__(self, llm):
-        # Use object.__setattr__ to avoid triggering our own __setattr__
-        object.__setattr__(self, '_llm', llm)
-        object.__setattr__(self, '_extra_attrs', {})
-        # Set provider that browser_use expects
-        self._extra_attrs['provider'] = 'ollama'
-        # browser_use accesses model_name but ChatOllama uses 'model'
-        self._extra_attrs['model_name'] = llm.model
+    if logger is None:
+        return llm
 
-    def __getattr__(self, name):
-        # First check our extra attributes
-        extra = object.__getattribute__(self, '_extra_attrs')
-        if name in extra:
-            return extra[name]
-        # Then delegate to the wrapped LLM
-        llm = object.__getattribute__(self, '_llm')
-        return getattr(llm, name)
+    # Store the original ainvoke method
+    original_ainvoke = llm.ainvoke
 
-    def __setattr__(self, name, value):
-        # Store in extra_attrs to allow browser_use's monkey-patching
-        if name in ('_llm', '_extra_attrs'):
-            object.__setattr__(self, name, value)
-        else:
-            self._extra_attrs[name] = value
+    async def logged_ainvoke(messages, output_format=None, **kwargs):
+        """Wrapper around ainvoke that logs requests and responses."""
+        # Log the request
+        action = "generate"
+        if messages and len(messages) > 0:
+            last_msg = messages[-1]
+            if hasattr(last_msg, 'content'):
+                content = str(last_msg.content)
+                action = content[:100] if len(content) > 100 else content
 
-    def __call__(self, *args, **kwargs):
-        return self._llm(*args, **kwargs)
+        logger.llm_request(
+            action=action,
+            model=model,
+            input_data={"message_count": len(messages), "model": model}
+        )
+
+        # Call the original method
+        start_time = time.time()
+        try:
+            result = await original_ainvoke(messages, output_format, **kwargs)
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            # Extract output
+            output = ""
+            if hasattr(result, 'completion'):
+                output = str(result.completion)[:500] if result.completion else ""
+
+            logger.llm_response(
+                output=output,
+                duration_ms=duration_ms,
+                model=model,
+                tokens=None  # browser_use ChatOllama doesn't track tokens
+            )
+            return result
+        except Exception as e:
+            logger.llm_error(error=str(e), action=f"llm_call_{model}", fatal=True)
+            raise
+
+    # Replace the method
+    llm.ainvoke = logged_ainvoke
+    return llm
 
 
 class BrowserUseAgent:
@@ -93,24 +111,11 @@ class BrowserUseAgent:
         self._browser_session = None
 
     def _get_llm(self):
-        """Lazy-load the LLM with logging callbacks."""
+        """Lazy-load the LLM with logging wrapper."""
         if self._llm is None:
-            # Import from langchain_ollama directly (NOT browser_use) to support callbacks
-            from langchain_ollama import ChatOllama
-            # Set up LangChain logging callbacks if logger is provided
-            callbacks = None
-            if self.logger:
-                handler = create_langchain_callback(self.logger)
-                if handler is not None:
-                    callbacks = [handler]
-
-            # Create LLM with callbacks in constructor (langchain_ollama supports this)
-            llm = ChatOllama(model=self.model_name, callbacks=callbacks)
-
-            # Wrap in LLMWrapper to allow browser_use's monkey-patching
-            # browser_use tries to setattr 'ainvoke' and 'provider' on the LLM,
-            # which Pydantic blocks. LLMWrapper allows these dynamic attributes.
-            self._llm = LLMWrapper(llm)
+            # Use browser_use's native ChatOllama with our logging wrapper
+            # This properly integrates with browser_use's custom LLM architecture
+            self._llm = create_logged_chat_ollama(self.model_name, self.logger)
         return self._llm
 
     def _get_browser_session(self):
