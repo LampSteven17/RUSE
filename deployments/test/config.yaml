@@ -4,9 +4,9 @@
 #
 # VMs: 4 total
 #   - M1: MCHP baseline (non-GPU)
-#   - M4.llama: MCHP + SmolAgents LLM (GPU) - tests LLM logging
-#   - B1.llama: BrowserUse baseline (GPU)
-#   - S1.llama: SmolAgents baseline (GPU)
+#   - M4.llama: MCHP + SmolAgents LLM (llama3.1:8b)
+#   - B2.gemma: BrowserUse (gemma3:4b)
+#   - S3.deepseek: SmolAgents (deepseek-r1:8b)
 
 deployment_name: test
 
@@ -14,11 +14,11 @@ deployment_name: test
 # GPU CAPACITY - Minimal requirements for test
 # ═══════════════════════════════════════════════════════════════════
 flavor_capacity:
-  v100-1gpu.14vcpu.28g: 3       # Need 3 for M4, B1, S1
+  v100-1gpu.14vcpu.28g: 3       # Need 3 for M4, B2, S3
   v1.14vcpu.28g: 1              # Need 1 for M1
 
 # ═══════════════════════════════════════════════════════════════════
-# DEPLOYMENTS - One of each brain type
+# DEPLOYMENTS - Different models for each brain type
 # ═══════════════════════════════════════════════════════════════════
 deployments:
   # MCHP baseline (no GPU needed)
@@ -26,17 +26,17 @@ deployments:
     flavor: v1.14vcpu.28g
     count: 1
 
-  # MCHP + SmolAgents LLM (tests LLM callback logging)
+  # MCHP + SmolAgents LLM (llama3.1:8b)
   - behavior: M4.llama
     flavor: v100-1gpu.14vcpu.28g
     count: 1
 
-  # BrowserUse baseline
-  - behavior: B1.llama
+  # BrowserUse with gemma3:4b
+  - behavior: B2.gemma
     flavor: v100-1gpu.14vcpu.28g
     count: 1
 
-  # SmolAgents baseline
-  - behavior: S1.llama
+  # SmolAgents with deepseek-r1:8b
+  - behavior: S3.deepseek
     flavor: v100-1gpu.14vcpu.28g
     count: 1
