@@ -26,6 +26,43 @@ from common.config.model_config import get_model
 from brains.browseruse.prompts import BUPrompts, DEFAULT_PROMPTS
 
 
+class LLMWrapper:
+    """
+    Wrapper for LangChain ChatOllama that allows arbitrary attribute assignment.
+
+    browser_use's token_cost_service tries to monkey-patch 'ainvoke' and other
+    attributes on the LLM. Pydantic models block this with extra='ignore'.
+    This wrapper allows those dynamic attributes while delegating all other
+    operations to the wrapped LLM instance.
+    """
+
+    def __init__(self, llm):
+        # Use object.__setattr__ to avoid triggering our own __setattr__
+        object.__setattr__(self, '_llm', llm)
+        object.__setattr__(self, '_extra_attrs', {})
+        # Set provider that browser_use expects
+        self._extra_attrs['provider'] = 'ollama'
+
+    def __getattr__(self, name):
+        # First check our extra attributes
+        extra = object.__getattribute__(self, '_extra_attrs')
+        if name in extra:
+            return extra[name]
+        # Then delegate to the wrapped LLM
+        llm = object.__getattribute__(self, '_llm')
+        return getattr(llm, name)
+
+    def __setattr__(self, name, value):
+        # Store in extra_attrs to allow browser_use's monkey-patching
+        if name in ('_llm', '_extra_attrs'):
+            object.__setattr__(self, name, value)
+        else:
+            self._extra_attrs[name] = value
+
+    def __call__(self, *args, **kwargs):
+        return self._llm(*args, **kwargs)
+
+
 class BrowserUseAgent:
     """
     BrowserUse agent with three-prompt support.
@@ -66,12 +103,12 @@ class BrowserUseAgent:
                     callbacks = [handler]
 
             # Create LLM with callbacks in constructor (langchain_ollama supports this)
-            self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
+            llm = ChatOllama(model=self.model_name, callbacks=callbacks)
 
-            # Add 'provider' attribute that browser_use expects
-            # browser_use checks: if llm.provider == 'browser-use'
-            # We use __dict__ to bypass Pydantic validation (extra='ignore' blocks normal assignment)
-            self._llm.__dict__['provider'] = 'ollama'
+            # Wrap in LLMWrapper to allow browser_use's monkey-patching
+            # browser_use tries to setattr 'ainvoke' and 'provider' on the LLM,
+            # which Pydantic blocks. LLMWrapper allows these dynamic attributes.
+            self._llm = LLMWrapper(llm)
         return self._llm
 
     def _get_browser_session(self):
