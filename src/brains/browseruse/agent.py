@@ -42,6 +42,8 @@ class LLMWrapper:
         object.__setattr__(self, '_extra_attrs', {})
         # Set provider that browser_use expects
         self._extra_attrs['provider'] = 'ollama'
+        # browser_use accesses model_name but ChatOllama uses 'model'
+        self._extra_attrs['model_name'] = llm.model
 
     def __getattr__(self, name):
         # First check our extra attributes
