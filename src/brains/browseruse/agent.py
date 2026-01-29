@@ -70,8 +70,8 @@ class BrowserUseAgent:
 
             # Add 'provider' attribute that browser_use expects
             # browser_use checks: if llm.provider == 'browser-use'
-            # We set to 'ollama' to indicate standard LangChain Ollama model
-            self._llm.provider = 'ollama'
+            # We use __dict__ to bypass Pydantic validation (extra='ignore' blocks normal assignment)
+            self._llm.__dict__['provider'] = 'ollama'
         return self._llm
 
     def _get_browser_session(self):
