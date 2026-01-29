@@ -1,0 +1,36 @@
+---
+# test: Minimal Test Deployment
+# Quick deployment for validating logging and system functionality
+#
+# VMs: 3 total
+#   - M1: MCHP baseline (non-GPU)
+#   - B1.llama: BrowserUse baseline (GPU)
+#   - S1.llama: SmolAgents baseline (GPU)
+
+deployment_name: test
+
+# ═══════════════════════════════════════════════════════════════════
+# GPU CAPACITY - Minimal requirements for test
+# ═══════════════════════════════════════════════════════════════════
+flavor_capacity:
+  v100-1gpu.14vcpu.28g: 2       # Need 2 for B1 and S1
+  v1.14vcpu.28g: 1              # Need 1 for M1
+
+# ═══════════════════════════════════════════════════════════════════
+# DEPLOYMENTS - One of each brain type
+# ═══════════════════════════════════════════════════════════════════
+deployments:
+  # MCHP baseline (no GPU needed)
+  - behavior: M1
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # BrowserUse baseline
+  - behavior: B1.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # SmolAgents baseline
+  - behavior: S1.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
