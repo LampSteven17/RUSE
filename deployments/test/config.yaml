@@ -2,8 +2,9 @@
 # test: Minimal Test Deployment
 # Quick deployment for validating logging and system functionality
 #
-# VMs: 3 total
+# VMs: 4 total
 #   - M1: MCHP baseline (non-GPU)
+#   - M4.llama: MCHP + SmolAgents LLM (GPU) - tests LLM logging
 #   - B1.llama: BrowserUse baseline (GPU)
 #   - S1.llama: SmolAgents baseline (GPU)
 
@@ -13,7 +14,7 @@ deployment_name: test
 # GPU CAPACITY - Minimal requirements for test
 # ═══════════════════════════════════════════════════════════════════
 flavor_capacity:
-  v100-1gpu.14vcpu.28g: 2       # Need 2 for B1 and S1
+  v100-1gpu.14vcpu.28g: 3       # Need 3 for M4, B1, S1
   v1.14vcpu.28g: 1              # Need 1 for M1
 
 # ═══════════════════════════════════════════════════════════════════
@@ -23,6 +24,11 @@ deployments:
   # MCHP baseline (no GPU needed)
   - behavior: M1
     flavor: v1.14vcpu.28g
+    count: 1
+
+  # MCHP + SmolAgents LLM (tests LLM callback logging)
+  - behavior: M4.llama
+    flavor: v100-1gpu.14vcpu.28g
     count: 1
 
   # BrowserUse baseline
