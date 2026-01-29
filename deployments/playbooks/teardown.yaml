@@ -54,11 +54,11 @@
       register: volume_ids
       when: server_list.stdout | length > 0
 
-    - name: Delete SUP servers
+    - name: Delete SUP servers (parallel)
       shell: |
         source {{ os_rc_file }}
         SERVER_ID="{{ item.split()[0] }}"
-        openstack server delete --wait "$SERVER_ID"
+        openstack server delete "$SERVER_ID"
       args:
         executable: /bin/bash
       loop: "{{ server_list.stdout_lines }}"
@@ -66,11 +66,32 @@
         label: "{{ item.split()[1] | default(item) }}"
       when: server_list.stdout | length > 0
       ignore_errors: yes
+      async: 300
+      poll: 0
 
     - name: Wait for servers to be deleted
-      pause:
-        seconds: 5
+      shell: |
+        source {{ os_rc_file }}
+        SERVER_ID="{{ item.split()[0] }}"
+        if ! openstack server show "$SERVER_ID" &>/dev/null; then
+          echo "DELETED"
+          exit 0
+        else
+          echo "WAITING"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ server_list.stdout_lines }}"
+      loop_control:
+        label: "{{ item.split()[1] | default(item) }}"
+      register: delete_check
+      until: delete_check.rc == 0
+      retries: 60
+      delay: 3
+      throttle: 50
       when: server_list.stdout | length > 0
+      ignore_errors: yes
 
     - name: Delete orphaned SUP volumes
       shell: |

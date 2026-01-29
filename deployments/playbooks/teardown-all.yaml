@@ -51,7 +51,7 @@
     # BATCHED VM DELETION: Delete VMs in batches to avoid overloading OpenStack
     # Uses throttle to limit concurrent deletes, no --wait for faster submission
     # ─────────────────────────────────────────────────────────────────
-    - name: Delete ALL SUP servers (batched, {{ vm_delete_batch_size | default(5) }} at a time)
+    - name: Delete ALL SUP servers (parallel - all at once)
       shell: |
         source {{ os_rc_file }}
         openstack server delete "{{ item.split()[0] }}"
@@ -60,9 +60,11 @@
       loop: "{{ server_list.stdout_lines }}"
       loop_control:
         label: "{{ item.split()[1] | default(item) }}"
-      throttle: "{{ vm_delete_batch_size | default(5) }}"
+      throttle: "{{ vm_delete_batch_size | default(50) }}"
       when: server_list.stdout | length > 0
       ignore_errors: yes
+      async: 300
+      poll: 0
 
     - name: Wait for all servers to be deleted (parallel polling)
       shell: |
@@ -83,9 +85,9 @@
         label: "{{ item.split()[1] | default(item) }}"
       register: vm_delete_check
       until: vm_delete_check.rc == 0
-      retries: 30
-      delay: 5
-      throttle: 10
+      retries: 60
+      delay: 3
+      throttle: 50
       when: server_list.stdout | length > 0
       ignore_errors: yes
 
@@ -113,7 +115,7 @@
     # BATCHED VOLUME DELETION: Delete volumes in batches to avoid overloading OpenStack
     # Uses throttle to limit concurrent deletes
     # ─────────────────────────────────────────────────────────────────
-    - name: Delete ALL SUP volumes (batched, {{ vol_delete_batch_size | default(5) }} at a time)
+    - name: Delete ALL SUP volumes (parallel - all at once)
       shell: |
         source {{ os_rc_file }}
         openstack volume delete "{{ item }}"
@@ -122,9 +124,11 @@
       loop: "{{ all_volume_ids }}"
       loop_control:
         label: "{{ item }}"
-      throttle: "{{ vol_delete_batch_size | default(5) }}"
+      throttle: "{{ vol_delete_batch_size | default(50) }}"
       when: all_volume_ids | length > 0
       ignore_errors: yes
+      async: 300
+      poll: 0
 
     - name: Wait for all volumes to be deleted (parallel polling)
       shell: |
@@ -143,9 +147,9 @@
         label: "{{ item }}"
       register: vol_delete_check
       until: vol_delete_check.rc == 0
-      retries: 30
-      delay: 5
-      throttle: 10
+      retries: 60
+      delay: 3
+      throttle: 50
       when: all_volume_ids | length > 0
       ignore_errors: yes
 
@@ -169,7 +173,7 @@
           {{ orphan_volumes.stdout_lines | default(['(none)']) | join('\n') }}
       when: orphan_volumes.stdout_lines | length > 0
 
-    - name: Delete orphaned boot volumes (batched)
+    - name: Delete orphaned boot volumes (parallel)
       shell: |
         source {{ os_rc_file }}
         openstack volume delete "{{ item }}"
@@ -178,9 +182,11 @@
       loop: "{{ orphan_volumes.stdout_lines }}"
       loop_control:
         label: "{{ item }}"
-      throttle: "{{ vol_delete_batch_size | default(5) }}"
+      throttle: "{{ vol_delete_batch_size | default(50) }}"
       when: orphan_volumes.stdout_lines | length > 0
       ignore_errors: yes
+      async: 300
+      poll: 0
 
     - name: Verify cleanup
       shell: |
