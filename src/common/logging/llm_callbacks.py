@@ -14,10 +14,10 @@ Usage:
     handler = create_langchain_callback(logger)
     callbacks = [handler] if handler else None
 
-    # Create LLM and attach callbacks via with_config (compatible across versions)
-    llm = ChatOllama(model=model)
-    if callbacks:
-        llm = llm.with_config({"callbacks": callbacks})
+    # IMPORTANT: Use langchain_ollama.ChatOllama, NOT browser_use.ChatOllama
+    # browser_use's ChatOllama wrapper doesn't support callbacks
+    from langchain_ollama import ChatOllama
+    llm = ChatOllama(model=model, callbacks=callbacks)
 """
 
 import time
