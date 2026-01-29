@@ -72,15 +72,25 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
     # Import and run the MCHP agent
     from brains.mchp import MCHPAgent
 
+    # Exclude Windows-only workflows for augmented configs (M2+)
+    # These use os.startfile() which only works on Windows
+    is_augmented = config.content != "none" or config.mechanics != "none"
+
     log(f"Running MCHP agent (config: {config.config_key})")
     log(f"PHASE timing: {use_phase_timing}")
+    if is_augmented:
+        log("Excluding Windows-only workflows (OpenOffice, MSPaint)")
     logger.info(f"Starting MCHP agent", details={
         "config_key": config.config_key,
         "phase_timing": use_phase_timing
     })
 
     try:
-        agent = MCHPAgent(logger=logger, use_phase_timing=use_phase_timing)
+        agent = MCHPAgent(
+            logger=logger,
+            use_phase_timing=use_phase_timing,
+            exclude_windows_workflows=is_augmented
+        )
         agent.run()
         logger.session_success(message="MCHP agent completed successfully")
     except KeyboardInterrupt:

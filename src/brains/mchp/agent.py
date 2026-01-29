@@ -28,6 +28,14 @@ DEFAULT_CLUSTER_SIZE = 5
 DEFAULT_TASK_INTERVAL = 10
 DEFAULT_GROUP_INTERVAL = 500
 
+# Windows-only workflows (use os.startfile or other Windows-specific APIs)
+# These are excluded for M2+ configs which run on Linux with LLM augmentation
+WINDOWS_ONLY_WORKFLOWS = {
+    'ms_paint.py',
+    'open_office_calc.py',
+    'open_office_writer.py',
+}
+
 
 class MCHPAgent:
     """
@@ -49,6 +57,7 @@ class MCHPAgent:
         logger: Optional["AgentLogger"] = None,
         use_phase_timing: bool = False,
         phase_config: Optional["PhaseTimingConfig"] = None,
+        exclude_windows_workflows: bool = False,
     ):
         self.cluster_size = cluster_size
         self.task_interval = task_interval
@@ -61,6 +70,7 @@ class MCHPAgent:
         self._phase_timing = None
         self._phase_config = phase_config
         self._tasks_completed = 0
+        self.exclude_windows_workflows = exclude_windows_workflows
 
         # Initialize PHASE timing if enabled
         if self.use_phase_timing:
@@ -122,6 +132,11 @@ class MCHPAgent:
             dirs[:] = [d for d in dirs if not d[0] == '.' and not d[0] == "_"]
 
             for file in files:
+                # Skip Windows-only workflows for M2+ configs (LLM-augmented, run on Linux)
+                if self.exclude_windows_workflows and file in WINDOWS_ONLY_WORKFLOWS:
+                    print(f"Skipping Windows-only workflow: {file}")
+                    continue
+
                 try:
                     extensions.append(self._load_module('app.workflows', file))
                 except Exception as e:
@@ -152,6 +167,15 @@ class MCHPAgent:
 
             cluster_size = self._get_cluster_size()
 
+            # Log cluster size decision
+            if self.logger:
+                self.logger.decision(
+                    choice="cluster_size",
+                    selected=str(cluster_size),
+                    context=f"Tasks to run in this cluster",
+                    method="phase" if self.use_phase_timing else "random"
+                )
+
             for _ in range(cluster_size):
                 # Inter-task delay
                 task_delay = self._get_task_delay()
@@ -164,6 +188,17 @@ class MCHPAgent:
                 workflow = self.workflows[index]
                 # Use description for consistency with S/B agents (they use task as workflow name)
                 workflow_name = workflow.description
+
+                # Log workflow selection decision
+                if self.logger:
+                    workflow_options = [w.name for w in self.workflows]
+                    self.logger.decision(
+                        choice="workflow_selection",
+                        options=workflow_options,
+                        selected=workflow.name,
+                        context=workflow_name,
+                        method="random"
+                    )
 
                 print(workflow.display)
 
