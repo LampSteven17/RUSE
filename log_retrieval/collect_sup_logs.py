@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-SUP Log Collection System
+SUP Log Collection System (Simplified)
 
-Collects JSONL logs from remote SUP VMs, preserves raw files on NFS,
-and loads them into a DuckDB database for semantic analysis.
+Collects JSONL logs from remote SUP VMs and loads them into DuckDB.
+Focuses only on structured JSONL logs from AgentLogger - ignores systemd output.
 
 Usage:
     python log_retrieval/collect_sup_logs.py                    # All experiments
-    python log_retrieval/collect_sup_logs.py --experiments exp-1
+    python log_retrieval/collect_sup_logs.py --experiments exp-2
     python log_retrieval/collect_sup_logs.py --dry-run          # Preview only
 """
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -39,49 +38,6 @@ DEPLOYMENTS_DIR = Path("/home/ubuntu/DOLOS-DEPLOY/deployments")
 REMOTE_LOG_BASE = "/opt/dolos-deploy/deployed_sups"
 SSH_OPTIONS = "-o ProxyJump=axes -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes"
 SSH_USER = "ubuntu"
-
-
-# ============================================================================
-# Workflow Normalization
-# ============================================================================
-# Maps MCHP workflow names (class names and descriptions) to normalized task format
-# This allows comparing MCHP workflows with SmolAgents/BrowserUse tasks
-
-# MCHP class name → normalized task description (matching S/B style)
-MCHP_WORKFLOW_MAP = {
-    # Class names (from JSONL logging)
-    'GoogleSearcher': 'Search for something on Google',
-    'WebBrowser': 'Visit a random website and browse',
-    'YoutubeBrowser': 'Go to YouTube and browse videos',
-    'DownloadFiles': 'Download files from the internet',
-    'ExecuteCommand': 'Execute shell commands',
-    'ListFiles': 'List files in the current directory',
-    'OpenOfficeWriter': 'Create a document with OpenOffice Writer',
-    'OpenOfficeCalc': 'Create a spreadsheet with OpenOffice Calc',
-    'MicrosoftPaint': 'Create an image with MS Paint',
-    # Plain text descriptions (from systemd logs) - map to same normalized form
-    'Search for something on Google': 'Search for something on Google',
-    'Select a random website and browse': 'Visit a random website and browse',
-    'Browse Youtube': 'Go to YouTube and browse videos',
-    'Download files': 'Download files from the internet',
-    'Execute custom commands': 'Execute shell commands',
-    'List files in the current directory': 'List files in the current directory',
-    'Create documents with Apache OpenOffice Writer (Windows)': 'Create a document with OpenOffice Writer',
-    'Create spreadsheets with Apache OpenOffice Calc (Windows)': 'Create a spreadsheet with OpenOffice Calc',
-    'Create a blank MS Paint file (Windows)': 'Create an image with MS Paint',
-}
-
-# Workflow categories for high-level analysis
-# Maps workflow patterns to categories
-WORKFLOW_CATEGORIES = {
-    'web_search': ['search', 'google', 'duckduckgo', 'bing'],
-    'web_browse': ['visit', 'browse', 'go to', 'navigate', 'website', 'reddit', 'wikipedia', 'news'],
-    'youtube': ['youtube', 'video'],
-    'file_ops': ['download', 'file', 'list files'],
-    'shell': ['command', 'shell', 'execute', 'terminal'],
-    'document': ['document', 'writer', 'spreadsheet', 'calc', 'paint', 'office'],
-    'research': ['weather', 'explain', 'what is', 'what are', 'summarize', 'describe', 'history'],
-}
 
 
 # ============================================================================
@@ -121,7 +77,7 @@ class CollectionResult:
 
 
 # ============================================================================
-# DuckDB Schema
+# DuckDB Schema - Simplified for JSONL only
 # ============================================================================
 
 CREATE_EVENTS_TABLE = """
@@ -140,40 +96,21 @@ CREATE TABLE IF NOT EXISTS events (
     sup_flavor           VARCHAR,
     source_file          VARCHAR,
     collection_timestamp TIMESTAMP,
+    line_number          INTEGER,
+    -- Extracted fields for fast querying
     duration_ms          INTEGER,
     success              BOOLEAN,
     error_message        VARCHAR,
     model                VARCHAR,
     action               VARCHAR,
-    source_format        VARCHAR,
-    line_number          INTEGER,
-    -- New columns for step-based logging framework
-    category             VARCHAR,      -- Step category: browser, video, office, shell, etc.
-    step_name            VARCHAR,      -- Name of the step (navigate, click, login, etc.)
-    status               VARCHAR,      -- Step status: start, success, error
-    -- LLM-specific columns for fast querying
-    input_tokens         INTEGER,      -- Token count for LLM input/prompt
-    output_tokens        INTEGER,      -- Token count for LLM output/completion
-    total_tokens         INTEGER,      -- Total tokens used
-    llm_output           VARCHAR       -- Truncated LLM response text (for llm_response events)
-);
-"""
-
-# Table for raw systemd logs (plain text with timestamps)
-CREATE_RAW_LOGS_TABLE = """
-CREATE TABLE IF NOT EXISTS raw_logs (
-    id                   BIGINT,
-    timestamp            TIMESTAMP,
-    line_number          INTEGER,
-    content              VARCHAR,
-    log_type             VARCHAR,        -- 'stdout' or 'stderr'
-    experiment_name      VARCHAR,
-    vm_hostname          VARCHAR,
-    vm_ip                VARCHAR,
-    sup_behavior         VARCHAR,
-    sup_flavor           VARCHAR,
-    source_file          VARCHAR,
-    collection_timestamp TIMESTAMP
+    category             VARCHAR,
+    step_name            VARCHAR,
+    status               VARCHAR,
+    -- LLM-specific columns
+    input_tokens         INTEGER,
+    output_tokens        INTEGER,
+    total_tokens         INTEGER,
+    llm_output           VARCHAR
 );
 """
 
@@ -185,14 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_workflow ON events(workflow);
 CREATE INDEX IF NOT EXISTS idx_events_sup_behavior ON events(sup_behavior);
-CREATE INDEX IF NOT EXISTS idx_events_source_format ON events(source_format);
 CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
-CREATE INDEX IF NOT EXISTS idx_events_step_name ON events(step_name);
-
-CREATE INDEX IF NOT EXISTS idx_raw_logs_experiment ON raw_logs(experiment_name);
-CREATE INDEX IF NOT EXISTS idx_raw_logs_timestamp ON raw_logs(timestamp);
-CREATE INDEX IF NOT EXISTS idx_raw_logs_vm ON raw_logs(vm_hostname);
-CREATE INDEX IF NOT EXISTS idx_raw_logs_behavior ON raw_logs(sup_behavior);
 """
 
 
@@ -205,58 +135,39 @@ def discover_experiments(deployments_dir: Path) -> List[str]:
     experiments = []
     for path in deployments_dir.iterdir():
         if path.is_dir() and (path / "inventory.ini").exists():
-            # Skip directories that are clearly not experiments
             if path.name not in ("playbooks",):
                 experiments.append(path.name)
     return sorted(experiments)
 
 
 def parse_inventory(inventory_path: Path) -> List[VMInfo]:
-    """
-    Parse inventory.ini to extract VM information.
-
-    Format:
-        [sup_hosts]
-        sup-M1-0 ansible_host=10.246.118.157 sup_behavior=M1 sup_flavor=v1.14vcpu.28g
-    """
+    """Parse inventory.ini to extract VM information."""
     vms = []
     in_sup_hosts = False
 
     with open(inventory_path, 'r') as f:
         for line in f:
             line = line.strip()
-
-            # Skip empty lines and comments
             if not line or line.startswith('#'):
                 continue
-
-            # Check for section headers
             if line.startswith('['):
                 in_sup_hosts = line == '[sup_hosts]'
                 continue
-
-            # Skip vars section
             if ':vars]' in line or line.endswith(':vars'):
                 in_sup_hosts = False
                 continue
 
-            # Parse VM lines in [sup_hosts] section
             if in_sup_hosts and '=' in line:
-                # Extract hostname (first token)
                 parts = line.split()
                 if not parts:
                     continue
-
                 hostname = parts[0]
-
-                # Extract ansible variables
                 attrs = {}
                 for part in parts[1:]:
                     if '=' in part:
                         key, value = part.split('=', 1)
                         attrs[key] = value
 
-                # Create VMInfo if we have required fields
                 if 'ansible_host' in attrs:
                     vms.append(VMInfo(
                         hostname=hostname,
@@ -264,7 +175,6 @@ def parse_inventory(inventory_path: Path) -> List[VMInfo]:
                         sup_behavior=attrs.get('sup_behavior', ''),
                         sup_flavor=attrs.get('sup_flavor', '')
                     ))
-
     return vms
 
 
@@ -276,13 +186,7 @@ def ssh_command(ip: str, remote_cmd: str, timeout: int = 60) -> Tuple[bool, str]
     """Execute SSH command and return (success, output)."""
     cmd = f"ssh {SSH_OPTIONS} {SSH_USER}@{ip} '{remote_cmd}'"
     try:
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         return result.returncode == 0, result.stdout.strip()
     except subprocess.TimeoutExpired:
         return False, "SSH timeout"
@@ -294,12 +198,7 @@ def scp_file(ip: str, remote_path: str, local_path: Path, timeout: int = 300) ->
     """SCP a file from remote to local."""
     cmd = f"scp {SSH_OPTIONS} {SSH_USER}@{ip}:{remote_path} {local_path}"
     try:
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            timeout=timeout
-        )
+        result = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
         return result.returncode == 0
     except Exception:
         return False
@@ -311,32 +210,26 @@ def collect_logs_from_vm(
     output_dir: Path,
     dry_run: bool = False
 ) -> CollectionResult:
-    """SSH to VM and collect all JSONL logs."""
+    """SSH to VM and collect JSONL logs only."""
     result = CollectionResult(experiment=experiment, vm=vm)
 
-    # Try multiple potential log paths for backwards compatibility
-    # 1. Expected path: /opt/dolos-deploy/deployed_sups/{behavior}/logs
-    # 2. Legacy nested path: /opt/dolos-deploy/deployed_sups/{behavior}/deployed_sups/*/logs
+    # Only look for .jsonl files (not .log systemd files)
     remote_log_dir = f"{REMOTE_LOG_BASE}/{vm.sup_behavior}/logs"
-    legacy_nested_pattern = f"{REMOTE_LOG_BASE}/{vm.sup_behavior}/deployed_sups/*/logs"
-
-    # List remote log files from both potential locations
-    list_cmd = f"ls -1 {remote_log_dir}/*.log {remote_log_dir}/*.jsonl {legacy_nested_pattern}/*.log {legacy_nested_pattern}/*.jsonl 2>/dev/null || echo ''"
+    list_cmd = f"ls -1 {remote_log_dir}/*.jsonl 2>/dev/null || echo ''"
     success, output = ssh_command(vm.ip, list_cmd)
 
     if not success:
         result.errors.append(f"SSH failed: {output}")
         return result
 
-    # Parse file list - accept both .log and .jsonl files
+    # Parse file list - only .jsonl files
     remote_files = [
         f.strip() for f in output.strip().split('\n')
-        if f.strip() and (f.endswith('.log') or f.endswith('.jsonl'))
+        if f.strip() and f.endswith('.jsonl')
     ]
 
     if not remote_files:
-        # No logs is not an error - VM may not have run yet
-        result.success = True
+        result.success = True  # No logs is not an error
         return result
 
     # Create output directory
@@ -370,173 +263,6 @@ def collect_logs_from_vm(
 # JSONL Parsing
 # ============================================================================
 
-def parse_timestamp_from_line(line: str) -> Optional[str]:
-    """Extract timestamp from log line like '[2025-12-19 21:23:11] ...'"""
-    match = re.match(r'\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]', line)
-    if match:
-        return match.group(1).replace(' ', 'T')
-    return None
-
-
-# ============================================================================
-# Raw Log to JSONL Converter
-# ============================================================================
-
-# Pre-compiled patterns for converting raw logs to structured events (MUCH faster)
-# Format: (compiled_regex, event_type, extractor_func, fast_prefix_check)
-_RAW_PATTERNS_SOURCE = [
-    # Workflow start: [2025-12-19 21:23:11] Running Task: Browse Youtube
-    (r'^\[[\d\-\s:]+\]\s*Running Task:\s*(.+)$', 'workflow_start', lambda m: {'workflow': m.group(1).strip()}, '['),
-
-    # Browser navigation
-    (r'^Browsing to\s+(.+)$', 'browser_action', lambda m: {'action': 'navigate', 'target': m.group(1).strip()}, 'Browsing to'),
-    (r'^\.\.\.\s*(\d+)\.\s*Navigated to\s+(.+)$', 'browser_action', lambda m: {'action': 'navigate', 'step': int(m.group(1)), 'target': m.group(2).strip()}, '...'),
-
-    # Google search actions
-    (r'^\.+\s*Googling:\s*(.+)$', 'browser_action', lambda m: {'action': 'search', 'query': m.group(1).strip()}, '.'),
-    (r'^\.+\s*Browsing search results', 'browser_action', lambda m: {'action': 'browse_results'}, '.'),
-    (r'^\.+\s*Clicking on search\s*result', 'browser_action', lambda m: {'action': 'click_result'}, '.'),
-    (r'^\.+\s*Hovering.*[Ff]eeling [Ll]ucky', 'browser_action', lambda m: {'action': 'feeling_lucky'}, '.'),
-    (r'^\.+\s*Navigating and highlighting.*?(\d+)\s*times?', 'browser_action', lambda m: {'action': 'navigate_page', 'clicks': int(m.group(1))}, '.'),
-    (r'^\.+\s*successful navigation', 'info', lambda m: {'message': 'navigation_success'}, '.'),
-    (r'^\.+\s*X\s*unsuccessful navigation', 'warning', lambda m: {'message': 'navigation_failed'}, '.'),
-
-    # Errors and timeouts
-    (r'^Timeout loading\s+(.+?):\s*(.*)$', 'error', lambda m: {'action': 'timeout', 'target': m.group(1).strip(), 'error': m.group(2).strip()}, 'Timeout'),
-    (r'^Error loading\s+(.+?):\s*(.*)$', 'error', lambda m: {'action': 'load_error', 'target': m.group(1).strip(), 'error': m.group(2).strip()}, 'Error load'),
-    (r'^Error performing google search\s+(.+?):\s*(.*)$', 'error', lambda m: {'action': 'search_error', 'query': m.group(1).strip(), 'error': m.group(2).strip()}, 'Error perf'),
-
-    # Invalid URL
-    (r'^\.\.\.\s*(\d+)\.\s*Invalid URL', 'warning', lambda m: {'action': 'invalid_url', 'step': int(m.group(1))}, '...'),
-    (r'^\.\.\.\s*(\d+)\.\s*No clickable elements', 'info', lambda m: {'action': 'no_clickables', 'step': int(m.group(1))}, '...'),
-
-    # SmolAgents / BrowserUse patterns
-    (r'^Starting (SmolAgents|BrowserUse) agent with model:\s*(.+)$', 'session_start', lambda m: {'agent_framework': m.group(1), 'model': m.group(2).strip()}, 'Starting'),
-    (r'^\[[\d\-\s:]+\]\s*Task:\s*(.+)$', 'workflow_start', lambda m: {'workflow': m.group(1).strip()}, '['),
-    (r'^Task completed successfully', 'workflow_end', lambda m: {'success': True}, 'Task com'),
-    (r'^Error running agent:\s*(.+)$', 'error', lambda m: {'action': 'agent_error', 'error': m.group(1).strip()}, 'Error run'),
-]
-
-# Pre-compile all patterns at module load time
-RAW_LOG_PATTERNS = [
-    (re.compile(pattern), etype, extractor, prefix)
-    for pattern, etype, extractor, prefix in _RAW_PATTERNS_SOURCE
-]
-
-
-def convert_raw_line_to_event(
-    content: str,
-    timestamp: Optional[str],
-    metadata: 'EventMetadata',
-    line_number: int
-) -> Optional[Dict[str, Any]]:
-    """
-    Convert a raw log line to a structured JSONL event.
-
-    Returns None if the line is empty or just whitespace.
-    """
-    content = content.strip()
-    if not content:
-        return None
-
-    # Try each pattern
-    event_type = 'info'  # Default
-    details = {'raw_content': content}
-
-    for compiled_re, etype, extractor, prefix in RAW_LOG_PATTERNS:
-        # Fast prefix check before regex (string ops are ~10x faster)
-        if not content.startswith(prefix):
-            continue
-        match = compiled_re.match(content)
-        if match:
-            event_type = etype
-            details.update(extractor(match))
-            break
-
-    # Build the event
-    return {
-        'timestamp': timestamp,
-        'session_id': f"{metadata.vm_hostname}_{metadata.source_file.replace('.log', '')}",
-        'agent_type': metadata.sup_behavior,
-        'event_type': event_type,
-        'workflow': details.get('workflow'),
-        'details': details,
-        'experiment_name': metadata.experiment_name,
-        'vm_hostname': metadata.vm_hostname,
-        'vm_ip': metadata.vm_ip,
-        'sup_behavior': metadata.sup_behavior,
-        'sup_flavor': metadata.sup_flavor,
-        'source_file': metadata.source_file,
-        'collection_timestamp': metadata.collection_timestamp.isoformat(),
-        'source_format': 'converted',  # Mark as converted from raw
-        'line_number': line_number,
-    }
-
-
-def parse_raw_log_file_as_events(
-    file_path: Path,
-    metadata: 'EventMetadata'
-) -> Generator[Dict[str, Any], None, None]:
-    """Parse raw systemd log file and yield structured JSONL events."""
-    current_timestamp = None
-    current_workflow = None
-
-    with open(file_path, 'r', errors='replace') as f:
-        for line_num, line in enumerate(f, 1):
-            content = line.rstrip('\n\r')
-
-            # Try to extract timestamp from line
-            ts = parse_timestamp_from_line(content)
-            if ts:
-                current_timestamp = ts
-
-            # Convert to event
-            event = convert_raw_line_to_event(content, current_timestamp, metadata, line_num)
-            if event:
-                # Track current workflow for context
-                if event['event_type'] == 'workflow_start' and event.get('details', {}).get('workflow'):
-                    current_workflow = event['details']['workflow']
-
-                # Add workflow context to non-workflow events
-                if event['workflow'] is None and current_workflow:
-                    event['workflow'] = current_workflow
-
-                yield event
-
-
-def parse_raw_log_file(
-    file_path: Path,
-    metadata: EventMetadata
-) -> Generator[Dict[str, Any], None, None]:
-    """Parse raw systemd log file (plain text with timestamps)."""
-    # Determine log type from filename
-    log_type = 'stderr' if 'error' in file_path.name.lower() else 'stdout'
-
-    current_timestamp = None
-    with open(file_path, 'r', errors='replace') as f:
-        for line_num, line in enumerate(f, 1):
-            content = line.rstrip('\n\r')
-
-            # Try to extract timestamp from line
-            ts = parse_timestamp_from_line(content)
-            if ts:
-                current_timestamp = ts
-
-            yield {
-                'timestamp': current_timestamp,
-                'line_number': line_num,
-                'content': content,
-                'log_type': log_type,
-                'experiment_name': metadata.experiment_name,
-                'vm_hostname': metadata.vm_hostname,
-                'vm_ip': metadata.vm_ip,
-                'sup_behavior': metadata.sup_behavior,
-                'sup_flavor': metadata.sup_flavor,
-                'source_file': metadata.source_file,
-                'collection_timestamp': metadata.collection_timestamp.isoformat()
-            }
-
-
 def parse_jsonl_file(
     file_path: Path,
     metadata: EventMetadata
@@ -562,7 +288,6 @@ def parse_jsonl_file(
             event['sup_flavor'] = metadata.sup_flavor
             event['source_file'] = metadata.source_file
             event['collection_timestamp'] = metadata.collection_timestamp.isoformat()
-            event['source_format'] = 'native'  # Native JSONL from AgentLogger
             event['line_number'] = line_num
 
             # Extract common fields from details for indexing
@@ -573,11 +298,11 @@ def parse_jsonl_file(
                 event['error_message'] = details.get('error') or details.get('message')
                 event['model'] = details.get('model')
                 event['action'] = details.get('action')
-                # New step-based logging fields
                 event['category'] = details.get('category')
                 event['step_name'] = details.get('step_name')
                 event['status'] = details.get('status')
-                # LLM-specific fields (for llm_response events)
+
+                # LLM-specific fields
                 tokens = details.get('tokens', {})
                 if isinstance(tokens, dict):
                     event['input_tokens'] = tokens.get('input')
@@ -587,40 +312,49 @@ def parse_jsonl_file(
                     event['input_tokens'] = None
                     event['output_tokens'] = None
                     event['total_tokens'] = None
-                # LLM output text (truncated in logger, store as-is)
                 event['llm_output'] = details.get('output')
             else:
-                event['duration_ms'] = None
-                event['success'] = None
-                event['error_message'] = None
-                event['model'] = None
-                event['action'] = None
-                event['category'] = None
-                event['step_name'] = None
-                event['status'] = None
-                event['input_tokens'] = None
-                event['output_tokens'] = None
-                event['total_tokens'] = None
-                event['llm_output'] = None
+                # Set all extracted fields to None
+                for field in ['duration_ms', 'success', 'error_message', 'model', 'action',
+                              'category', 'step_name', 'status', 'input_tokens',
+                              'output_tokens', 'total_tokens', 'llm_output']:
+                    event[field] = None
 
             yield event
 
 
-def parse_all_logs(
+# ============================================================================
+# DuckDB Operations
+# ============================================================================
+
+def init_database(db_path: Path) -> duckdb.DuckDBPyConnection:
+    """Initialize DuckDB database with schema."""
+    conn = duckdb.connect(str(db_path))
+    conn.execute(CREATE_EVENTS_TABLE)
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS event_seq START 1")
+    conn.execute(CREATE_INDEXES)
+    return conn
+
+
+def load_events_to_duckdb(
+    conn: duckdb.DuckDBPyConnection,
     raw_dir: Path,
     experiments: List[str],
-    vm_info_map: Dict[str, VMInfo],
-    file_type: str = 'jsonl'  # 'jsonl', 'raw', or 'raw_as_events'
-) -> Generator[Dict[str, Any], None, None]:
-    """Parse all collected log files and yield enriched events.
-
-    Args:
-        file_type: 'jsonl' for structured logs, 'raw' for systemd plain text logs,
-                   'raw_as_events' for raw logs converted to JSONL event format
-    """
+    vm_info_map: Dict[str, VMInfo]
+) -> int:
+    """Load JSONL events into DuckDB."""
     collection_ts = datetime.now()
+    total_loaded = 0
 
-    pattern = "*.jsonl" if file_type == 'jsonl' else "*.log"
+    # Get max existing ID
+    try:
+        result = conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()
+        event_id = result[0] if result else 0
+    except Exception:
+        event_id = 0
+
+    batch_size = 50000
+    rows = []
 
     for experiment in experiments:
         exp_dir = raw_dir / experiment
@@ -631,12 +365,11 @@ def parse_all_logs(
             if not vm_dir.is_dir():
                 continue
 
-            # Get VM info from map
             vm_key = f"{experiment}:{vm_dir.name}"
             vm = vm_info_map.get(vm_key)
 
-            for log_file in vm_dir.glob(pattern):
-                # Skip symlinks
+            # Process JSONL files
+            for log_file in vm_dir.glob("*.jsonl"):
                 if log_file.is_symlink():
                     continue
 
@@ -650,88 +383,44 @@ def parse_all_logs(
                     collection_timestamp=collection_ts
                 )
 
-                if file_type == 'jsonl':
-                    yield from parse_jsonl_file(log_file, metadata)
-                elif file_type == 'raw_as_events':
-                    yield from parse_raw_log_file_as_events(log_file, metadata)
-                else:
-                    yield from parse_raw_log_file(log_file, metadata)
+                for event in parse_jsonl_file(log_file, metadata):
+                    event_id += 1
+                    rows.append({
+                        'id': event_id,
+                        'timestamp': event.get('timestamp'),
+                        'session_id': event.get('session_id'),
+                        'agent_type': event.get('agent_type'),
+                        'event_type': event.get('event_type'),
+                        'workflow': event.get('workflow'),
+                        'details': json.dumps(event.get('details')) if event.get('details') else None,
+                        'experiment_name': event.get('experiment_name'),
+                        'vm_hostname': event.get('vm_hostname'),
+                        'vm_ip': event.get('vm_ip'),
+                        'sup_behavior': event.get('sup_behavior'),
+                        'sup_flavor': event.get('sup_flavor'),
+                        'source_file': event.get('source_file'),
+                        'collection_timestamp': event.get('collection_timestamp'),
+                        'line_number': event.get('line_number'),
+                        'duration_ms': event.get('duration_ms'),
+                        'success': event.get('success'),
+                        'error_message': event.get('error_message'),
+                        'model': event.get('model'),
+                        'action': event.get('action'),
+                        'category': event.get('category'),
+                        'step_name': event.get('step_name'),
+                        'status': event.get('status'),
+                        'input_tokens': event.get('input_tokens'),
+                        'output_tokens': event.get('output_tokens'),
+                        'total_tokens': event.get('total_tokens'),
+                        'llm_output': event.get('llm_output')
+                    })
 
-
-# ============================================================================
-# DuckDB Operations
-# ============================================================================
-
-def init_database(db_path: Path) -> duckdb.DuckDBPyConnection:
-    """Initialize DuckDB database with schema."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute(CREATE_EVENTS_TABLE)
-    conn.execute(CREATE_RAW_LOGS_TABLE)
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS raw_log_seq START 1")
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS event_seq START 1")
-    conn.execute(CREATE_INDEXES)
-    return conn
-
-
-def load_events_to_duckdb(
-    conn: duckdb.DuckDBPyConnection,
-    events: Generator[Dict[str, Any], None, None],
-    batch_size: int = 100000
-) -> int:
-    """Load JSONL events into DuckDB using bulk insert."""
-    total_loaded = 0
-
-    # Get max existing ID
-    try:
-        result = conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()
-        event_id = result[0] if result else 0
-    except Exception:
-        event_id = 0
-
-    # Collect all events into lists for bulk insert
-    rows = []
-    for event in events:
-        event_id += 1
-        rows.append({
-            'id': event_id,
-            'timestamp': event.get('timestamp'),
-            'session_id': event.get('session_id'),
-            'agent_type': event.get('agent_type'),
-            'event_type': event.get('event_type'),
-            'workflow': event.get('workflow'),
-            'details': json.dumps(event.get('details')) if event.get('details') else None,
-            'experiment_name': event.get('experiment_name'),
-            'vm_hostname': event.get('vm_hostname'),
-            'vm_ip': event.get('vm_ip'),
-            'sup_behavior': event.get('sup_behavior'),
-            'sup_flavor': event.get('sup_flavor'),
-            'source_file': event.get('source_file'),
-            'collection_timestamp': event.get('collection_timestamp'),
-            'duration_ms': event.get('duration_ms'),
-            'success': event.get('success'),
-            'error_message': event.get('error_message'),
-            'model': event.get('model'),
-            'action': event.get('action'),
-            'source_format': event.get('source_format', 'native'),
-            'line_number': event.get('line_number'),
-            # New step-based logging fields
-            'category': event.get('category'),
-            'step_name': event.get('step_name'),
-            'status': event.get('status'),
-            # LLM-specific fields
-            'input_tokens': event.get('input_tokens'),
-            'output_tokens': event.get('output_tokens'),
-            'total_tokens': event.get('total_tokens'),
-            'llm_output': event.get('llm_output')
-        })
-
-        if len(rows) >= batch_size:
-            # Bulk insert using pandas DataFrame
-            df = pd.DataFrame(rows)
-            conn.execute("INSERT INTO events SELECT * FROM df")
-            total_loaded += len(rows)
-            print(f"  Loaded {total_loaded:,} JSONL events...")
-            rows = []
+                    if len(rows) >= batch_size:
+                        df = pd.DataFrame(rows)
+                        conn.execute("INSERT INTO events SELECT * FROM df")
+                        total_loaded += len(rows)
+                        print(f"  Loaded {total_loaded:,} events...")
+                        rows = []
 
     # Load remaining
     if rows:
@@ -742,55 +431,104 @@ def load_events_to_duckdb(
     return total_loaded
 
 
-def load_raw_logs_to_duckdb(
-    conn: duckdb.DuckDBPyConnection,
-    logs: Generator[Dict[str, Any], None, None],
-    batch_size: int = 100000
-) -> int:
-    """Load raw systemd logs into DuckDB using bulk insert."""
-    total_loaded = 0
+def create_analysis_views(conn: duckdb.DuckDBPyConnection):
+    """Create analysis views for querying."""
 
-    # Get max existing ID
-    try:
-        result = conn.execute("SELECT COALESCE(MAX(id), 0) FROM raw_logs").fetchone()
-        log_id = result[0] if result else 0
-    except Exception:
-        log_id = 0
+    # Workflow analysis view
+    print("  Creating workflow_analysis view...")
+    conn.execute("""
+        CREATE OR REPLACE VIEW workflow_analysis AS
+        SELECT
+            id, timestamp, session_id, agent_type, event_type, workflow,
+            details, experiment_name, vm_hostname, sup_behavior, sup_flavor,
+            duration_ms, success, error_message, model,
+            -- Categorize workflows
+            CASE
+                WHEN lower(workflow) LIKE '%search%' OR lower(workflow) LIKE '%google%' THEN 'web_search'
+                WHEN lower(workflow) LIKE '%youtube%' OR lower(workflow) LIKE '%video%' THEN 'youtube'
+                WHEN lower(workflow) LIKE '%download%' OR lower(workflow) LIKE '%file%' THEN 'file_ops'
+                WHEN lower(workflow) LIKE '%command%' OR lower(workflow) LIKE '%shell%' THEN 'shell'
+                WHEN lower(workflow) LIKE '%document%' OR lower(workflow) LIKE '%writer%'
+                     OR lower(workflow) LIKE '%spreadsheet%' THEN 'document'
+                WHEN lower(workflow) LIKE '%weather%' OR lower(workflow) LIKE '%explain%'
+                     OR lower(workflow) LIKE '%what is%' THEN 'research'
+                WHEN lower(workflow) LIKE '%browse%' OR lower(workflow) LIKE '%visit%'
+                     OR lower(workflow) LIKE '%wikipedia%' THEN 'web_browse'
+                ELSE 'other'
+            END as workflow_category
+        FROM events
+        WHERE workflow IS NOT NULL
+    """)
 
-    # Collect rows for bulk insert
-    rows = []
-    for log_entry in logs:
-        log_id += 1
-        rows.append({
-            'id': log_id,
-            'timestamp': log_entry.get('timestamp'),
-            'line_number': log_entry.get('line_number'),
-            'content': log_entry.get('content'),
-            'log_type': log_entry.get('log_type'),
-            'experiment_name': log_entry.get('experiment_name'),
-            'vm_hostname': log_entry.get('vm_hostname'),
-            'vm_ip': log_entry.get('vm_ip'),
-            'sup_behavior': log_entry.get('sup_behavior'),
-            'sup_flavor': log_entry.get('sup_flavor'),
-            'source_file': log_entry.get('source_file'),
-            'collection_timestamp': log_entry.get('collection_timestamp')
-        })
+    # LLM analysis view
+    print("  Creating llm_analysis view...")
+    conn.execute("""
+        CREATE OR REPLACE VIEW llm_analysis AS
+        SELECT
+            id, timestamp, session_id, agent_type, event_type, workflow,
+            experiment_name, vm_hostname, sup_behavior, model,
+            duration_ms, success, error_message, action,
+            input_tokens, output_tokens, total_tokens, llm_output,
+            -- Tokens per second
+            CASE
+                WHEN event_type = 'llm_response' AND duration_ms > 0 AND output_tokens IS NOT NULL
+                THEN ROUND(output_tokens * 1000.0 / duration_ms, 2)
+                ELSE NULL
+            END as tokens_per_second
+        FROM events
+        WHERE event_type IN ('llm_request', 'llm_response', 'llm_error')
+    """)
 
-        if len(rows) >= batch_size:
-            # Bulk insert using pandas DataFrame
-            df = pd.DataFrame(rows)
-            conn.execute("INSERT INTO raw_logs SELECT * FROM df")
-            total_loaded += len(rows)
-            print(f"  Loaded {total_loaded:,} raw log lines...")
-            rows = []
+    # LLM performance summary view
+    print("  Creating llm_performance view...")
+    conn.execute("""
+        CREATE OR REPLACE VIEW llm_performance AS
+        SELECT
+            experiment_name,
+            sup_behavior,
+            model,
+            COUNT(*) FILTER (WHERE event_type = 'llm_request') as request_count,
+            COUNT(*) FILTER (WHERE event_type = 'llm_response') as response_count,
+            COUNT(*) FILTER (WHERE event_type = 'llm_error') as error_count,
+            ROUND(AVG(duration_ms) FILTER (WHERE event_type = 'llm_response'), 0) as avg_duration_ms,
+            MIN(duration_ms) FILTER (WHERE event_type = 'llm_response') as min_duration_ms,
+            MAX(duration_ms) FILTER (WHERE event_type = 'llm_response') as max_duration_ms,
+            SUM(input_tokens) FILTER (WHERE event_type = 'llm_response') as total_input_tokens,
+            SUM(output_tokens) FILTER (WHERE event_type = 'llm_response') as total_output_tokens,
+            ROUND(AVG(input_tokens) FILTER (WHERE event_type = 'llm_response'), 0) as avg_input_tokens,
+            ROUND(AVG(output_tokens) FILTER (WHERE event_type = 'llm_response'), 0) as avg_output_tokens,
+            ROUND(AVG(
+                CASE WHEN duration_ms > 0 AND output_tokens IS NOT NULL
+                THEN output_tokens * 1000.0 / duration_ms ELSE NULL END
+            ) FILTER (WHERE event_type = 'llm_response'), 2) as avg_tokens_per_second
+        FROM events
+        WHERE event_type IN ('llm_request', 'llm_response', 'llm_error')
+        GROUP BY experiment_name, sup_behavior, model
+    """)
 
-    # Load remaining
-    if rows:
-        df = pd.DataFrame(rows)
-        conn.execute("INSERT INTO raw_logs SELECT * FROM df")
-        total_loaded += len(rows)
-
-    return total_loaded
+    # Session summary view
+    print("  Creating session_summary view...")
+    conn.execute("""
+        CREATE OR REPLACE VIEW session_summary AS
+        SELECT
+            session_id,
+            experiment_name,
+            vm_hostname,
+            sup_behavior,
+            model,
+            MIN(timestamp) as session_start,
+            MAX(timestamp) as session_end,
+            COUNT(*) as total_events,
+            COUNT(*) FILTER (WHERE event_type = 'workflow_start') as workflows_started,
+            COUNT(*) FILTER (WHERE event_type = 'workflow_end' AND success = true) as workflows_succeeded,
+            COUNT(*) FILTER (WHERE event_type = 'workflow_end' AND success = false) as workflows_failed,
+            COUNT(*) FILTER (WHERE event_type = 'llm_response') as llm_calls,
+            SUM(input_tokens) FILTER (WHERE event_type = 'llm_response') as total_input_tokens,
+            SUM(output_tokens) FILTER (WHERE event_type = 'llm_response') as total_output_tokens,
+            COUNT(*) FILTER (WHERE event_type LIKE '%error%') as error_count
+        FROM events
+        GROUP BY session_id, experiment_name, vm_hostname, sup_behavior, model
+    """)
 
 
 # ============================================================================
@@ -801,12 +539,10 @@ def preflight_checks(dry_run: bool = False) -> List[str]:
     """Run pre-flight checks. Returns list of issues."""
     issues = []
 
-    # Check NFS mount
     if not dry_run:
         if not BASE_OUTPUT_DIR.parent.exists():
             issues.append(f"NFS mount not accessible: {BASE_OUTPUT_DIR.parent}")
         else:
-            # Test write access
             test_file = BASE_OUTPUT_DIR.parent / ".write_test"
             try:
                 test_file.touch()
@@ -814,17 +550,13 @@ def preflight_checks(dry_run: bool = False) -> List[str]:
             except Exception as e:
                 issues.append(f"NFS mount not writable: {e}")
 
-    # Check SSH to axes
     result = subprocess.run(
         "ssh -o ConnectTimeout=10 -o BatchMode=yes axes echo ok",
-        shell=True,
-        capture_output=True,
-        timeout=15
+        shell=True, capture_output=True, timeout=15
     )
     if result.returncode != 0:
         issues.append("Cannot SSH to axes jump host")
 
-    # Check for inventory files
     experiments = discover_experiments(DEPLOYMENTS_DIR)
     if not experiments:
         issues.append(f"No experiments with inventory.ini found in {DEPLOYMENTS_DIR}")
@@ -879,50 +611,26 @@ def write_manifest(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Collect SUP logs from remote VMs into DuckDB',
+        description='Collect SUP JSONL logs from remote VMs into DuckDB',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python log_retrieval/collect_sup_logs.py                              # All experiments (sup_logs.duckdb)
-    python log_retrieval/collect_sup_logs.py --experiments exp-1          # Single experiment (sup-logs-exp-1.duckdb)
-    python log_retrieval/collect_sup_logs.py --experiments exp-1 exp-2    # Multiple experiments (sup_logs.duckdb)
-    python log_retrieval/collect_sup_logs.py --db-name custom             # Custom DB name
-    python log_retrieval/collect_sup_logs.py --experiments exp-1 --clean  # Delete and rebuild DB
+    python log_retrieval/collect_sup_logs.py                              # All experiments
+    python log_retrieval/collect_sup_logs.py --experiments exp-2          # Single experiment
+    python log_retrieval/collect_sup_logs.py --experiments exp-2 --clean  # Delete and rebuild DB
     python log_retrieval/collect_sup_logs.py --dry-run                    # Preview only
-
-Database naming:
-    - Single experiment: sup-logs-{experiment}.duckdb (automatic)
-    - Multiple experiments or --db-name: uses specified name or sup_logs.duckdb
         """
     )
-    parser.add_argument(
-        '--experiments', nargs='+',
-        help='Specific experiments to collect (default: all)'
-    )
-    parser.add_argument(
-        '--dry-run', action='store_true',
-        help='Show what would be collected without actually collecting'
-    )
-    parser.add_argument(
-        '--parallel', type=int, default=4,
-        help='Number of parallel SSH connections (default: 4)'
-    )
-    parser.add_argument(
-        '--skip-load', action='store_true',
-        help='Skip loading into DuckDB (only collect raw files)'
-    )
-    parser.add_argument(
-        '--db-name', type=str, default=None,
-        help='Name for the DuckDB file (default: auto-generated based on experiments)'
-    )
-    parser.add_argument(
-        '--clean', action='store_true',
-        help='Delete existing database before collecting (rebuild from scratch)'
-    )
+    parser.add_argument('--experiments', nargs='+', help='Specific experiments to collect')
+    parser.add_argument('--dry-run', action='store_true', help='Preview without collecting')
+    parser.add_argument('--parallel', type=int, default=4, help='Parallel SSH connections')
+    parser.add_argument('--skip-load', action='store_true', help='Skip DuckDB loading')
+    parser.add_argument('--db-name', type=str, default=None, help='Custom database name')
+    parser.add_argument('--clean', action='store_true', help='Delete existing database first')
     args = parser.parse_args()
 
     print("=" * 60)
-    print("SUP Log Collection System")
+    print("SUP Log Collection (JSONL only)")
     print("=" * 60)
 
     # Pre-flight checks
@@ -939,7 +647,6 @@ Database naming:
     all_experiments = discover_experiments(DEPLOYMENTS_DIR)
     experiments = args.experiments if args.experiments else all_experiments
 
-    # Validate requested experiments exist
     for exp in experiments:
         if exp not in all_experiments:
             print(f"\nERROR: Experiment '{exp}' not found. Available: {all_experiments}")
@@ -951,10 +658,7 @@ Database naming:
     collection_date = datetime.now().strftime("%Y-%m-%d")
     raw_dir = BASE_OUTPUT_DIR / "raw" / collection_date
 
-    # Determine database name:
-    # - If --db-name provided, use it
-    # - If single experiment, use sup-logs-{experiment}.duckdb
-    # - If multiple experiments or all, use sup_logs.duckdb
+    # Database naming
     if args.db_name:
         db_name = args.db_name if args.db_name.endswith('.duckdb') else f"{args.db_name}.duckdb"
     elif len(experiments) == 1:
@@ -963,43 +667,35 @@ Database naming:
         db_name = "sup_logs.duckdb"
 
     db_path = BASE_OUTPUT_DIR / db_name
+    manifest_path = BASE_OUTPUT_DIR / db_name.replace('.duckdb', '_manifest.json')
 
-    # Manifest named to match db
-    manifest_name = db_name.replace('.duckdb', '_manifest.json')
-    manifest_path = BASE_OUTPUT_DIR / manifest_name
-
-    # Show database configuration
     print(f"\nDatabase: {db_path}")
     if db_path.exists():
-        print(f"  Status: EXISTS (will append data)")
+        print(f"  Status: EXISTS (will append)")
         if not args.clean:
             print(f"  Tip: Use --clean to rebuild from scratch")
-    else:
-        print(f"  Status: NEW (will be created)")
 
-    # Handle --clean flag: delete existing database
+    # Handle --clean
     if args.clean and not args.dry_run:
         if db_path.exists():
-            print(f"\n[--clean] Deleting existing database: {db_path}")
+            print(f"\n[--clean] Deleting: {db_path}")
             db_path.unlink()
         if manifest_path.exists():
-            print(f"[--clean] Deleting existing manifest: {manifest_path}")
             manifest_path.unlink()
-        # Also clean up any local /tmp version
-        local_tmp_db = Path("/tmp") / db_name
-        if local_tmp_db.exists():
-            local_tmp_db.unlink()
+        local_tmp = Path("/tmp") / db_name
+        if local_tmp.exists():
+            local_tmp.unlink()
 
     if not args.dry_run:
         BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         raw_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect VM info for all experiments
+    # Phase 1: Collect logs
     all_results: List[CollectionResult] = []
     vm_info_map: Dict[str, VMInfo] = {}
 
     print(f"\n{'='*60}")
-    print("Phase 1: Collecting logs from VMs")
+    print("Phase 1: Collecting JSONL logs from VMs")
     print("=" * 60)
 
     for experiment in experiments:
@@ -1011,32 +707,28 @@ Database naming:
         if not vms:
             continue
 
-        # Store VM info for later use
         for vm in vms:
             vm_info_map[f"{experiment}:{vm.hostname}"] = vm
 
-        # Collect from VMs in parallel
         with ThreadPoolExecutor(max_workers=args.parallel) as executor:
             futures = {
-                executor.submit(
-                    collect_logs_from_vm, vm, experiment, raw_dir, args.dry_run
-                ): vm for vm in vms
+                executor.submit(collect_logs_from_vm, vm, experiment, raw_dir, args.dry_run): vm
+                for vm in vms
             }
 
             for future in as_completed(futures):
                 result = future.result()
                 all_results.append(result)
 
-                # Print progress
                 status = "OK" if result.success else "FAILED"
-                files_str = f"{result.files_collected} files" if result.files_collected else "no logs"
+                files_str = f"{result.files_collected} files" if result.files_collected else "no JSONL"
                 print(f"  {result.vm.hostname}: {status} ({files_str})")
 
                 if result.errors:
                     for err in result.errors:
                         print(f"    ERROR: {err}")
 
-    # Summary of collection phase
+    # Summary
     total_files = sum(r.files_collected for r in all_results)
     successful_vms = sum(1 for r in all_results if r.success)
 
@@ -1045,14 +737,14 @@ Database naming:
     print("=" * 60)
     print(f"  VMs processed: {len(all_results)}")
     print(f"  VMs successful: {successful_vms}")
-    print(f"  Total files collected: {total_files}")
+    print(f"  JSONL files collected: {total_files}")
 
     if args.dry_run:
         print("\n[DRY RUN] No files were actually collected.")
         return 0
 
     if total_files == 0:
-        print("\nNo log files found. Nothing to load into DuckDB.")
+        print("\nNo JSONL files found. Nothing to load.")
         return 0
 
     if args.skip_load:
@@ -1064,675 +756,49 @@ Database naming:
     print("Phase 2: Loading into DuckDB")
     print("=" * 60)
 
-    # Write to local /tmp first (much faster than NFS), then copy at the end
     import shutil
     local_db_path = Path("/tmp") / db_name
     print(f"  Building locally: {local_db_path}")
     print(f"  Final destination: {db_path}")
+
     conn = init_database(local_db_path)
 
-    # Collect file paths with metadata (Python just finds files, DuckDB reads them)
-    print("\n  Scanning for log files...")
-    log_files = []
-    for experiment in experiments:
-        exp_dir = raw_dir / experiment
-        if not exp_dir.exists():
-            continue
-        for vm_dir in exp_dir.iterdir():
-            if not vm_dir.is_dir():
-                continue
-            vm_key = f"{experiment}:{vm_dir.name}"
-            vm = vm_info_map.get(vm_key)
-            for log_file in vm_dir.glob("*.log"):
-                if log_file.is_symlink():
-                    continue
-                log_files.append({
-                    'file_path': str(log_file),
-                    'experiment_name': experiment,
-                    'vm_hostname': vm_dir.name,
-                    'vm_ip': vm.ip if vm else '',
-                    'sup_behavior': vm.sup_behavior if vm else '',
-                    'sup_flavor': vm.sup_flavor if vm else '',
-                    'source_file': log_file.name,
-                    'log_type': 'stderr' if 'error' in log_file.name.lower() else 'stdout'
-                })
-    print(f"  Found {len(log_files)} log files")
+    print("\n  Loading JSONL events...")
+    total_events = load_events_to_duckdb(conn, raw_dir, experiments, vm_info_map)
+    print(f"  Events loaded: {total_events:,}")
 
-    # Load raw logs using DuckDB's native file reading (FAST!)
-    print("\n  Loading raw logs with DuckDB (native file read)...")
-    total_raw_logs = 0
-    for i, lf in enumerate(log_files):
-        # DuckDB reads the file directly - no Python processing!
-        # Using newline_split to get each line as a row
-        file_path = lf['file_path'].replace("'", "''")  # Escape single quotes
-        conn.execute(f"""
-            INSERT INTO raw_logs
-            SELECT
-                nextval('raw_log_seq') as id,
-                NULL as timestamp,
-                row_number() OVER () as line_number,
-                line as content,
-                '{lf['log_type']}' as log_type,
-                '{lf['experiment_name']}' as experiment_name,
-                '{lf['vm_hostname']}' as vm_hostname,
-                '{lf['vm_ip']}' as vm_ip,
-                '{lf['sup_behavior']}' as sup_behavior,
-                '{lf['sup_flavor']}' as sup_flavor,
-                '{lf['source_file']}' as source_file,
-                CURRENT_TIMESTAMP as collection_timestamp
-            FROM (
-                SELECT unnest(string_split(content, chr(10))) as line
-                FROM read_text('{file_path}')
-            )
-            WHERE line IS NOT NULL AND trim(line) != ''
-        """)
-        if (i + 1) % 10 == 0:
-            print(f"    Processed {i + 1}/{len(log_files)} files...")
+    print("\n  Creating analysis views...")
+    create_analysis_views(conn)
 
-    total_raw_logs = conn.execute("SELECT COUNT(*) FROM raw_logs").fetchone()[0]
-    print(f"  Raw log lines loaded: {total_raw_logs:,}")
-
-    total_native_events = 0  # No native JSONL in old experiments
-
-    # Create a VIEW that converts raw_logs to event format using SQL (instant)
-    # This handles both legacy plain-text logs AND the new AgentLogger JSONL format
-    print("\n  Creating events_from_raw view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW events_from_raw AS
-        SELECT
-            id,
-            CASE
-                WHEN content LIKE '[____-__-__ __:__:__]%'
-                THEN CAST(regexp_extract(content, '\\[(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})\\]', 1) AS TIMESTAMP)
-                ELSE NULL
-            END as timestamp,
-            vm_hostname || '_' || replace(source_file, '.log', '') as session_id,
-            sup_behavior as agent_type,
-            -- Event type detection (includes new step_* and session_* events)
-            CASE
-                -- Session events
-                WHEN content LIKE '%Starting SmolAgents agent%' THEN 'session_start'
-                WHEN content LIKE '%Starting BrowserUse agent%' THEN 'session_start'
-                WHEN content LIKE '%Session completed successfully%' THEN 'session_success'
-                WHEN content LIKE '%Session failed%' OR content LIKE '%Session ended with exception%' THEN 'session_fail'
-                -- Workflow events
-                WHEN content LIKE '%Running Task:%' THEN 'workflow_start'
-                WHEN content LIKE '[%] Task:%' AND content NOT LIKE '%Task completed%' THEN 'workflow_start'
-                WHEN content LIKE '%Task completed successfully%' THEN 'workflow_end'
-                -- Step events (new logging framework)
-                WHEN content LIKE '%step_start%' OR content LIKE '%Step starting:%' THEN 'step_start'
-                WHEN content LIKE '%step_success%' OR content LIKE '%Step succeeded:%' THEN 'step_success'
-                WHEN content LIKE '%step_error%' OR content LIKE '%Step failed:%' THEN 'step_error'
-                -- Legacy browser actions (map to step events for consistency)
-                WHEN content LIKE 'Browsing to %' THEN 'step_start'
-                WHEN content LIKE '%Navigated to %' THEN 'step_success'
-                WHEN content LIKE '%Googling:%' THEN 'step_start'
-                WHEN content LIKE '%Browsing search results%' THEN 'step_success'
-                -- Errors
-                WHEN content LIKE 'Timeout loading%' THEN 'step_error'
-                WHEN content LIKE 'Error loading%' THEN 'step_error'
-                WHEN content LIKE 'Error running agent%' THEN 'step_error'
-                WHEN content LIKE 'Error %' THEN 'step_error'
-                ELSE 'info'
-            END as event_type,
-            -- Workflow extraction
-            CASE
-                WHEN content LIKE '%Running Task:%'
-                THEN trim(regexp_extract(content, 'Running Task:\\s*(.+)$', 1))
-                WHEN content LIKE '[%] Task:%' AND content NOT LIKE '%Task completed%'
-                THEN trim(regexp_extract(content, 'Task:\\s*(.+)$', 1))
-                ELSE NULL
-            END as workflow,
-            content as raw_content,
-            -- Extract success from plain text
-            CASE
-                WHEN content LIKE '%Task completed successfully%' THEN true
-                WHEN content LIKE '%successful navigation%' THEN true
-                WHEN content LIKE '%step_success%' OR content LIKE '%Step succeeded%' THEN true
-                WHEN content LIKE '%Session completed successfully%' THEN true
-                WHEN content LIKE 'Error %' OR content LIKE 'Timeout %' THEN false
-                WHEN content LIKE '%unsuccessful%' THEN false
-                WHEN content LIKE '%step_error%' OR content LIKE '%Step failed%' THEN false
-                WHEN content LIKE '%Session failed%' THEN false
-                ELSE NULL
-            END as success_extracted,
-            -- Extract error message from plain text
-            CASE
-                WHEN content LIKE 'Error running agent:%'
-                THEN trim(regexp_extract(content, 'Error running agent:\\s*(.+)$', 1))
-                WHEN content LIKE 'Error loading%:%'
-                THEN trim(regexp_extract(content, 'Error loading\\s+.+?:\\s*(.+)$', 1))
-                WHEN content LIKE 'Error performing google search%:%'
-                THEN trim(regexp_extract(content, 'Error performing google search\\s+.+?:\\s*(.+)$', 1))
-                WHEN content LIKE 'Timeout loading%:%'
-                THEN trim(regexp_extract(content, 'Timeout loading\\s+.+?:\\s*(.+)$', 1))
-                WHEN content LIKE '%Step failed:%'
-                THEN trim(regexp_extract(content, 'Step failed:\\s*(.+)$', 1))
-                ELSE NULL
-            END as error_message_extracted,
-            -- Extract model from session_start lines
-            CASE
-                WHEN content LIKE '%Starting SmolAgents agent with model:%'
-                THEN trim(regexp_extract(content, 'with model:\\s*(.+)$', 1))
-                WHEN content LIKE '%Starting BrowserUse agent with model:%'
-                THEN trim(regexp_extract(content, 'with model:\\s*(.+)$', 1))
-                -- For MCHP, extract model hint from sup_behavior (e.g., M2.llama -> llama)
-                WHEN sup_behavior LIKE '%.llama%' THEN 'llama3.1:8b'
-                WHEN sup_behavior LIKE '%.gemma%' THEN 'gemma3:4b'
-                WHEN sup_behavior LIKE '%.deepseek%' THEN 'deepseek-r1:8b'
-                ELSE NULL
-            END as model_extracted,
-            -- Extract action type (for step events)
-            CASE
-                WHEN content LIKE 'Browsing to %' THEN 'navigate'
-                WHEN content LIKE '%Navigated to %' THEN 'navigate'
-                WHEN content LIKE '%Googling:%' THEN 'search'
-                WHEN content LIKE '%Browsing search results%' THEN 'browse_results'
-                WHEN content LIKE '%Clicking on search%' THEN 'click_result'
-                WHEN content LIKE '%Feeling lucky%' THEN 'feeling_lucky'
-                ELSE NULL
-            END as action_extracted,
-            -- NEW: Extract step category from content
-            CASE
-                WHEN content LIKE '%category%browser%' OR content LIKE 'Browsing%' OR content LIKE '%Navigat%'
-                     OR content LIKE '%Googling%' OR content LIKE '%search%' THEN 'browser'
-                WHEN content LIKE '%category%video%' OR content LIKE '%YouTube%' OR content LIKE '%video%' THEN 'video'
-                WHEN content LIKE '%category%office%' OR content LIKE '%OpenOffice%' OR content LIKE '%Writer%'
-                     OR content LIKE '%Calc%' OR content LIKE '%Paint%' THEN 'office'
-                WHEN content LIKE '%category%shell%' OR content LIKE '%command%' OR content LIKE '%Execute%' THEN 'shell'
-                WHEN content LIKE '%category%authentication%' OR content LIKE '%login%' OR content LIKE '%Shibboleth%' THEN 'authentication'
-                ELSE 'other'
-            END as category_extracted,
-            -- NEW: Extract step name from content
-            CASE
-                WHEN content LIKE 'Browsing to %' THEN 'navigate'
-                WHEN content LIKE '%Navigated to %' THEN 'navigate'
-                WHEN content LIKE '%Googling:%' THEN 'google_search'
-                WHEN content LIKE '%Browsing search results%' THEN 'browse_results'
-                WHEN content LIKE '%Clicking%' THEN 'click'
-                WHEN content LIKE '%login%' THEN 'login'
-                WHEN content LIKE 'Timeout loading%' THEN 'page_load'
-                WHEN content LIKE 'Error loading%' THEN 'page_load'
-                ELSE NULL
-            END as step_name_extracted,
-            -- NEW: Extract step status
-            CASE
-                WHEN content LIKE '%step_start%' OR content LIKE '%Step starting%' OR content LIKE 'Browsing to %'
-                     OR content LIKE '%Googling:%' THEN 'start'
-                WHEN content LIKE '%step_success%' OR content LIKE '%Step succeeded%' OR content LIKE '%Navigated to %'
-                     OR content LIKE '%successful%' THEN 'success'
-                WHEN content LIKE '%step_error%' OR content LIKE '%Step failed%' OR content LIKE 'Error %'
-                     OR content LIKE 'Timeout %' THEN 'error'
-                ELSE NULL
-            END as status_extracted,
-            experiment_name,
-            vm_hostname,
-            vm_ip,
-            sup_behavior,
-            sup_flavor,
-            source_file,
-            collection_timestamp,
-            'converted' as source_format,
-            line_number
-        FROM raw_logs
-        WHERE content IS NOT NULL AND trim(content) != ''
-    """)
-    print("  View created: events_from_raw")
-
-    # Create unified view combining native + converted
-    print("  Creating unified_events view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW unified_events AS
-        SELECT * FROM events
-        UNION ALL
-        SELECT
-            id, timestamp, session_id, agent_type, event_type, workflow,
-            json_object('raw_content', raw_content) as details,
-            experiment_name, vm_hostname, vm_ip, sup_behavior, sup_flavor,
-            source_file, collection_timestamp,
-            NULL as duration_ms,
-            success_extracted as success,
-            error_message_extracted as error_message,
-            model_extracted as model,
-            action_extracted as action,
-            source_format, line_number,
-            -- New columns for step-based logging
-            category_extracted as category,
-            step_name_extracted as step_name,
-            status_extracted as status,
-            -- LLM-specific columns (NULL for raw logs)
-            NULL as input_tokens,
-            NULL as output_tokens,
-            NULL as total_tokens,
-            NULL as llm_output
-        FROM events_from_raw
-    """)
-    print("  View created: unified_events")
-
-    # Create workflow normalization view with MCHP mapping and categories
-    print("  Creating workflow_normalized view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW workflow_normalized AS
-        SELECT
-            *,
-            -- Normalize MCHP workflow names to S/B style descriptions
-            CASE
-                -- MCHP class names (from JSONL)
-                WHEN workflow = 'GoogleSearcher' THEN 'Search for something on Google'
-                WHEN workflow = 'WebBrowser' THEN 'Visit a random website and browse'
-                WHEN workflow = 'YoutubeBrowser' THEN 'Go to YouTube and browse videos'
-                WHEN workflow = 'DownloadFiles' THEN 'Download files from the internet'
-                WHEN workflow = 'ExecuteCommand' THEN 'Execute shell commands'
-                WHEN workflow = 'ListFiles' THEN 'List files in the current directory'
-                WHEN workflow = 'OpenOfficeWriter' THEN 'Create a document with OpenOffice Writer'
-                WHEN workflow = 'OpenOfficeCalc' THEN 'Create a spreadsheet with OpenOffice Calc'
-                WHEN workflow = 'MicrosoftPaint' THEN 'Create an image with MS Paint'
-                -- MCHP descriptions (from plain text logs)
-                WHEN workflow = 'Search for something on Google' THEN 'Search for something on Google'
-                WHEN workflow = 'Select a random website and browse' THEN 'Visit a random website and browse'
-                WHEN workflow = 'Browse Youtube' THEN 'Go to YouTube and browse videos'
-                WHEN workflow = 'Download files' THEN 'Download files from the internet'
-                WHEN workflow = 'Execute custom commands' THEN 'Execute shell commands'
-                WHEN workflow = 'List files in the current directory' THEN 'List files in the current directory'
-                WHEN workflow LIKE '%OpenOffice Writer%' THEN 'Create a document with OpenOffice Writer'
-                WHEN workflow LIKE '%OpenOffice Calc%' THEN 'Create a spreadsheet with OpenOffice Calc'
-                WHEN workflow LIKE '%MS Paint%' OR workflow LIKE '%Paint file%' THEN 'Create an image with MS Paint'
-                -- S/B tasks pass through as-is (already normalized)
-                ELSE workflow
-            END as workflow_normalized,
-            -- Categorize workflows for high-level analysis
-            CASE
-                WHEN lower(workflow) LIKE '%search%' OR lower(workflow) LIKE '%google%'
-                     OR lower(workflow) LIKE '%duckduckgo%' OR lower(workflow) LIKE '%bing%'
-                     OR workflow = 'GoogleSearcher' THEN 'web_search'
-                WHEN lower(workflow) LIKE '%youtube%' OR lower(workflow) LIKE '%video%'
-                     OR workflow = 'YoutubeBrowser' THEN 'youtube'
-                WHEN lower(workflow) LIKE '%download%' OR lower(workflow) LIKE '%file%'
-                     OR workflow = 'DownloadFiles' OR workflow = 'ListFiles' THEN 'file_ops'
-                WHEN lower(workflow) LIKE '%command%' OR lower(workflow) LIKE '%shell%'
-                     OR lower(workflow) LIKE '%execute%' OR workflow = 'ExecuteCommand' THEN 'shell'
-                WHEN lower(workflow) LIKE '%document%' OR lower(workflow) LIKE '%writer%'
-                     OR lower(workflow) LIKE '%spreadsheet%' OR lower(workflow) LIKE '%calc%'
-                     OR lower(workflow) LIKE '%paint%' OR lower(workflow) LIKE '%office%'
-                     OR workflow IN ('OpenOfficeWriter', 'OpenOfficeCalc', 'MicrosoftPaint') THEN 'document'
-                WHEN lower(workflow) LIKE '%weather%' OR lower(workflow) LIKE '%explain%'
-                     OR lower(workflow) LIKE '%what is%' OR lower(workflow) LIKE '%what are%'
-                     OR lower(workflow) LIKE '%summarize%' OR lower(workflow) LIKE '%describe%'
-                     OR lower(workflow) LIKE '%history%' THEN 'research'
-                WHEN lower(workflow) LIKE '%visit%' OR lower(workflow) LIKE '%browse%'
-                     OR lower(workflow) LIKE '%go to%' OR lower(workflow) LIKE '%navigate%'
-                     OR lower(workflow) LIKE '%website%' OR lower(workflow) LIKE '%reddit%'
-                     OR lower(workflow) LIKE '%wikipedia%' OR lower(workflow) LIKE '%news%'
-                     OR workflow = 'WebBrowser' THEN 'web_browse'
-                ELSE 'other'
-            END as workflow_category
-        FROM unified_events
-        WHERE workflow IS NOT NULL
-    """)
-    print("  View created: workflow_normalized")
-
-    # Create workflow_durations view that calculates duration from start/end pairs
-    print("  Creating workflow_durations view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW workflow_durations AS
-        WITH workflow_starts AS (
-            SELECT
-                id,
-                timestamp as start_time,
-                session_id,
-                workflow,
-                workflow_normalized,
-                workflow_category,
-                sup_behavior,
-                experiment_name,
-                vm_hostname,
-                model,
-                source_format,
-                -- Get the next workflow_end timestamp in the same session
-                LEAD(timestamp) OVER (
-                    PARTITION BY session_id
-                    ORDER BY timestamp, line_number
-                ) as potential_end_time,
-                LEAD(event_type) OVER (
-                    PARTITION BY session_id
-                    ORDER BY timestamp, line_number
-                ) as next_event_type,
-                LEAD(success) OVER (
-                    PARTITION BY session_id
-                    ORDER BY timestamp, line_number
-                ) as next_success
-            FROM workflow_normalized
-            WHERE event_type = 'workflow_start'
-        )
-        SELECT
-            id,
-            start_time,
-            CASE
-                WHEN next_event_type = 'workflow_end' THEN potential_end_time
-                ELSE NULL
-            END as end_time,
-            session_id,
-            workflow,
-            workflow_normalized,
-            workflow_category,
-            sup_behavior,
-            experiment_name,
-            vm_hostname,
-            model,
-            source_format,
-            -- Calculate duration in milliseconds
-            CASE
-                WHEN next_event_type = 'workflow_end' AND potential_end_time IS NOT NULL AND start_time IS NOT NULL
-                THEN CAST(EXTRACT(EPOCH FROM (potential_end_time - start_time)) * 1000 AS INTEGER)
-                ELSE NULL
-            END as duration_ms,
-            -- Use success from the paired workflow_end event
-            CASE
-                WHEN next_event_type = 'workflow_end' THEN next_success
-                ELSE NULL
-            END as success
-        FROM workflow_starts
-    """)
-    print("  View created: workflow_durations")
-
-    # Create step_analysis view for step-level metrics by category
-    print("  Creating step_analysis view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW step_analysis AS
-        SELECT
-            id,
-            timestamp,
-            session_id,
-            agent_type,
-            event_type,
-            workflow,
-            experiment_name,
-            vm_hostname,
-            sup_behavior,
-            model,
-            source_format,
-            -- Step-specific fields
-            category,
-            step_name,
-            status,
-            duration_ms,
-            success,
-            error_message
-        FROM unified_events
-        WHERE event_type IN ('step_start', 'step_success', 'step_error')
-    """)
-    print("  View created: step_analysis")
-
-    # Create step_durations view that pairs step_start with step_success/step_error
-    print("  Creating step_durations view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW step_durations AS
-        WITH step_starts AS (
-            SELECT
-                id,
-                timestamp as start_time,
-                session_id,
-                workflow,
-                category,
-                step_name,
-                sup_behavior,
-                experiment_name,
-                vm_hostname,
-                model,
-                source_format,
-                -- Get the next step event in the same session
-                LEAD(timestamp) OVER (
-                    PARTITION BY session_id
-                    ORDER BY timestamp, line_number
-                ) as potential_end_time,
-                LEAD(event_type) OVER (
-                    PARTITION BY session_id
-                    ORDER BY timestamp, line_number
-                ) as next_event_type,
-                LEAD(success) OVER (
-                    PARTITION BY session_id
-                    ORDER BY timestamp, line_number
-                ) as next_success,
-                LEAD(error_message) OVER (
-                    PARTITION BY session_id
-                    ORDER BY timestamp, line_number
-                ) as next_error
-            FROM unified_events
-            WHERE event_type = 'step_start'
-        )
-        SELECT
-            id,
-            start_time,
-            CASE
-                WHEN next_event_type IN ('step_success', 'step_error') THEN potential_end_time
-                ELSE NULL
-            END as end_time,
-            session_id,
-            workflow,
-            category,
-            step_name,
-            sup_behavior,
-            experiment_name,
-            vm_hostname,
-            model,
-            source_format,
-            -- Calculate duration in milliseconds
-            CASE
-                WHEN next_event_type IN ('step_success', 'step_error')
-                     AND potential_end_time IS NOT NULL AND start_time IS NOT NULL
-                THEN CAST(EXTRACT(EPOCH FROM (potential_end_time - start_time)) * 1000 AS INTEGER)
-                ELSE NULL
-            END as duration_ms,
-            -- Determine success/failure
-            CASE
-                WHEN next_event_type = 'step_success' THEN true
-                WHEN next_event_type = 'step_error' THEN false
-                ELSE NULL
-            END as success,
-            CASE
-                WHEN next_event_type = 'step_error' THEN next_error
-                ELSE NULL
-            END as error_message
-        FROM step_starts
-    """)
-    print("  View created: step_durations")
-
-    # Create session_outcomes view for session-level success/failure tracking
-    print("  Creating session_outcomes view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW session_outcomes AS
-        WITH session_events AS (
-            SELECT
-                session_id,
-                experiment_name,
-                vm_hostname,
-                sup_behavior,
-                model,
-                source_format,
-                MIN(CASE WHEN event_type = 'session_start' THEN timestamp END) as session_start_time,
-                MAX(CASE WHEN event_type = 'session_end' THEN timestamp END) as session_end_time,
-                MAX(CASE WHEN event_type = 'session_success' THEN timestamp END) as success_time,
-                MAX(CASE WHEN event_type = 'session_fail' THEN timestamp END) as fail_time,
-                MAX(CASE WHEN event_type = 'session_fail' THEN error_message END) as fail_error,
-                COUNT(*) FILTER (WHERE event_type = 'workflow_start') as workflows_started,
-                COUNT(*) FILTER (WHERE event_type = 'workflow_end' AND success = true) as workflows_succeeded,
-                COUNT(*) FILTER (WHERE event_type = 'workflow_end' AND success = false) as workflows_failed,
-                COUNT(*) FILTER (WHERE event_type = 'step_start') as steps_started,
-                COUNT(*) FILTER (WHERE event_type = 'step_success') as steps_succeeded,
-                COUNT(*) FILTER (WHERE event_type = 'step_error') as steps_failed,
-                COUNT(*) FILTER (WHERE event_type = 'llm_request') as llm_requests,
-                COUNT(*) FILTER (WHERE event_type = 'llm_error') as llm_errors
-            FROM unified_events
-            GROUP BY session_id, experiment_name, vm_hostname, sup_behavior, model, source_format
-        )
-        SELECT
-            session_id,
-            experiment_name,
-            vm_hostname,
-            sup_behavior,
-            model,
-            source_format,
-            session_start_time,
-            session_end_time,
-            -- Determine session outcome
-            CASE
-                WHEN success_time IS NOT NULL THEN 'success'
-                WHEN fail_time IS NOT NULL THEN 'fail'
-                WHEN workflows_failed > 0 OR steps_failed > 0 OR llm_errors > 0 THEN 'fail'
-                WHEN workflows_succeeded > 0 OR steps_succeeded > 0 THEN 'success'
-                ELSE 'unknown'
-            END as outcome,
-            fail_error,
-            -- Calculate session duration
-            CASE
-                WHEN session_end_time IS NOT NULL AND session_start_time IS NOT NULL
-                THEN CAST(EXTRACT(EPOCH FROM (session_end_time - session_start_time)) * 1000 AS INTEGER)
-                ELSE NULL
-            END as duration_ms,
-            -- Counts
-            workflows_started,
-            workflows_succeeded,
-            workflows_failed,
-            steps_started,
-            steps_succeeded,
-            steps_failed,
-            llm_requests,
-            llm_errors
-        FROM session_events
-    """)
-    print("  View created: session_outcomes")
-
-    # Create llm_analysis view for LLM event metrics
-    print("  Creating llm_analysis view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW llm_analysis AS
-        SELECT
-            id,
-            timestamp,
-            session_id,
-            agent_type,
-            event_type,
-            workflow,
-            experiment_name,
-            vm_hostname,
-            sup_behavior,
-            model,
-            source_format,
-            duration_ms,
-            success,
-            error_message,
-            action,
-            -- LLM token columns (now stored directly)
-            input_tokens,
-            output_tokens,
-            total_tokens,
-            -- LLM output text
-            llm_output,
-            -- Calculate tokens per second (for llm_response events)
-            CASE
-                WHEN event_type = 'llm_response' AND duration_ms > 0 AND output_tokens IS NOT NULL
-                THEN ROUND(output_tokens * 1000.0 / duration_ms, 2)
-                ELSE NULL
-            END as tokens_per_second,
-            -- Extract fatal flag from details for llm_error events
-            CASE
-                WHEN details IS NOT NULL THEN CAST(json_extract(details, '$.fatal') AS BOOLEAN)
-                ELSE NULL
-            END as fatal
-        FROM unified_events
-        WHERE event_type IN ('llm_request', 'llm_response', 'llm_error')
-    """)
-    print("  View created: llm_analysis")
-
-    # Create llm_performance view for aggregate LLM metrics per model/SUP
-    print("  Creating llm_performance view...")
-    conn.execute("""
-        CREATE OR REPLACE VIEW llm_performance AS
-        SELECT
-            experiment_name,
-            sup_behavior,
-            model,
-            COUNT(*) FILTER (WHERE event_type = 'llm_request') as request_count,
-            COUNT(*) FILTER (WHERE event_type = 'llm_response') as response_count,
-            COUNT(*) FILTER (WHERE event_type = 'llm_error') as error_count,
-            -- Timing stats (from llm_response events)
-            ROUND(AVG(duration_ms) FILTER (WHERE event_type = 'llm_response'), 0) as avg_duration_ms,
-            MIN(duration_ms) FILTER (WHERE event_type = 'llm_response') as min_duration_ms,
-            MAX(duration_ms) FILTER (WHERE event_type = 'llm_response') as max_duration_ms,
-            ROUND(STDDEV(duration_ms) FILTER (WHERE event_type = 'llm_response'), 0) as stddev_duration_ms,
-            -- Token stats
-            SUM(input_tokens) FILTER (WHERE event_type = 'llm_response') as total_input_tokens,
-            SUM(output_tokens) FILTER (WHERE event_type = 'llm_response') as total_output_tokens,
-            ROUND(AVG(input_tokens) FILTER (WHERE event_type = 'llm_response'), 0) as avg_input_tokens,
-            ROUND(AVG(output_tokens) FILTER (WHERE event_type = 'llm_response'), 0) as avg_output_tokens,
-            -- Throughput (tokens per second)
-            ROUND(AVG(
-                CASE WHEN duration_ms > 0 AND output_tokens IS NOT NULL
-                THEN output_tokens * 1000.0 / duration_ms ELSE NULL END
-            ) FILTER (WHERE event_type = 'llm_response'), 2) as avg_tokens_per_second
-        FROM llm_analysis
-        GROUP BY experiment_name, sup_behavior, model
-    """)
-    print("  View created: llm_performance")
-
-    total_converted_events = 0  # Conversion happens at query time now
-
-    total_events = total_native_events + total_converted_events
-
-    # Close connection and copy to NFS
+    # Copy to NFS
     conn.close()
-    print(f"\n  Copying database to NFS: {db_path}")
+    print(f"\n  Copying to NFS: {db_path}")
     shutil.copy2(local_db_path, db_path)
     local_db_path.unlink()
-    print(f"  Done!")
 
-    # Generate manifest
-    write_manifest(manifest_path, all_results, collection_date, total_events + total_raw_logs)
-    print(f"\n  Manifest written: {manifest_path}")
+    # Write manifest
+    write_manifest(manifest_path, all_results, collection_date, total_events)
+    print(f"  Manifest: {manifest_path}")
 
     # Final summary
     print(f"\n{'='*60}")
     print("Collection Complete!")
     print("=" * 60)
-    print(f"  Raw logs: {raw_dir}")
     print(f"  Database: {db_path}")
-    print(f"  Manifest: {manifest_path}")
-    print(f"\nDuckDB tables & views:")
-    print(f"  events            - Native JSONL events ({total_native_events:,} rows)")
-    print(f"  raw_logs          - Raw systemd logs ({total_raw_logs:,} rows)")
-    print(f"  events_from_raw   - VIEW: raw logs as events (with category/step_name/status)")
-    print(f"  unified_events    - VIEW: all events combined (native + converted)")
-    print(f"  workflow_normalized - VIEW: workflows with normalized names & categories")
-    print(f"  workflow_durations  - VIEW: workflow start/end pairs with calculated duration_ms")
-    print(f"  step_analysis       - VIEW: step events filtered (step_start/success/error)")
-    print(f"  step_durations      - VIEW: step start/end pairs with duration_ms by category")
-    print(f"  session_outcomes    - VIEW: session-level success/fail with workflow/step counts")
-    print(f"  llm_analysis        - VIEW: LLM events with tokens, duration, tokens/sec")
-    print(f"  llm_performance     - VIEW: Aggregate LLM metrics per model/SUP")
+    print(f"  Events: {total_events:,}")
+    print(f"\nViews available:")
+    print(f"  workflow_analysis  - Workflows with categories")
+    print(f"  llm_analysis       - LLM events with tokens/sec")
+    print(f"  llm_performance    - Aggregate LLM metrics by model/SUP")
+    print(f"  session_summary    - Session-level metrics")
     print(f"\nExample queries:")
     print(f"  duckdb {db_path}")
-    print(f"  -- Event type breakdown")
-    print(f"  SELECT event_type, COUNT(*) FROM unified_events GROUP BY 1 ORDER BY 2 DESC;")
-    print(f"  -- Compare workflows across M/S/B using normalized names")
-    print(f"  SELECT workflow_category, sup_behavior, COUNT(*) FROM workflow_normalized")
-    print(f"    WHERE event_type = 'workflow_start' GROUP BY 1, 2 ORDER BY 1, 3 DESC;")
-    print(f"  -- Success rate by SUP behavior")
-    print(f"  SELECT sup_behavior, COUNT(*) FILTER (WHERE success = true) as succeeded,")
-    print(f"         COUNT(*) FILTER (WHERE success = false) as failed FROM workflow_durations GROUP BY 1;")
-    print(f"  -- Step success rate by category and SUP")
-    print(f"  SELECT category, sup_behavior, COUNT(*) FILTER (WHERE success) as succeeded,")
-    print(f"         COUNT(*) FILTER (WHERE NOT success) as failed FROM step_durations GROUP BY 1, 2;")
-    print(f"  -- Session outcomes by SUP behavior")
-    print(f"  SELECT sup_behavior, outcome, COUNT(*) FROM session_outcomes GROUP BY 1, 2 ORDER BY 1, 3 DESC;")
-    print(f"  -- Average step duration by category")
-    print(f"  SELECT category, sup_behavior, AVG(duration_ms) as avg_ms, COUNT(*) as n")
-    print(f"    FROM step_durations WHERE duration_ms IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 3;")
-    print(f"  -- LLM performance by model (timing + tokens)")
-    print(f"  SELECT model, sup_behavior, request_count, avg_duration_ms, avg_tokens_per_second,")
-    print(f"         total_input_tokens, total_output_tokens FROM llm_performance;")
-    print(f"  -- LLM response times distribution")
-    print(f"  SELECT sup_behavior, model, MIN(duration_ms), AVG(duration_ms)::INT, MAX(duration_ms)")
-    print(f"    FROM llm_analysis WHERE event_type='llm_response' GROUP BY 1, 2;")
+    print(f"  -- Event counts by type and SUP")
+    print(f"  SELECT sup_behavior, event_type, COUNT(*) FROM events GROUP BY 1, 2 ORDER BY 1, 3 DESC;")
+    print(f"  -- LLM token usage by model")
+    print(f"  SELECT * FROM llm_performance;")
+    print(f"  -- Session success rates")
+    print(f"  SELECT sup_behavior, COUNT(*), SUM(workflows_succeeded), SUM(error_count) FROM session_summary GROUP BY 1;")
 
     return 0
 

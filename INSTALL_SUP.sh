@@ -746,21 +746,21 @@ create_run_script() {
             xvfb_prefix="xvfb-run -a "
             ;;
         smolagents)
+            # Always use loop mode for continuous execution and JSONL logging
+            # --phase enables PHASE timing (time-of-day awareness)
             if $PHASE; then
-                # S2 series: Loop mode with PHASE timing
                 runner_cmd="python3 -m runners.run_smolagents --loop --phase $model_arg"
             else
-                # S1 series: Single task mode
-                runner_cmd="python3 -m runners.run_smolagents \"\$TASK\" $model_arg"
+                runner_cmd="python3 -m runners.run_smolagents --loop $model_arg"
             fi
             ;;
         browseruse)
+            # Always use loop mode for continuous execution and JSONL logging
+            # --phase enables PHASE timing (time-of-day awareness)
             if $PHASE; then
-                # B2 series: Loop mode with PHASE timing
                 runner_cmd="python3 -m runners.run_browseruse --loop --phase $model_arg"
             else
-                # B1 series: Single task mode
-                runner_cmd="python3 -m runners.run_browseruse $model_arg"
+                runner_cmd="python3 -m runners.run_browseruse --loop $model_arg"
             fi
             xvfb_prefix="xvfb-run -a "
             ;;
@@ -860,22 +860,23 @@ run_directly() {
             exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" $model_arg $phase_arg
             ;;
         smolagents)
+            # Always use loop mode for continuous execution and JSONL logging
             if $PHASE; then
                 log "Running SmolAgents loop mode with PHASE timing..."
                 exec python3 -m runners.run_smolagents --loop --phase $model_arg
             else
-                local task="${TASK:-What is the latest news in technology?}"
-                log "Running SmolAgents with task: $task"
-                exec python3 -m runners.run_smolagents "$task" $model_arg
+                log "Running SmolAgents loop mode..."
+                exec python3 -m runners.run_smolagents --loop $model_arg
             fi
             ;;
         browseruse)
+            # Always use loop mode for continuous execution and JSONL logging
             if $PHASE; then
                 log "Running BrowserUse loop mode with PHASE timing..."
                 exec xvfb-run -a python3 -m runners.run_browseruse --loop --phase $model_arg
             else
-                log "Running BrowserUse agent..."
-                exec xvfb-run -a python3 -m runners.run_browseruse $model_arg
+                log "Running BrowserUse loop mode..."
+                exec xvfb-run -a python3 -m runners.run_browseruse --loop $model_arg
             fi
             ;;
     esac
