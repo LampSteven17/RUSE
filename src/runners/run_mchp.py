@@ -57,6 +57,8 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
         model_name = get_model(config.model)
         os.environ["OLLAMA_MODEL"] = model_name
         os.environ["LITELLM_MODEL"] = f"ollama/{model_name}"
+        # Signal to workflows that LLM augmentation is enabled
+        os.environ["HYBRID_LLM_BACKEND"] = "litellm"
 
         # Set logger for augmentations (LLM content generation)
         from augmentations.content import set_logger
