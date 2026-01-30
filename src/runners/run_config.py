@@ -40,30 +40,37 @@ class SUPConfig:
     content: ContentType = "none"  # Only relevant for MCHP brain
     model: ModelType = "llama"
     phase: bool = False
+    cpu_only: bool = False  # True for BC/SC/MC series (CPU-only deployment)
 
     @property
     def config_key(self) -> str:
-        """Generate the configuration key (e.g., M1, M1a.llama, B1b.gemma)."""
+        """Generate the configuration key (e.g., M1, M1a.llama, BC1a.llama)."""
         if self.brain == "mchp":
             if self.content == "none":
                 return "M1"
             else:
                 # M1a/M1b/M1c = baseline, M2a/M2b/M2c = PHASE
+                # MC1a/MC2a = CPU-only variants
+                prefix = "MC" if self.cpu_only else "M"
                 base_num = "2" if self.phase else "1"
                 variant = _model_to_variant(self.model)
-                return f"M{base_num}{variant}.{self.model}"
+                return f"{prefix}{base_num}{variant}.{self.model}"
 
         elif self.brain == "browseruse":
             # B1a/B1b/B1c = baseline, B2a/B2b/B2c = PHASE
+            # BC1a/BC1b = CPU-only variants
+            prefix = "BC" if self.cpu_only else "B"
             base_num = "2" if self.phase else "1"
             variant = _model_to_variant(self.model)
-            return f"B{base_num}{variant}.{self.model}"
+            return f"{prefix}{base_num}{variant}.{self.model}"
 
         elif self.brain == "smolagents":
             # S1a/S1b/S1c = baseline, S2a/S2b/S2c = PHASE
+            # SC1a/SC1b = CPU-only variants
+            prefix = "SC" if self.cpu_only else "S"
             base_num = "2" if self.phase else "1"
             variant = _model_to_variant(self.model)
-            return f"S{base_num}{variant}.{self.model}"
+            return f"{prefix}{base_num}{variant}.{self.model}"
 
         return f"{self.brain}-{self.content}-{self.model}"
 
@@ -103,20 +110,20 @@ CONFIGS = {
     # MC Series - MCHP brain (CPU-only)
     # =========================================================================
     # Baseline (no PHASE timing)
-    "MC1a.llama": SUPConfig(brain="mchp", content="llm", model="llama"),
-    "MC1b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma"),
-    "MC1c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek"),
-    "MC1d.lfm": SUPConfig(brain="mchp", content="llm", model="lfm"),
-    "MC1e.ministral": SUPConfig(brain="mchp", content="llm", model="ministral"),
-    "MC1f.qwen": SUPConfig(brain="mchp", content="llm", model="qwen"),
+    "MC1a.llama": SUPConfig(brain="mchp", content="llm", model="llama", cpu_only=True),
+    "MC1b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma", cpu_only=True),
+    "MC1c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek", cpu_only=True),
+    "MC1d.lfm": SUPConfig(brain="mchp", content="llm", model="lfm", cpu_only=True),
+    "MC1e.ministral": SUPConfig(brain="mchp", content="llm", model="ministral", cpu_only=True),
+    "MC1f.qwen": SUPConfig(brain="mchp", content="llm", model="qwen", cpu_only=True),
 
     # PHASE timing enabled
-    "MC2a.llama": SUPConfig(brain="mchp", content="llm", model="llama", phase=True),
-    "MC2b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma", phase=True),
-    "MC2c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek", phase=True),
-    "MC2d.lfm": SUPConfig(brain="mchp", content="llm", model="lfm", phase=True),
-    "MC2e.ministral": SUPConfig(brain="mchp", content="llm", model="ministral", phase=True),
-    "MC2f.qwen": SUPConfig(brain="mchp", content="llm", model="qwen", phase=True),
+    "MC2a.llama": SUPConfig(brain="mchp", content="llm", model="llama", phase=True, cpu_only=True),
+    "MC2b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma", phase=True, cpu_only=True),
+    "MC2c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek", phase=True, cpu_only=True),
+    "MC2d.lfm": SUPConfig(brain="mchp", content="llm", model="lfm", phase=True, cpu_only=True),
+    "MC2e.ministral": SUPConfig(brain="mchp", content="llm", model="ministral", phase=True, cpu_only=True),
+    "MC2f.qwen": SUPConfig(brain="mchp", content="llm", model="qwen", phase=True, cpu_only=True),
 
     # =========================================================================
     # B Series - BrowserUse brain (GPU)
@@ -134,12 +141,12 @@ CONFIGS = {
     # =========================================================================
     # BC Series - BrowserUse brain (CPU-only)
     # =========================================================================
-    "BC1a.llama": SUPConfig(brain="browseruse", model="llama"),
-    "BC1b.gemma": SUPConfig(brain="browseruse", model="gemma"),
-    "BC1c.deepseek": SUPConfig(brain="browseruse", model="deepseek"),
-    "BC1d.lfm": SUPConfig(brain="browseruse", model="lfm"),
-    "BC1e.ministral": SUPConfig(brain="browseruse", model="ministral"),
-    "BC1f.qwen": SUPConfig(brain="browseruse", model="qwen"),
+    "BC1a.llama": SUPConfig(brain="browseruse", model="llama", cpu_only=True),
+    "BC1b.gemma": SUPConfig(brain="browseruse", model="gemma", cpu_only=True),
+    "BC1c.deepseek": SUPConfig(brain="browseruse", model="deepseek", cpu_only=True),
+    "BC1d.lfm": SUPConfig(brain="browseruse", model="lfm", cpu_only=True),
+    "BC1e.ministral": SUPConfig(brain="browseruse", model="ministral", cpu_only=True),
+    "BC1f.qwen": SUPConfig(brain="browseruse", model="qwen", cpu_only=True),
 
     # =========================================================================
     # S Series - SmolAgents brain (GPU)
@@ -157,12 +164,12 @@ CONFIGS = {
     # =========================================================================
     # SC Series - SmolAgents brain (CPU-only)
     # =========================================================================
-    "SC1a.llama": SUPConfig(brain="smolagents", model="llama"),
-    "SC1b.gemma": SUPConfig(brain="smolagents", model="gemma"),
-    "SC1c.deepseek": SUPConfig(brain="smolagents", model="deepseek"),
-    "SC1d.lfm": SUPConfig(brain="smolagents", model="lfm"),
-    "SC1e.ministral": SUPConfig(brain="smolagents", model="ministral"),
-    "SC1f.qwen": SUPConfig(brain="smolagents", model="qwen"),
+    "SC1a.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True),
+    "SC1b.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True),
+    "SC1c.deepseek": SUPConfig(brain="smolagents", model="deepseek", cpu_only=True),
+    "SC1d.lfm": SUPConfig(brain="smolagents", model="lfm", cpu_only=True),
+    "SC1e.ministral": SUPConfig(brain="smolagents", model="ministral", cpu_only=True),
+    "SC1f.qwen": SUPConfig(brain="smolagents", model="qwen", cpu_only=True),
 
     # =========================================================================
     # C Series - Control (bare VM)
