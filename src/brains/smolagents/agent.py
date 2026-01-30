@@ -59,8 +59,9 @@ class SmolAgent:
             setup_litellm_callbacks(self.logger)
 
         # Build the LiteLLM model ID (Ollama format)
+        # Use 5 minute timeout for CPU models
         model_id = f"ollama/{self.model_name}"
-        self._llm = LiteLLMModel(model_id=model_id)
+        self._llm = LiteLLMModel(model_id=model_id, timeout=300)
 
         # Default tools if none provided
         if self.tools is None:
