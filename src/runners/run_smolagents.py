@@ -146,6 +146,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", choices=["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"], default="llama")
     parser.add_argument("--phase", action="store_true", help="Enable PHASE-improved prompts")
     parser.add_argument("--loop", action="store_true", help="Run in loop mode (MCHP-style)")
+    parser.add_argument("--cpu", action="store_true", help="CPU-only deployment (SC series)")
     parser.add_argument("--no-mchp", action="store_true", help="Disable MCHP workflows in loop mode")
     parser.add_argument("--no-phase-timing", action="store_true",
                         help="Disable PHASE timing (use random timing instead)")
@@ -155,6 +156,7 @@ if __name__ == "__main__":
         brain="smolagents",
         model=args.model,
         phase=args.phase,
+        cpu_only=args.cpu,
     )
 
     if args.loop:

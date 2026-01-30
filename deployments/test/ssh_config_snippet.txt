@@ -1,0 +1,25 @@
+############# SUP VMs - test #############
+# Add this to your ~/.ssh/config
+# Requires ProxyJump through axes
+
+Host sup-*
+    User ubuntu
+    PreferredAuthentications publickey
+    IdentityFile ~/.ssh/id_rsa
+    ProxyJump axes
+    StrictHostKeyChecking no
+    ServerAliveInterval 120
+
+Host sup-M1-0
+    HostName 10.246.116.17
+
+Host sup-M1a-llama-0
+    HostName 10.246.115.118
+
+Host sup-B1a-llama-0
+    HostName 10.246.116.173
+
+Host sup-S1a-llama-0
+    HostName 10.246.117.237
+
+#############################################

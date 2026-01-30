@@ -731,6 +731,12 @@ create_run_script() {
     local model_arg=""
     [[ "$MODEL" != "none" ]] && model_arg="--model=$MODEL"
 
+    # Detect CPU-only configs (BC, SC, MC prefixes)
+    local cpu_arg=""
+    if [[ "$CONFIG_KEY" =~ ^(BC|SC|MC) ]]; then
+        cpu_arg="--cpu"
+    fi
+
     # Build runner command based on brain
     local runner_cmd=""
     local xvfb_prefix=""
@@ -749,18 +755,18 @@ create_run_script() {
             # Always use loop mode for continuous execution and JSONL logging
             # --phase enables PHASE timing (time-of-day awareness)
             if $PHASE; then
-                runner_cmd="python3 -m runners.run_smolagents --loop --phase $model_arg"
+                runner_cmd="python3 -m runners.run_smolagents --loop --phase $cpu_arg $model_arg"
             else
-                runner_cmd="python3 -m runners.run_smolagents --loop $model_arg"
+                runner_cmd="python3 -m runners.run_smolagents --loop $cpu_arg $model_arg"
             fi
             ;;
         browseruse)
             # Always use loop mode for continuous execution and JSONL logging
             # --phase enables PHASE timing (time-of-day awareness)
             if $PHASE; then
-                runner_cmd="python3 -m runners.run_browseruse --loop --phase $model_arg"
+                runner_cmd="python3 -m runners.run_browseruse --loop --phase $cpu_arg $model_arg"
             else
-                runner_cmd="python3 -m runners.run_browseruse --loop $model_arg"
+                runner_cmd="python3 -m runners.run_browseruse --loop $cpu_arg $model_arg"
             fi
             xvfb_prefix="xvfb-run -a "
             ;;
@@ -854,6 +860,12 @@ run_directly() {
     local model_arg=""
     [[ "$MODEL" != "none" ]] && model_arg="--model=$MODEL"
 
+    # Detect CPU-only configs (BC, SC, MC prefixes)
+    local cpu_arg=""
+    if [[ "$CONFIG_KEY" =~ ^(BC|SC|MC) ]]; then
+        cpu_arg="--cpu"
+    fi
+
     case "$BRAIN" in
         mchp)
             log "Running MCHP agent..."
@@ -863,20 +875,20 @@ run_directly() {
             # Always use loop mode for continuous execution and JSONL logging
             if $PHASE; then
                 log "Running SmolAgents loop mode with PHASE timing..."
-                exec python3 -m runners.run_smolagents --loop --phase $model_arg
+                exec python3 -m runners.run_smolagents --loop --phase $cpu_arg $model_arg
             else
                 log "Running SmolAgents loop mode..."
-                exec python3 -m runners.run_smolagents --loop $model_arg
+                exec python3 -m runners.run_smolagents --loop $cpu_arg $model_arg
             fi
             ;;
         browseruse)
             # Always use loop mode for continuous execution and JSONL logging
             if $PHASE; then
                 log "Running BrowserUse loop mode with PHASE timing..."
-                exec xvfb-run -a python3 -m runners.run_browseruse --loop --phase $model_arg
+                exec xvfb-run -a python3 -m runners.run_browseruse --loop --phase $cpu_arg $model_arg
             else
                 log "Running BrowserUse loop mode..."
-                exec xvfb-run -a python3 -m runners.run_browseruse --loop $model_arg
+                exec xvfb-run -a python3 -m runners.run_browseruse --loop $cpu_arg $model_arg
             fi
             ;;
     esac
