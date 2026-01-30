@@ -1,18 +1,18 @@
 """
 Runner for MCHP brain configurations.
 
-Baseline Configurations:
+Configurations:
 - M0: Upstream MITRE pyhuman (control - DO NOT MODIFY)
 - M1: Pure MCHP (no augmentation, original timing)
-- M2.llama: MCHP + SmolAgents content/mechanics
-- M2a.llama: MCHP + SmolAgents content only
-- M2b.llama: MCHP + SmolAgents mechanics only
-- M3.llama: MCHP + BrowserUse content/mechanics
-- M3a.llama: MCHP + BrowserUse content only
-- M3b.llama: MCHP + BrowserUse mechanics only
+- M1a.llama: MCHP + llama content augmentation
+- M1b.gemma: MCHP + gemma content augmentation
+- M1c.deepseek: MCHP + deepseek content augmentation
+- M2a.llama: MCHP + llama + PHASE timing
+- M2b.gemma: MCHP + gemma + PHASE timing
+- M2c.deepseek: MCHP + deepseek + PHASE timing
 
-PHASE Timing Configurations (M1-M3 with time-of-day awareness):
-- Use --phase-timing flag to enable circadian rhythm patterns
+PHASE Timing (--phase-timing):
+- Enables time-of-day aware activity patterns
 - Reduces activity 2AM-6AM, peaks 10AM-5PM
 - NOT for M0 (control must remain unchanged)
 """
@@ -30,10 +30,10 @@ def log(msg: str):
 
 def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
     """
-    Run MCHP brain with optional augmentations.
+    Run MCHP brain with optional content augmentation.
 
     For M1 (pure MCHP), runs the original MCHP agent unchanged.
-    For M2/M3 configurations, sets up LLM backend for content generation.
+    For M1a/M1b/M1c configurations, sets up LLM backend for content generation.
 
     Args:
         config: SUP configuration
@@ -44,22 +44,15 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
     logger.session_start(config={
         "brain": config.brain,
         "content": config.content,
-        "mechanics": config.mechanics,
         "model": config.model,
         "phase": config.phase,
         "phase_timing": use_phase_timing,
         "config_key": config.config_key
     })
 
-    # Set up environment for augmented configurations
-    if config.content != "none" or config.mechanics != "none":
-        # Determine which backend to use
-        if config.content == "smolagents" or config.mechanics == "smolagents":
-            os.environ["HYBRID_LLM_BACKEND"] = "smol"
-        elif config.content == "browseruse" or config.mechanics == "browseruse":
-            os.environ["HYBRID_LLM_BACKEND"] = "bu"
-
-        # Set model
+    # Set up environment for LLM-augmented configurations
+    if config.content == "llm":
+        # Set model for LiteLLM
         from common.config.model_config import get_model
         model_name = get_model(config.model)
         os.environ["OLLAMA_MODEL"] = model_name
@@ -72,9 +65,9 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
     # Import and run the MCHP agent
     from brains.mchp import MCHPAgent
 
-    # Exclude Windows-only workflows for augmented configs (M2+)
+    # Exclude Windows-only workflows for augmented configs
     # These use os.startfile() which only works on Windows
-    is_augmented = config.content != "none" or config.mechanics != "none"
+    is_augmented = config.content == "llm"
 
     log(f"Running MCHP agent (config: {config.config_key})")
     log(f"PHASE timing: {use_phase_timing}")
@@ -108,19 +101,19 @@ if __name__ == "__main__":
     from runners.run_config import build_config
 
     parser = argparse.ArgumentParser(description="Run MCHP brain")
-    parser.add_argument("--content", choices=["none", "smolagents", "browseruse"], default="none")
-    parser.add_argument("--mechanics", choices=["none", "smolagents", "browseruse"], default="none")
-    parser.add_argument("--model", choices=["llama", "gemma", "deepseek"], default="llama")
+    parser.add_argument("--content", choices=["none", "llm"], default="none",
+                        help="Content augmentation (none=TextLorem, llm=LLM-generated)")
+    parser.add_argument("--model", choices=["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"],
+                        default="llama", help="LLM model for content generation")
     parser.add_argument("--phase-timing", action="store_true",
-                        help="Enable PHASE timing with time-of-day awareness (for M1-M3)")
+                        help="Enable PHASE timing with time-of-day awareness")
     args = parser.parse_args()
 
     config = build_config(
         brain="mchp",
         content=args.content,
-        mechanics=args.mechanics,
         model=args.model,
-        phase=args.phase_timing,  # Pass phase_timing to get correct config key (M2 vs M4, M3 vs M5)
+        phase=args.phase_timing,
     )
 
     run_mchp(config, use_phase_timing=args.phase_timing)

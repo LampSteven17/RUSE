@@ -2,17 +2,18 @@
 SUP (Synthetic User Persona) - Unified CLI
 
 Usage:
-    python -m sup --brain <BRAIN> [--content <CONTROLLER>] [--mechanics <CONTROLLER>] [--model <MODEL>] [--phase]
+    python -m sup --brain <BRAIN> [--content <TYPE>] [--model <MODEL>] [--phase]
     python -m sup <CONFIG_KEY>
     python -m sup --list
 
 Examples:
-    python -m sup --brain mchp                                    # M1: Pure MCHP
-    python -m sup --brain browseruse --model llama                # B1.llama
-    python -m sup --brain smolagents --model gemma --phase        # S2.gemma+
-    python -m sup M1                                              # Shorthand: Pure MCHP
-    python -m sup B2.gemma                                        # Shorthand: BrowserUse + gemma
-    python -m sup --list                                          # List all configs
+    python -m sup --brain mchp                          # M1: Pure MCHP
+    python -m sup --brain mchp --content llm --model llama  # M1a.llama
+    python -m sup --brain browseruse --model gemma      # B1b.gemma
+    python -m sup --brain smolagents --model llama --phase  # S2a.llama
+    python -m sup M1                                    # Shorthand: Pure MCHP
+    python -m sup B1b.gemma                             # Shorthand: BrowserUse + gemma
+    python -m sup --list                                # List all configs
 """
 import argparse
 import sys
@@ -24,16 +25,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Configuration Keys:
-  M1          Pure MCHP (no augmentation)
-  M2.llama    MCHP + SmolAgents content/mechanics
-  M3.llama    MCHP + BrowserUse content/mechanics
-  B1.llama    BrowserUse + llama3.1:8b
-  B2.gemma    BrowserUse + gemma3:4b
-  B3.deepseek BrowserUse + deepseek-r1:8b
-  S1.llama    SmolAgents + llama3.1:8b
-  S2.gemma    SmolAgents + gemma3:4b
-  S3.deepseek SmolAgents + deepseek-r1:8b
-  *+          POST-PHASE with improved prompts (e.g., B1.llama+)
+  M0          Upstream MITRE pyhuman (control - DO NOT MODIFY)
+  M1          Pure MCHP (no LLM augmentation)
+  M1a.llama   MCHP + llama3.1:8b content
+  M1b.gemma   MCHP + gemma3:4b content
+  M1c.deepseek MCHP + deepseek-r1:8b content
+  M2a.llama   MCHP + llama + PHASE timing
+  B1a.llama   BrowserUse + llama3.1:8b
+  B1b.gemma   BrowserUse + gemma3:4b
+  B1c.deepseek BrowserUse + deepseek-r1:8b
+  B2a.llama   BrowserUse + llama + PHASE timing
+  S1a.llama   SmolAgents + llama3.1:8b
+  S1b.gemma   SmolAgents + gemma3:4b
+  S1c.deepseek SmolAgents + deepseek-r1:8b
+  S2a.llama   SmolAgents + llama + PHASE timing
         """
     )
 
@@ -42,7 +47,7 @@ Configuration Keys:
         "config_key",
         nargs="?",
         default=None,
-        help="Configuration key (e.g., M1, B2.gemma, S1.llama+)",
+        help="Configuration key (e.g., M1, M1a.llama, B1b.gemma)",
     )
 
     # Brain selection
@@ -53,24 +58,18 @@ Configuration Keys:
         help="Brain type to use",
     )
 
-    # Augmentation controllers
+    # Content augmentation (only for MCHP)
     parser.add_argument(
         "--content",
-        choices=["none", "smolagents", "browseruse"],
+        choices=["none", "llm"],
         default="none",
-        help="Content controller/augmentation (default: none)",
-    )
-    parser.add_argument(
-        "--mechanics",
-        choices=["none", "smolagents", "browseruse"],
-        default="none",
-        help="Mechanics controller/augmentation (default: none)",
+        help="Content augmentation for MCHP (none=TextLorem, llm=LLM-generated)",
     )
 
     # Model selection
     parser.add_argument(
         "--model",
-        choices=["llama", "gemma", "deepseek"],
+        choices=["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"],
         default="llama",
         help="LLM model to use (default: llama)",
     )
@@ -79,7 +78,7 @@ Configuration Keys:
     parser.add_argument(
         "--phase",
         action="store_true",
-        help="Enable PHASE-improved prompts",
+        help="Enable PHASE timing (time-of-day aware activity patterns)",
     )
 
     # Task (for BrowserUse/SmolAgents)
@@ -126,7 +125,6 @@ Configuration Keys:
         config = build_config(
             brain=args.brain,
             content=args.content,
-            mechanics=args.mechanics,
             model=args.model,
             phase=args.phase,
         )
@@ -138,7 +136,6 @@ Configuration Keys:
     print(f"Configuration: {config.config_key}")
     print(f"  Brain: {config.brain}")
     print(f"  Content: {config.content}")
-    print(f"  Mechanics: {config.mechanics}")
     print(f"  Model: {config.model}")
     print(f"  PHASE: {config.phase}")
     print("-" * 40)

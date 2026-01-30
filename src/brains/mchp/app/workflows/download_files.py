@@ -38,9 +38,17 @@ class DownloadFiles(BaseWorkflow):
         directory = os.path.join(os.path.expanduser("~"), "Downloads")
         os.makedirs(directory, exist_ok=True)
         download_func = random.choice(random_function_selector)
+        source_name = download_func.__name__.replace('_download_', '')
         if logger:
-            logger.browser_action("download", target=download_func.__name__)
-        download_func(directory)
+            logger.step_start("download_file", category="browser", message=f"Downloading from {source_name}")
+        try:
+            download_func(directory)
+            if logger:
+                logger.step_success("download_file")
+        except Exception as e:
+            if logger:
+                logger.step_error("download_file", str(e), exception=e)
+            raise
         sleep(self.input_wait_time)
 
     def _download_wikipedia(self, directory):

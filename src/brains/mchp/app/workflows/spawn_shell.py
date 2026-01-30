@@ -26,10 +26,17 @@ class ListFiles(BaseWorkflow):
     def _spawn_shell_and_quit(self, logger=None):
         cmd = self._determine_os_shell_command()
         if logger:
-            logger.gui_action("spawn_shell", target=cmd)
-        p = subprocess.Popen(cmd, shell=True)
-        sleep(5)
-        p.kill()
+            logger.step_start("spawn_shell", category="shell", message=cmd)
+        try:
+            p = subprocess.Popen(cmd, shell=True)
+            sleep(5)
+            p.kill()
+            if logger:
+                logger.step_success("spawn_shell")
+        except Exception as e:
+            if logger:
+                logger.step_error("spawn_shell", str(e), exception=e)
+            raise
 
     @staticmethod
     def _determine_os_shell_command():

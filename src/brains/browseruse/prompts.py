@@ -1,10 +1,8 @@
 """
-Three-prompt configuration for BrowserUse agents.
+Prompt configuration for BrowserUse agents.
 
-Prompts are structured as:
-- task: What to do (the specific browsing task)
-- content: How to generate/write content (text style, language patterns)
-- mechanics: How to interact with the browser (timing, scrolling, clicking)
+BrowserUse agents are LLM-driven, so their behavior is controlled through prompts.
+The task prompt defines what to do, and the content prompt provides style guidelines.
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -16,7 +14,6 @@ class BUPrompts:
 
     task: str
     content: Optional[str] = None
-    mechanics: Optional[str] = None
 
     def build_full_prompt(self) -> str:
         """Combine prompts into single instruction for the agent."""
@@ -25,9 +22,6 @@ class BUPrompts:
         if self.content:
             parts.append(f"\n\n[Content Guidelines]\n{self.content}")
 
-        if self.mechanics:
-            parts.append(f"\n\n[Interaction Guidelines]\n{self.mechanics}")
-
         return "".join(parts)
 
 
@@ -35,10 +29,9 @@ class BUPrompts:
 DEFAULT_PROMPTS = BUPrompts(
     task="Complete the browsing task.",
     content=None,
-    mechanics=None,
 )
 
-# PHASE-improved prompts (for POST-PHASE experiments)
+# PHASE-improved prompts (for B2 series with PHASE timing)
 PHASE_PROMPTS = BUPrompts(
     task="Complete the browsing task naturally, as a human would.",
 
@@ -48,9 +41,7 @@ When generating any text (searches, form inputs, etc.):
 - Vary your word choices
 - Occasionally include minor typos (realistic)
 - Match the context and tone of the site
-""",
 
-    mechanics="""
 When interacting with the browser:
 - Pause 1-3 seconds before clicking
 - Scroll gradually, not instantly
@@ -64,9 +55,7 @@ When interacting with the browser:
 MCHP_LIKE_PROMPTS = BUPrompts(
     task="Complete the browsing task with human-like timing.",
 
-    content=None,
-
-    mechanics="""
+    content="""
 When interacting with the browser:
 - Wait 2-10 seconds between actions
 - Scroll in small increments

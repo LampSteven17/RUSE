@@ -171,6 +171,15 @@ class BrowserUseLoop:
 
             cluster_size = self._get_cluster_size()
 
+            # Log cluster size decision
+            if self.logger:
+                self.logger.decision(
+                    choice="cluster_size",
+                    selected=str(cluster_size),
+                    context=f"Tasks to run in this cluster",
+                    method="phase" if self.use_phase_timing else "random"
+                )
+
             for _ in range(cluster_size):
                 # Inter-task delay
                 task_delay = self._get_task_delay()
@@ -182,6 +191,17 @@ class BrowserUseLoop:
                 index = random.randrange(len(self.workflows))
                 workflow = self.workflows[index]
                 workflow_name = workflow.description
+
+                # Log workflow selection decision
+                if self.logger:
+                    workflow_options = [w.name for w in self.workflows]
+                    self.logger.decision(
+                        choice="workflow_selection",
+                        options=workflow_options,
+                        selected=workflow.name,
+                        context=workflow_name,
+                        method="random"
+                    )
 
                 print(workflow.display)
 

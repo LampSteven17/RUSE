@@ -1,10 +1,8 @@
 """
-Three-prompt configuration for SmolAgents.
+Prompt configuration for SmolAgents.
 
-Prompts are structured as:
-- task: What to do (the specific research/code task)
-- content: How to generate/present content (writing style, formatting)
-- mechanics: How to perform research (search strategies, source selection)
+SmolAgents are LLM-driven, so their behavior is controlled through prompts.
+The task prompt defines what to do, and the content prompt provides style guidelines.
 """
 from dataclasses import dataclass
 from typing import Optional
@@ -16,29 +14,21 @@ class SMOLPrompts:
 
     task: str
     content: Optional[str] = None
-    mechanics: Optional[str] = None
 
     def build_system_prompt(self) -> Optional[str]:
-        """Build system prompt from content + mechanics guidelines."""
-        parts = []
-
+        """Build system prompt from content guidelines."""
         if self.content:
-            parts.append(f"[Content Guidelines]\n{self.content}")
-
-        if self.mechanics:
-            parts.append(f"\n[Behavior Guidelines]\n{self.mechanics}")
-
-        return "\n".join(parts) if parts else None
+            return f"[Content Guidelines]\n{self.content}"
+        return None
 
 
 # Default prompts (no augmentation - baseline S series)
 DEFAULT_PROMPTS = SMOLPrompts(
     task="Research and answer the question.",
     content=None,
-    mechanics=None,
 )
 
-# PHASE-improved prompts (for POST-PHASE experiments)
+# PHASE-improved prompts (for S2 series with PHASE timing)
 PHASE_PROMPTS = SMOLPrompts(
     task="Research and answer the question thoroughly.",
 
@@ -48,9 +38,7 @@ When searching and generating responses:
 - Summarize findings conversationally
 - Include relevant details and context
 - Cite sources when appropriate
-""",
 
-    mechanics="""
 When performing research:
 - Try multiple search queries if needed
 - Take time to review and compare results
@@ -63,9 +51,7 @@ When performing research:
 MCHP_LIKE_PROMPTS = SMOLPrompts(
     task="Research and answer the question with careful consideration.",
 
-    content=None,
-
-    mechanics="""
+    content="""
 When performing research:
 - Consider multiple angles before searching
 - Review each result carefully before proceeding
