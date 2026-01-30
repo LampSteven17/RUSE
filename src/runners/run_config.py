@@ -193,6 +193,7 @@ def build_config(
     content: ContentType = "none",
     model: ModelType = "llama",
     phase: bool = False,
+    cpu_only: bool = False,
 ) -> SUPConfig:
     """Build a configuration from individual parameters."""
     return SUPConfig(
@@ -200,4 +201,5 @@ def build_config(
         content=content,
         model=model,
         phase=phase,
+        cpu_only=cpu_only,
     )

@@ -11,117 +11,117 @@ Host sup-*
     ServerAliveInterval 120
 
 Host sup-C0-0
-    HostName 10.246.115.89
+    HostName 10.246.118.23
 
 Host sup-C0-1
-    HostName 10.246.115.167
+    HostName 10.246.117.234
 
 Host sup-M0-0
-    HostName 10.246.118.175
+    HostName 10.246.117.176
 
 Host sup-M1-0
-    HostName 10.246.119.45
+    HostName 10.246.117.107
 
-Host sup-M4-llama-0
+Host sup-M1a-llama-0
+    HostName 10.246.118.57
+
+Host sup-M1b-gemma-0
+    HostName 10.246.118.67
+
+Host sup-M1c-deepseek-0
+    HostName 10.246.116.211
+
+Host sup-M2a-llama-0
+    HostName 10.246.116.173
+
+Host sup-M2b-gemma-0
+    HostName 10.246.115.94
+
+Host sup-M2c-deepseek-0
+    HostName 10.246.117.191
+
+Host sup-B2a-llama-0
+    HostName 10.246.115.125
+
+Host sup-B2b-gemma-0
+    HostName 10.246.116.255
+
+Host sup-B2c-deepseek-0
+    HostName 10.246.117.184
+
+Host sup-S2a-llama-0
+    HostName 10.246.119.83
+
+Host sup-S2b-gemma-0
+    HostName 10.246.118.118
+
+Host sup-S2c-deepseek-0
+    HostName 10.246.115.117
+
+Host sup-B1a-llama-0
+    HostName 10.246.116.124
+
+Host sup-S1a-llama-0
+    HostName 10.246.118.105
+
+Host sup-B1a-llama-1
+    HostName 10.246.116.77
+
+Host sup-S1a-llama-1
+    HostName 10.246.118.35
+
+Host sup-B2a-llama-1
+    HostName 10.246.118.93
+
+Host sup-B2b-gemma-1
     HostName 10.246.117.22
 
-Host sup-M4a-llama-0
-    HostName 10.246.118.0
+Host sup-B2c-deepseek-1
+    HostName 10.246.118.75
 
-Host sup-M4b-llama-0
-    HostName 10.246.119.50
+Host sup-S2a-llama-1
+    HostName 10.246.117.158
 
-Host sup-M5-llama-0
-    HostName 10.246.115.161
+Host sup-S2b-gemma-1
+    HostName 10.246.119.70
 
-Host sup-M5a-llama-0
-    HostName 10.246.117.242
+Host sup-S2c-deepseek-1
+    HostName 10.246.117.24
 
-Host sup-M5b-llama-0
-    HostName 10.246.117.31
+Host sup-BC1a-llama-0
+    HostName 10.246.116.251
 
-Host sup-B4-llama-0
-    HostName 10.246.119.6
+Host sup-BC1b-gemma-0
+    HostName 10.246.116.120
 
-Host sup-B5-gemma-0
-    HostName 10.246.115.40
+Host sup-BC1c-deepseek-0
+    HostName 10.246.116.73
 
-Host sup-B6-deepseek-0
-    HostName 10.246.116.129
+Host sup-BC1d-lfm-0
+    HostName 10.246.116.193
 
-Host sup-S4-llama-0
-    HostName 10.246.116.36
+Host sup-BC1e-ministral-0
+    HostName 10.246.117.64
 
-Host sup-S5-gemma-0
-    HostName 10.246.116.14
+Host sup-BC1f-qwen-0
+    HostName 10.246.117.240
 
-Host sup-S6-deepseek-0
-    HostName 10.246.117.43
+Host sup-SC1a-llama-0
+    HostName 10.246.118.158
 
-Host sup-B1-llama-0
-    HostName 10.246.118.202
+Host sup-SC1b-gemma-0
+    HostName 10.246.117.163
 
-Host sup-S1-llama-0
-    HostName 10.246.117.82
+Host sup-SC1c-deepseek-0
+    HostName 10.246.116.167
 
-Host sup-B1-llama-1
-    HostName 10.246.117.37
+Host sup-SC1d-lfm-0
+    HostName 10.246.115.73
 
-Host sup-S1-llama-1
-    HostName 10.246.118.139
+Host sup-SC1e-ministral-0
+    HostName 10.246.118.114
 
-Host sup-B4-llama-1
-    HostName 10.246.118.164
-
-Host sup-B5-gemma-1
-    HostName 10.246.115.106
-
-Host sup-B6-deepseek-1
-    HostName 10.246.116.236
-
-Host sup-S4-llama-1
-    HostName 10.246.118.4
-
-Host sup-S5-gemma-1
-    HostName 10.246.118.124
-
-Host sup-S6-deepseek-1
-    HostName 10.246.118.132
-
-Host sup-BC1-llama-0
-    HostName 10.246.116.114
-
-Host sup-BC2-gemma-0
-    HostName 10.246.117.102
-
-Host sup-BC3-deepseek-0
-    HostName 10.246.118.46
-
-Host sup-BC7-lfm-0
-    HostName 10.246.119.72
-
-Host sup-BC8-ministral-0
-    HostName 10.246.116.159
-
-Host sup-BC9-qwen-0
-    HostName 10.246.115.236
-
-Host sup-SC1-llama-0
-    HostName 10.246.117.99
-
-Host sup-SC2-gemma-0
-    HostName 10.246.115.33
-
-Host sup-SC3-deepseek-0
-    HostName 10.246.118.11
-
-Host sup-SC7-lfm-0
-    HostName 10.246.116.166
-
-Host sup-SC8-ministral-0
-    HostName 10.246.116.180
-
-Host sup-SC9-qwen-0
-    HostName 10.246.115.113
+Host sup-SC1f-qwen-0
+    HostName 10.246.117.14
 
 #############################################
