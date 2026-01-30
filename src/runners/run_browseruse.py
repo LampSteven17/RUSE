@@ -143,7 +143,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run BrowserUse brain")
     parser.add_argument("task", nargs="?", default=None, help="Task to perform (single-task mode)")
-    parser.add_argument("--model", choices=["llama", "gemma", "deepseek"], default="llama")
+    parser.add_argument("--model", choices=["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"], default="llama")
     parser.add_argument("--phase", action="store_true", help="Enable PHASE-improved prompts")
     parser.add_argument("--loop", action="store_true", help="Run in loop mode (MCHP-style)")
     parser.add_argument("--no-mchp", action="store_true", help="Disable MCHP workflows in loop mode")
