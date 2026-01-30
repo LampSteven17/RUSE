@@ -748,7 +748,7 @@ create_run_script() {
         smolagents)
             if $PHASE; then
                 # S2 series: Loop mode with PHASE timing
-                runner_cmd="python3 -m runners.run_smolagents --loop $model_arg"
+                runner_cmd="python3 -m runners.run_smolagents --loop --phase $model_arg"
             else
                 # S1 series: Single task mode
                 runner_cmd="python3 -m runners.run_smolagents \"\$TASK\" $model_arg"
@@ -757,7 +757,7 @@ create_run_script() {
         browseruse)
             if $PHASE; then
                 # B2 series: Loop mode with PHASE timing
-                runner_cmd="python3 -m runners.run_browseruse --loop $model_arg"
+                runner_cmd="python3 -m runners.run_browseruse --loop --phase $model_arg"
             else
                 # B1 series: Single task mode
                 runner_cmd="python3 -m runners.run_browseruse $model_arg"
@@ -861,8 +861,8 @@ run_directly() {
             ;;
         smolagents)
             if $PHASE; then
-                log "Running SmolAgents loop mode..."
-                exec python3 -m runners.run_smolagents --loop $model_arg
+                log "Running SmolAgents loop mode with PHASE timing..."
+                exec python3 -m runners.run_smolagents --loop --phase $model_arg
             else
                 local task="${TASK:-What is the latest news in technology?}"
                 log "Running SmolAgents with task: $task"
@@ -871,8 +871,8 @@ run_directly() {
             ;;
         browseruse)
             if $PHASE; then
-                log "Running BrowserUse loop mode..."
-                exec xvfb-run -a python3 -m runners.run_browseruse --loop $model_arg
+                log "Running BrowserUse loop mode with PHASE timing..."
+                exec xvfb-run -a python3 -m runners.run_browseruse --loop --phase $model_arg
             else
                 log "Running BrowserUse agent..."
                 exec xvfb-run -a python3 -m runners.run_browseruse $model_arg
