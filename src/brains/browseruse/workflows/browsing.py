@@ -14,8 +14,8 @@ from browser_use.browser.session import BrowserSession
 from brains.browseruse.workflows.base import BUWorkflow
 from brains.browseruse.tasks import DEFAULT_TASKS, RESEARCH_TASKS, BROWSING_TASKS
 from brains.browseruse.prompts import BUPrompts
+from brains.browseruse.agent import create_logged_chat_ollama
 from common.config.model_config import get_model
-from common.logging.llm_callbacks import create_langchain_callback
 from common.logging.task_categorizer import categorize_task
 
 if TYPE_CHECKING:
@@ -69,16 +69,8 @@ class BrowsingWorkflow(BUWorkflow):
             self._logger = logger
 
         if self._llm is None:
-            # Import from langchain_ollama directly (NOT browser_use) to support callbacks
-            from langchain_ollama import ChatOllama
-            callbacks = None
-            if self._logger:
-                handler = create_langchain_callback(self._logger)
-                if handler is not None:
-                    callbacks = [handler]
-
-            # Create LLM with callbacks in constructor (langchain_ollama supports this)
-            self._llm = ChatOllama(model=self.model_name, callbacks=callbacks)
+            # Use browser_use.ChatOllama with logging wrapper (compatible with browser_use.Agent)
+            self._llm = create_logged_chat_ollama(self.model_name, self._logger)
         return self._llm
 
     def _get_browser_session(self):
