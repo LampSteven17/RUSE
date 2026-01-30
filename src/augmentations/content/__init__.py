@@ -6,8 +6,6 @@ Provides LLM-powered content generation to replace TextLorem.
 from augmentations.content.llm_content import (
     LLMUnavailableError,
     LLMContentGenerator,
-    SmolLLMBackend,
-    BuLLMBackend,
     set_logger,
     reset_backend,
     llm_paragraph,
@@ -23,8 +21,6 @@ from augmentations.content.llm_content import (
 __all__ = [
     'LLMUnavailableError',
     'LLMContentGenerator',
-    'SmolLLMBackend',
-    'BuLLMBackend',
     'set_logger',
     'reset_backend',
     'llm_paragraph',
