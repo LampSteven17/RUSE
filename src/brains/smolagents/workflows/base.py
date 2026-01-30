@@ -20,18 +20,21 @@ class SmolWorkflow:
 
     __slots__ = ['name', 'description', 'category']
 
-    def __init__(self, name: str, description: str, category: str = "Web Browsing"):
+    # Valid categories matching StepCategory enum
+    VALID_CATEGORIES = ["browser", "video", "office", "shell", "programming", "email", "authentication", "other"]
+
+    def __init__(self, name: str, description: str, category: str = "browser"):
         """
         Initialize workflow.
 
         Args:
             name: Short workflow identifier
             description: Human-readable description
-            category: Workflow category (Web Browsing, Documents, File Ops, Shell, Video)
+            category: Workflow category (browser, video, office, shell, programming, email, authentication, other)
         """
         self.name = name
         self.description = description
-        self.category = category
+        self.category = category if category in self.VALID_CATEGORIES else "browser"
 
     @property
     def display(self) -> str:

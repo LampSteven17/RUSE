@@ -1,8 +1,8 @@
 """
 DOLOS-DEPLOY LLM Content Generator
 
-LLM-powered content generation abstraction layer for MCHP augmentation.
-Provides drop-in replacements for TextLorem and random content selection.
+LLM-powered content generation for MCHP augmentation.
+Uses LiteLLM with Ollama for text generation.
 
 IMPORTANT: NO FALLBACK BEHAVIOR
 If the LLM is unavailable, this module raises LLMUnavailableError immediately.
@@ -15,16 +15,12 @@ Usage:
     query = llm_search_query("technology")  # Generates a search query
 
 Environment Variables:
-    HYBRID_LLM_BACKEND: "smol" or "bu" (default: "smol")
-    LITELLM_MODEL: Model for SMOL backend (default: "ollama/llama3.1:8b")
-    OLLAMA_MODEL: Model for BU backend (default: "llama3.1:8b")
+    LITELLM_MODEL: Model to use (default: "ollama/llama3.1:8b")
 """
 
 import os
 import time
 import random
-from abc import ABC, abstractmethod
-from functools import lru_cache
 from typing import List, Optional, Any
 
 try:
@@ -37,23 +33,67 @@ class LLMUnavailableError(Exception):
     """
     Raised when LLM backend is unavailable.
 
-    This is a FATAL error - experiments using HYBRID agents
+    This is a FATAL error - experiments using LLM content generation
     must have working LLM connections. No fallback to TextLorem.
     """
     pass
 
 
-class LLMContentGenerator(ABC):
-    """Abstract base class for LLM content generation."""
+class LLMContentGenerator:
+    """LLM content generation using LiteLLM with Ollama."""
 
     def __init__(self, logger: Optional[Any] = None):
         self.logger = logger
-        self._model_name: str = "unknown"
+        self._model_name = os.getenv("LITELLM_MODEL", "ollama/llama3.1:8b")
 
-    @abstractmethod
+        # Import and validate litellm is available
+        try:
+            import litellm
+            self._litellm = litellm
+        except ImportError as e:
+            raise LLMUnavailableError(
+                f"LLM content generation requires 'litellm' package. "
+                f"Install with: pip install litellm. Error: {e}"
+            ) from e
+
+        # Test connection on init
+        self._test_connection()
+
+    def _test_connection(self) -> None:
+        """Test LLM connection at startup."""
+        try:
+            response = self._litellm.completion(
+                model=self._model_name,
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_tokens=10
+            )
+            if not response.choices[0].message.content:
+                raise LLMUnavailableError("LLM returned empty response on connection test")
+        except Exception as e:
+            raise LLMUnavailableError(
+                f"LLM connection test failed. Model: {self._model_name}. "
+                f"Ensure Ollama is running with the model pulled. Error: {e}"
+            ) from e
+
     def _execute_query(self, prompt: str, max_tokens: int = 200) -> tuple:
-        """Execute LLM query and return (response_text, tokens_dict or None)."""
-        pass
+        """Execute LiteLLM query and return (text, tokens)."""
+        response = self._litellm.completion(
+            model=self._model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens
+        )
+        text = response.choices[0].message.content
+
+        # Extract token counts from LiteLLM response
+        tokens = None
+        if hasattr(response, 'usage') and response.usage:
+            tokens = {
+                "input": getattr(response.usage, 'prompt_tokens', None),
+                "output": getattr(response.usage, 'completion_tokens', None),
+                "total": getattr(response.usage, 'total_tokens', None)
+            }
+
+        return text, tokens
 
     def _query_llm(self, prompt: str, action: str, max_tokens: int = 200) -> str:
         """
@@ -199,120 +239,10 @@ class LLMContentGenerator(ABC):
             return headers
 
 
-class SmolLLMBackend(LLMContentGenerator):
-    """SMOL backend using LiteLLM with Ollama."""
-
-    def __init__(self, logger: Optional[Any] = None):
-        super().__init__(logger)
-        self._model_name = os.getenv("LITELLM_MODEL", "ollama/llama3.1:8b")
-
-        # Import and validate litellm is available
-        try:
-            import litellm
-            self._litellm = litellm
-        except ImportError as e:
-            raise LLMUnavailableError(
-                f"SMOL backend requires 'litellm' package. Install with: pip install litellm. Error: {e}"
-            ) from e
-
-        # Test connection on init
-        self._test_connection()
-
-    def _test_connection(self) -> None:
-        """Test LLM connection at startup."""
-        try:
-            response = self._litellm.completion(
-                model=self._model_name,
-                messages=[{"role": "user", "content": "Say OK"}],
-                max_tokens=10
-            )
-            if not response.choices[0].message.content:
-                raise LLMUnavailableError("LLM returned empty response on connection test")
-        except Exception as e:
-            raise LLMUnavailableError(
-                f"SMOL backend connection test failed. Model: {self._model_name}. "
-                f"Ensure Ollama is running with the model pulled. Error: {e}"
-            ) from e
-
-    def _execute_query(self, prompt: str, max_tokens: int = 200) -> tuple:
-        """Execute LiteLLM query and return (text, tokens)."""
-        response = self._litellm.completion(
-            model=self._model_name,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens
-        )
-        text = response.choices[0].message.content
-
-        # Extract token counts from LiteLLM response
-        tokens = None
-        if hasattr(response, 'usage') and response.usage:
-            tokens = {
-                "input": getattr(response.usage, 'prompt_tokens', None),
-                "output": getattr(response.usage, 'completion_tokens', None),
-                "total": getattr(response.usage, 'total_tokens', None)
-            }
-
-        return text, tokens
-
-
-class BuLLMBackend(LLMContentGenerator):
-    """BU backend using langchain-ollama."""
-
-    def __init__(self, logger: Optional[Any] = None):
-        super().__init__(logger)
-        self._model_name = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
-
-        # Import and validate langchain_ollama is available
-        try:
-            from langchain_ollama import ChatOllama
-            self._llm = ChatOllama(model=self._model_name)
-        except ImportError as e:
-            raise LLMUnavailableError(
-                f"BU backend requires 'langchain-ollama' package. Install with: pip install langchain-ollama. Error: {e}"
-            ) from e
-
-        # Test connection on init
-        self._test_connection()
-
-    def _test_connection(self) -> None:
-        """Test LLM connection at startup."""
-        try:
-            response = self._llm.invoke("Say OK")
-            if not response.content:
-                raise LLMUnavailableError("LLM returned empty response on connection test")
-        except Exception as e:
-            raise LLMUnavailableError(
-                f"BU backend connection test failed. Model: {self._model_name}. "
-                f"Ensure Ollama is running with the model pulled. Error: {e}"
-            ) from e
-
-    def _execute_query(self, prompt: str, max_tokens: int = 200) -> tuple:
-        """Execute ChatOllama query and return (text, tokens)."""
-        response = self._llm.invoke(prompt)
-        text = response.content
-
-        # Extract token counts from langchain-ollama response metadata
-        tokens = None
-        if hasattr(response, 'response_metadata') and response.response_metadata:
-            meta = response.response_metadata
-            # Ollama provides eval_count (output) and prompt_eval_count (input)
-            input_tokens = meta.get('prompt_eval_count')
-            output_tokens = meta.get('eval_count')
-            if input_tokens is not None or output_tokens is not None:
-                tokens = {
-                    "input": input_tokens,
-                    "output": output_tokens,
-                    "total": (input_tokens or 0) + (output_tokens or 0)
-                }
-
-        return text, tokens
-
-
 # Global logger instance (set by agent initialization)
 _global_logger: Optional[Any] = None
-# Cached backend instance (managed manually for logger updates)
+# Cached backend instance
 _cached_backend: Optional[LLMContentGenerator] = None
-_cached_backend_name: Optional[str] = None
 
 
 def set_logger(logger: Any) -> None:
@@ -329,39 +259,19 @@ def set_logger(logger: Any) -> None:
 
 
 def _get_backend() -> LLMContentGenerator:
-    """
-    Get the configured LLM backend.
+    """Get the LLM backend, creating it if necessary."""
+    global _cached_backend
 
-    Manually cached to allow logger updates via set_logger().
-    """
-    global _cached_backend, _cached_backend_name
+    if _cached_backend is None:
+        _cached_backend = LLMContentGenerator(logger=_global_logger)
 
-    backend_name = os.getenv("HYBRID_LLM_BACKEND", "smol").lower()
-
-    # Return cached backend if it exists and backend type hasn't changed
-    if _cached_backend is not None and _cached_backend_name == backend_name:
-        return _cached_backend
-
-    # Create new backend with current logger
-    if backend_name == "smol":
-        _cached_backend = SmolLLMBackend(logger=_global_logger)
-    elif backend_name == "bu":
-        _cached_backend = BuLLMBackend(logger=_global_logger)
-    else:
-        raise LLMUnavailableError(
-            f"Unknown LLM backend: '{backend_name}'. "
-            f"Set HYBRID_LLM_BACKEND to 'smol' or 'bu'."
-        )
-
-    _cached_backend_name = backend_name
     return _cached_backend
 
 
 def reset_backend() -> None:
     """Reset the cached backend (useful for testing or reconfiguration)."""
-    global _cached_backend, _cached_backend_name
+    global _cached_backend
     _cached_backend = None
-    _cached_backend_name = None
 
 
 # =============================================================================

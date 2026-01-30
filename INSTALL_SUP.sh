@@ -1,14 +1,19 @@
 #!/bin/bash
 
 # DOLOS-DEPLOY: Unified SUP Installer
-# Matches the configuration matrix from docs/EXPERIMENTAL_PLAN.md
+# Simplified Architecture v2: Brain + Content (MCHP only) + Model
 #
-# Architecture: Brain → Content Controller → Mechanics Controller → Model
+# Naming Scheme: [Brain][Version][Variant].[Model]
+#   Brain:    M = MCHP, B = BrowserUse, S = SmolAgents
+#             MC = MCHP CPU, BC = BrowserUse CPU, SC = SmolAgents CPU
+#   Version:  1 = Baseline, 2 = PHASE timing
+#   Variant:  a = llama, b = gemma, c = deepseek
+#             d = lfm, e = ministral, f = qwen (CPU only)
 #
 # Usage:
 #   ./INSTALL_SUP.sh --M1                    # Config key shorthand
-#   ./INSTALL_SUP.sh --S1.llama --runner     # Run directly without install
-#   ./INSTALL_SUP.sh --brain mchp --content mchp --mechanics mchp --model none
+#   ./INSTALL_SUP.sh --M1a.llama --runner    # Run directly without install
+#   ./INSTALL_SUP.sh --brain mchp --content llm --model llama
 
 set -e
 set -u
@@ -43,7 +48,7 @@ log_info() { echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO:${NC} $1"; }
 
 usage() {
     cat << 'EOF'
-dolos-engine Unified Installer
+DOLOS-DEPLOY Unified Installer (Simplified Architecture v2)
 
 Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 
@@ -52,67 +57,68 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
   Control Series:
     --C0                Bare Ubuntu VM (no software - pure control)
 
-  MCHP Series (Baseline):
+  M Series - MCHP Brain:
     --M0                Upstream MITRE pyhuman (control - DO NOT MODIFY)
     --M1                DOLOS MCHP baseline (no LLM)
-    --M2.llama          MCHP + SmolAgents content/mechanics
-    --M2a.llama         MCHP + SmolAgents content only
-    --M2b.llama         MCHP + SmolAgents mechanics only
-    --M3.llama          MCHP + BrowserUse content/mechanics
-    --M3a.llama         MCHP + BrowserUse content only
-    --M3b.llama         MCHP + BrowserUse mechanics only
+    --M1a.llama         MCHP + llama content
+    --M1b.gemma         MCHP + gemma content
+    --M1c.deepseek      MCHP + deepseek content
+    --M2a.llama         MCHP + llama + PHASE timing
+    --M2b.gemma         MCHP + gemma + PHASE timing
+    --M2c.deepseek      MCHP + deepseek + PHASE timing
 
-  MCHP Series (Improved - with PHASE timing):
-    --M4.llama          MCHP + SmolAgents content/mechanics + PHASE timing
-    --M4a.llama         MCHP + SmolAgents content only + PHASE timing
-    --M4b.llama         MCHP + SmolAgents mechanics only + PHASE timing
-    --M5.llama          MCHP + BrowserUse content/mechanics + PHASE timing
-    --M5a.llama         MCHP + BrowserUse content only + PHASE timing
-    --M5b.llama         MCHP + BrowserUse mechanics only + PHASE timing
+  MC Series - MCHP Brain (CPU-only):
+    --MC1a.llama        MCHP + llama content (CPU)
+    --MC1b.gemma        MCHP + gemma content (CPU)
+    --MC1c.deepseek     MCHP + deepseek content (CPU)
+    --MC1d.lfm          MCHP + lfm content (CPU)
+    --MC1e.ministral    MCHP + ministral content (CPU)
+    --MC1f.qwen         MCHP + qwen content (CPU)
+    --MC2a.llama        MCHP + llama + PHASE (CPU)
+    --MC2b.gemma        MCHP + gemma + PHASE (CPU)
+    --MC2c.deepseek     MCHP + deepseek + PHASE (CPU)
+    --MC2d.lfm          MCHP + lfm + PHASE (CPU)
+    --MC2e.ministral    MCHP + ministral + PHASE (CPU)
+    --MC2f.qwen         MCHP + qwen + PHASE (CPU)
 
-  BrowserUse Series (Baseline):
-    --B1.llama          BrowserUse + llama3.1:8b
-    --B2.gemma          BrowserUse + gemma3:4b
-    --B3.deepseek       BrowserUse + deepseek-r1:8b
+  B Series - BrowserUse Brain (GPU):
+    --B1a.llama         BrowserUse + llama3.1:8b
+    --B1b.gemma         BrowserUse + gemma3:4b
+    --B1c.deepseek      BrowserUse + deepseek-r1:8b
+    --B2a.llama         BrowserUse + llama + PHASE timing
+    --B2b.gemma         BrowserUse + gemma + PHASE timing
+    --B2c.deepseek      BrowserUse + deepseek + PHASE timing
 
-  BrowserUse Series (Improved - Loop mode + PHASE timing):
-    --B4.llama          BrowserUseLoop + llama3.1:8b + PHASE timing
-    --B5.gemma          BrowserUseLoop + gemma3:4b + PHASE timing
-    --B6.deepseek       BrowserUseLoop + deepseek-r1:8b + PHASE timing
+  BC Series - BrowserUse Brain (CPU-only):
+    --BC1a.llama        BrowserUse + llama (CPU)
+    --BC1b.gemma        BrowserUse + gemma (CPU)
+    --BC1c.deepseek     BrowserUse + deepseek (CPU)
+    --BC1d.lfm          BrowserUse + lfm (CPU)
+    --BC1e.ministral    BrowserUse + ministral (CPU)
+    --BC1f.qwen         BrowserUse + qwen (CPU)
 
-  SmolAgents Series (Baseline):
-    --S1.llama          SmolAgents + llama3.1:8b
-    --S2.gemma          SmolAgents + gemma3:4b
-    --S3.deepseek       SmolAgents + deepseek-r1:8b
+  S Series - SmolAgents Brain (GPU):
+    --S1a.llama         SmolAgents + llama3.1:8b
+    --S1b.gemma         SmolAgents + gemma3:4b
+    --S1c.deepseek      SmolAgents + deepseek-r1:8b
+    --S2a.llama         SmolAgents + llama + PHASE timing
+    --S2b.gemma         SmolAgents + gemma + PHASE timing
+    --S2c.deepseek      SmolAgents + deepseek + PHASE timing
 
-  SmolAgents Series (Improved - Loop mode + PHASE timing):
-    --S4.llama          SmolAgentLoop + llama3.1:8b + PHASE timing
-    --S5.gemma          SmolAgentLoop + gemma3:4b + PHASE timing
-    --S6.deepseek       SmolAgentLoop + deepseek-r1:8b + PHASE timing
-
-  BrowserUse CPU Series (Baseline - no GPU):
-    --BC1.llama         BrowserUse + llama3.1:8b (CPU)
-    --BC2.gemma         BrowserUse + gemma3:4b (CPU)
-    --BC3.deepseek      BrowserUse + deepseek-r1:8b (CPU)
-    --BC7.lfm           BrowserUse + lfm2.5-thinking (CPU)
-    --BC8.ministral     BrowserUse + ministral-3:3b (CPU)
-    --BC9.qwen          BrowserUse + qwen2.5:3b (CPU)
-
-  SmolAgents CPU Series (Baseline - no GPU):
-    --SC1.llama         SmolAgents + llama3.1:8b (CPU)
-    --SC2.gemma         SmolAgents + gemma3:4b (CPU)
-    --SC3.deepseek      SmolAgents + deepseek-r1:8b (CPU)
-    --SC7.lfm           SmolAgents + lfm2.5-thinking (CPU)
-    --SC8.ministral     SmolAgents + ministral-3:3b (CPU)
-    --SC9.qwen          SmolAgents + qwen2.5:3b (CPU)
+  SC Series - SmolAgents Brain (CPU-only):
+    --SC1a.llama        SmolAgents + llama (CPU)
+    --SC1b.gemma        SmolAgents + gemma (CPU)
+    --SC1c.deepseek     SmolAgents + deepseek (CPU)
+    --SC1d.lfm          SmolAgents + lfm (CPU)
+    --SC1e.ministral    SmolAgents + ministral (CPU)
+    --SC1f.qwen         SmolAgents + qwen (CPU)
 
 === Long-Form Options ===
 
   --brain <TYPE>        Brain type: mchp, smolagents, browseruse
-  --content <TYPE>      Content controller: mchp, smolagents, browseruse
-  --mechanics <TYPE>    Mechanics controller: mchp, smolagents, browseruse
-  --model <MODEL>       Model: none, llama, gemma, deepseek, lfm, ministral, qwen
-  --phase               Enable PHASE timing/prompts (adds + suffix)
+  --content <TYPE>      Content augmentation: none, llm (MCHP only)
+  --model <MODEL>       Model: llama, gemma, deepseek, lfm, ministral, qwen
+  --phase               Enable PHASE timing (time-of-day awareness)
 
 === Execution Options ===
 
@@ -125,10 +131,10 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 === Examples ===
 
   ./INSTALL_SUP.sh --M1                           # Install pure MCHP
-  ./INSTALL_SUP.sh --S1.llama --runner            # Run SmolAgents directly
-  ./INSTALL_SUP.sh --B2.gemma                     # Install BrowserUse + gemma
-  ./INSTALL_SUP.sh --brain mchp --content smolagents --mechanics smolagents --model llama
-  ./INSTALL_SUP.sh --S1.llama --runner --task "Search for AI news"
+  ./INSTALL_SUP.sh --M1a.llama --runner           # Run MCHP + llama directly
+  ./INSTALL_SUP.sh --B1b.gemma                    # Install BrowserUse + gemma
+  ./INSTALL_SUP.sh --brain mchp --content llm --model llama
+  ./INSTALL_SUP.sh --S1a.llama --runner --task "Search for AI news"
 
 EOF
 }
@@ -141,69 +147,73 @@ EOF
 CONFIG_KEY=""
 BRAIN=""
 CONTENT=""
-MECHANICS=""
 MODEL=""
 PHASE=false
 RUNNER=false
 TASK=""
 STAGE=0  # 0=full install, 1=pre-reboot only, 2=post-reboot only
 
-# Pre-defined configurations matching EXPERIMENTAL_PLAN.md
+# Pre-defined configurations: brain:content:model:phase
 declare -A CONFIGS
 CONFIGS=(
-    # M Series - MCHP brain (Baseline)
-    ["M0"]="upstream:upstream:upstream:none:false"  # Upstream MITRE pyhuman (control)
-    ["M1"]="mchp:mchp:mchp:none:false"
-    ["M2.llama"]="mchp:smolagents:smolagents:llama:false"
-    ["M2a.llama"]="mchp:smolagents:mchp:llama:false"
-    ["M2b.llama"]="mchp:mchp:smolagents:llama:false"
-    ["M3.llama"]="mchp:browseruse:browseruse:llama:false"
-    ["M3a.llama"]="mchp:browseruse:mchp:llama:false"
-    ["M3b.llama"]="mchp:mchp:browseruse:llama:false"
+    # Control
+    ["C0"]="mchp:none:none:false"
 
-    # M Series - MCHP brain (Improved: with PHASE timing)
-    ["M4.llama"]="mchp:smolagents:smolagents:llama:true"
-    ["M4a.llama"]="mchp:smolagents:mchp:llama:true"
-    ["M4b.llama"]="mchp:mchp:smolagents:llama:true"
-    ["M5.llama"]="mchp:browseruse:browseruse:llama:true"
-    ["M5a.llama"]="mchp:browseruse:mchp:llama:true"
-    ["M5b.llama"]="mchp:mchp:browseruse:llama:true"
+    # M Series - MCHP brain (GPU)
+    ["M0"]="upstream:none:none:false"  # Upstream MITRE pyhuman (control)
+    ["M1"]="mchp:none:none:false"
+    ["M1a.llama"]="mchp:llm:llama:false"
+    ["M1b.gemma"]="mchp:llm:gemma:false"
+    ["M1c.deepseek"]="mchp:llm:deepseek:false"
+    ["M2a.llama"]="mchp:llm:llama:true"
+    ["M2b.gemma"]="mchp:llm:gemma:true"
+    ["M2c.deepseek"]="mchp:llm:deepseek:true"
 
-    # B Series - BrowserUse brain (Baseline)
-    ["B1.llama"]="browseruse:browseruse:browseruse:llama:false"
-    ["B2.gemma"]="browseruse:browseruse:browseruse:gemma:false"
-    ["B3.deepseek"]="browseruse:browseruse:browseruse:deepseek:false"
+    # MC Series - MCHP brain (CPU-only)
+    ["MC1a.llama"]="mchp:llm:llama:false"
+    ["MC1b.gemma"]="mchp:llm:gemma:false"
+    ["MC1c.deepseek"]="mchp:llm:deepseek:false"
+    ["MC1d.lfm"]="mchp:llm:lfm:false"
+    ["MC1e.ministral"]="mchp:llm:ministral:false"
+    ["MC1f.qwen"]="mchp:llm:qwen:false"
+    ["MC2a.llama"]="mchp:llm:llama:true"
+    ["MC2b.gemma"]="mchp:llm:gemma:true"
+    ["MC2c.deepseek"]="mchp:llm:deepseek:true"
+    ["MC2d.lfm"]="mchp:llm:lfm:true"
+    ["MC2e.ministral"]="mchp:llm:ministral:true"
+    ["MC2f.qwen"]="mchp:llm:qwen:true"
 
-    # B Series - BrowserUseLoop (Improved: Loop mode + PHASE timing)
-    ["B4.llama"]="browseruse:browseruse:browseruse:llama:true"
-    ["B5.gemma"]="browseruse:browseruse:browseruse:gemma:true"
-    ["B6.deepseek"]="browseruse:browseruse:browseruse:deepseek:true"
+    # B Series - BrowserUse brain (GPU)
+    ["B1a.llama"]="browseruse:none:llama:false"
+    ["B1b.gemma"]="browseruse:none:gemma:false"
+    ["B1c.deepseek"]="browseruse:none:deepseek:false"
+    ["B2a.llama"]="browseruse:none:llama:true"
+    ["B2b.gemma"]="browseruse:none:gemma:true"
+    ["B2c.deepseek"]="browseruse:none:deepseek:true"
 
-    # S Series - SmolAgents brain (Baseline)
-    ["S1.llama"]="smolagents:smolagents:smolagents:llama:false"
-    ["S2.gemma"]="smolagents:smolagents:smolagents:gemma:false"
-    ["S3.deepseek"]="smolagents:smolagents:smolagents:deepseek:false"
+    # BC Series - BrowserUse brain (CPU-only)
+    ["BC1a.llama"]="browseruse:none:llama:false"
+    ["BC1b.gemma"]="browseruse:none:gemma:false"
+    ["BC1c.deepseek"]="browseruse:none:deepseek:false"
+    ["BC1d.lfm"]="browseruse:none:lfm:false"
+    ["BC1e.ministral"]="browseruse:none:ministral:false"
+    ["BC1f.qwen"]="browseruse:none:qwen:false"
 
-    # S Series - SmolAgentLoop (Improved: Loop mode + PHASE timing)
-    ["S4.llama"]="smolagents:smolagents:smolagents:llama:true"
-    ["S5.gemma"]="smolagents:smolagents:smolagents:gemma:true"
-    ["S6.deepseek"]="smolagents:smolagents:smolagents:deepseek:true"
+    # S Series - SmolAgents brain (GPU)
+    ["S1a.llama"]="smolagents:none:llama:false"
+    ["S1b.gemma"]="smolagents:none:gemma:false"
+    ["S1c.deepseek"]="smolagents:none:deepseek:false"
+    ["S2a.llama"]="smolagents:none:llama:true"
+    ["S2b.gemma"]="smolagents:none:gemma:true"
+    ["S2c.deepseek"]="smolagents:none:deepseek:true"
 
-    # BC Series - BrowserUse CPU (Baseline, no GPU)
-    ["BC1.llama"]="browseruse:browseruse:browseruse:llama:false"
-    ["BC2.gemma"]="browseruse:browseruse:browseruse:gemma:false"
-    ["BC3.deepseek"]="browseruse:browseruse:browseruse:deepseek:false"
-    ["BC7.lfm"]="browseruse:browseruse:browseruse:lfm:false"
-    ["BC8.ministral"]="browseruse:browseruse:browseruse:ministral:false"
-    ["BC9.qwen"]="browseruse:browseruse:browseruse:qwen:false"
-
-    # SC Series - SmolAgents CPU (Baseline, no GPU)
-    ["SC1.llama"]="smolagents:smolagents:smolagents:llama:false"
-    ["SC2.gemma"]="smolagents:smolagents:smolagents:gemma:false"
-    ["SC3.deepseek"]="smolagents:smolagents:smolagents:deepseek:false"
-    ["SC7.lfm"]="smolagents:smolagents:smolagents:lfm:false"
-    ["SC8.ministral"]="smolagents:smolagents:smolagents:ministral:false"
-    ["SC9.qwen"]="smolagents:smolagents:smolagents:qwen:false"
+    # SC Series - SmolAgents brain (CPU-only)
+    ["SC1a.llama"]="smolagents:none:llama:false"
+    ["SC1b.gemma"]="smolagents:none:gemma:false"
+    ["SC1c.deepseek"]="smolagents:none:deepseek:false"
+    ["SC1d.lfm"]="smolagents:none:lfm:false"
+    ["SC1e.ministral"]="smolagents:none:ministral:false"
+    ["SC1f.qwen"]="smolagents:none:qwen:false"
 )
 
 # Model name mappings
@@ -223,67 +233,57 @@ MODEL_NAMES=(
 list_configs() {
     echo "Available configurations:"
     echo ""
-    echo "MCHP Series (Baseline):"
-    for key in M0 M1 M2.llama M2a.llama M2b.llama M3.llama M3a.llama M3b.llama; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
+    echo "Control:"
+    printf "  %-16s Bare Ubuntu VM (no software)\n" "--C0"
+    echo ""
+    echo "M Series - MCHP Brain (M0/M1=CPU, M1a+=GPU):"
+    for key in M0 M1 M1a.llama M1b.gemma M1c.deepseek M2a.llama M2b.gemma M2c.deepseek; do
+        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-10s content=%-4s model=%-8s phase=%s\n" \
+            "--$key" "$brain" "$content" "$model" "$phase"
     done
     echo ""
-    echo "MCHP Series (Improved - with PHASE timing):"
-    for key in M4.llama M4a.llama M4b.llama M5.llama M5a.llama M5b.llama; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s phase=true\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
+    echo "MC Series - MCHP Brain (CPU-only):"
+    for key in MC1a.llama MC1b.gemma MC1c.deepseek MC1d.lfm MC1e.ministral MC1f.qwen \
+               MC2a.llama MC2b.gemma MC2c.deepseek MC2d.lfm MC2e.ministral MC2f.qwen; do
+        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-10s content=%-4s model=%-10s phase=%s\n" \
+            "--$key" "$brain" "$content" "$model" "$phase"
     done
     echo ""
-    echo "BrowserUse Series (Baseline):"
-    for key in B1.llama B2.gemma B3.deepseek; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
+    echo "B Series - BrowserUse Brain (GPU):"
+    for key in B1a.llama B1b.gemma B1c.deepseek B2a.llama B2b.gemma B2c.deepseek; do
+        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-10s model=%-8s phase=%s\n" \
+            "--$key" "$brain" "$model" "$phase"
     done
     echo ""
-    echo "BrowserUse Series (Improved - Loop mode + PHASE timing):"
-    for key in B4.llama B5.gemma B6.deepseek; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s phase=true\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
+    echo "BC Series - BrowserUse Brain (CPU-only):"
+    for key in BC1a.llama BC1b.gemma BC1c.deepseek BC1d.lfm BC1e.ministral BC1f.qwen; do
+        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-10s model=%-10s phase=%s\n" \
+            "--$key" "$brain" "$model" "$phase"
     done
     echo ""
-    echo "SmolAgents Series (Baseline):"
-    for key in S1.llama S2.gemma S3.deepseek; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
+    echo "S Series - SmolAgents Brain (GPU):"
+    for key in S1a.llama S1b.gemma S1c.deepseek S2a.llama S2b.gemma S2c.deepseek; do
+        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-10s model=%-8s phase=%s\n" \
+            "--$key" "$brain" "$model" "$phase"
     done
     echo ""
-    echo "SmolAgents Series (Improved - Loop mode + PHASE timing):"
-    for key in S4.llama S5.gemma S6.deepseek; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s phase=true\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
-    done
-    echo ""
-    echo "BrowserUse CPU Series (Baseline - no GPU):"
-    for key in BC1.llama BC2.gemma BC3.deepseek BC7.lfm BC8.ministral BC9.qwen; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
-    done
-    echo ""
-    echo "SmolAgents CPU Series (Baseline - no GPU):"
-    for key in SC1.llama SC2.gemma SC3.deepseek SC7.lfm SC8.ministral SC9.qwen; do
-        IFS=':' read -r brain content mechanics model phase <<< "${CONFIGS[$key]}"
-        printf "  %-14s brain=%-10s content=%-12s mechanics=%-12s model=%s\n" \
-            "--$key" "$brain" "$content" "$mechanics" "$model"
+    echo "SC Series - SmolAgents Brain (CPU-only):"
+    for key in SC1a.llama SC1b.gemma SC1c.deepseek SC1d.lfm SC1e.ministral SC1f.qwen; do
+        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-10s model=%-10s phase=%s\n" \
+            "--$key" "$brain" "$model" "$phase"
     done
 }
 
 parse_config_key() {
     local key="$1"
     if [[ -v "CONFIGS[$key]" ]]; then
-        IFS=':' read -r BRAIN CONTENT MECHANICS MODEL PHASE <<< "${CONFIGS[$key]}"
+        IFS=':' read -r BRAIN CONTENT MODEL PHASE <<< "${CONFIGS[$key]}"
         CONFIG_KEY="$key"
         [[ "$PHASE" == "true" ]] && PHASE=true || PHASE=false
         return 0
@@ -301,13 +301,37 @@ parse_args() {
                 exit 0
                 ;;
 
-            # Config key shortcuts (e.g., --M1, --S1.llama, --B4.llama, --BC1.llama, --SC1.llama)
-            --M0|--M1|--M2.llama|--M2a.llama|--M2b.llama|--M3.llama|--M3a.llama|--M3b.llama|\
-            --M4.llama|--M4a.llama|--M4b.llama|--M5.llama|--M5a.llama|--M5b.llama|\
-            --B1.llama|--B2.gemma|--B3.deepseek|--B4.llama|--B5.gemma|--B6.deepseek|\
-            --S1.llama|--S2.gemma|--S3.deepseek|--S4.llama|--S5.gemma|--S6.deepseek|\
-            --BC1.llama|--BC2.gemma|--BC3.deepseek|--BC7.lfm|--BC8.ministral|--BC9.qwen|\
-            --SC1.llama|--SC2.gemma|--SC3.deepseek|--SC7.lfm|--SC8.ministral|--SC9.qwen)
+            # Config key shortcuts - M Series
+            --M0|--M1|--M1a.llama|--M1b.gemma|--M1c.deepseek|\
+            --M2a.llama|--M2b.gemma|--M2c.deepseek)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - MC Series (CPU)
+            --MC1a.llama|--MC1b.gemma|--MC1c.deepseek|--MC1d.lfm|--MC1e.ministral|--MC1f.qwen|\
+            --MC2a.llama|--MC2b.gemma|--MC2c.deepseek|--MC2d.lfm|--MC2e.ministral|--MC2f.qwen)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - B Series
+            --B1a.llama|--B1b.gemma|--B1c.deepseek|\
+            --B2a.llama|--B2b.gemma|--B2c.deepseek)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - BC Series (CPU)
+            --BC1a.llama|--BC1b.gemma|--BC1c.deepseek|--BC1d.lfm|--BC1e.ministral|--BC1f.qwen)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - S Series
+            --S1a.llama|--S1b.gemma|--S1c.deepseek|\
+            --S2a.llama|--S2b.gemma|--S2c.deepseek)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - SC Series (CPU)
+            --SC1a.llama|--SC1b.gemma|--SC1c.deepseek|--SC1d.lfm|--SC1e.ministral|--SC1f.qwen)
                 parse_config_key "${1#--}"
                 ;;
 
@@ -316,8 +340,6 @@ parse_args() {
             --brain=*) BRAIN="${1#*=}" ;;
             --content) shift; CONTENT="$1" ;;
             --content=*) CONTENT="${1#*=}" ;;
-            --mechanics) shift; MECHANICS="$1" ;;
-            --mechanics=*) MECHANICS="${1#*=}" ;;
             --model) shift; MODEL="$1" ;;
             --model=*) MODEL="${1#*=}" ;;
             --phase) PHASE=true ;;
@@ -359,13 +381,12 @@ parse_args() {
         exit 1
     fi
 
-    # Default content/mechanics to brain type if not specified
-    [[ -z "$CONTENT" ]] && CONTENT="$BRAIN"
-    [[ -z "$MECHANICS" ]] && MECHANICS="$BRAIN"
+    # Default content to none if not specified
+    [[ -z "$CONTENT" ]] && CONTENT="none"
 
     # Default model based on brain type
     if [[ -z "$MODEL" ]]; then
-        if [[ "$BRAIN" == "mchp" && "$CONTENT" == "mchp" && "$MECHANICS" == "mchp" ]]; then
+        if [[ "$BRAIN" == "mchp" && "$CONTENT" == "none" ]]; then
             MODEL="none"
         else
             MODEL="llama"
@@ -379,41 +400,53 @@ parse_args() {
 }
 
 generate_config_key() {
-    local suffix=""
-    $PHASE && suffix="+"
-
     if [[ "$BRAIN" == "mchp" ]]; then
-        if [[ "$CONTENT" == "mchp" && "$MECHANICS" == "mchp" ]]; then
+        if [[ "$CONTENT" == "none" ]]; then
             CONFIG_KEY="M1"
-        elif [[ "$CONTENT" == "smolagents" && "$MECHANICS" == "smolagents" ]]; then
-            CONFIG_KEY="M2.${MODEL}${suffix}"
-        elif [[ "$CONTENT" == "smolagents" && "$MECHANICS" == "mchp" ]]; then
-            CONFIG_KEY="M2a.${MODEL}${suffix}"
-        elif [[ "$CONTENT" == "mchp" && "$MECHANICS" == "smolagents" ]]; then
-            CONFIG_KEY="M2b.${MODEL}${suffix}"
-        elif [[ "$CONTENT" == "browseruse" && "$MECHANICS" == "browseruse" ]]; then
-            CONFIG_KEY="M3.${MODEL}${suffix}"
-        elif [[ "$CONTENT" == "browseruse" && "$MECHANICS" == "mchp" ]]; then
-            CONFIG_KEY="M3a.${MODEL}${suffix}"
-        elif [[ "$CONTENT" == "mchp" && "$MECHANICS" == "browseruse" ]]; then
-            CONFIG_KEY="M3b.${MODEL}${suffix}"
         else
-            CONFIG_KEY="M-custom"
+            # Determine variant letter from model
+            local variant
+            case "$MODEL" in
+                llama) variant="a" ;;
+                gemma) variant="b" ;;
+                deepseek) variant="c" ;;
+                lfm) variant="d" ;;
+                ministral) variant="e" ;;
+                qwen) variant="f" ;;
+                *) variant="a" ;;
+            esac
+            local base_num="1"
+            $PHASE && base_num="2"
+            CONFIG_KEY="M${base_num}${variant}.${MODEL}"
         fi
     elif [[ "$BRAIN" == "browseruse" ]]; then
+        local variant
         case "$MODEL" in
-            llama) CONFIG_KEY="B1.llama${suffix}" ;;
-            gemma) CONFIG_KEY="B2.gemma${suffix}" ;;
-            deepseek) CONFIG_KEY="B3.deepseek${suffix}" ;;
-            *) CONFIG_KEY="B-custom" ;;
+            llama) variant="a" ;;
+            gemma) variant="b" ;;
+            deepseek) variant="c" ;;
+            lfm) variant="d" ;;
+            ministral) variant="e" ;;
+            qwen) variant="f" ;;
+            *) variant="a" ;;
         esac
+        local base_num="1"
+        $PHASE && base_num="2"
+        CONFIG_KEY="B${base_num}${variant}.${MODEL}"
     elif [[ "$BRAIN" == "smolagents" ]]; then
+        local variant
         case "$MODEL" in
-            llama) CONFIG_KEY="S1.llama${suffix}" ;;
-            gemma) CONFIG_KEY="S2.gemma${suffix}" ;;
-            deepseek) CONFIG_KEY="S3.deepseek${suffix}" ;;
-            *) CONFIG_KEY="S-custom" ;;
+            llama) variant="a" ;;
+            gemma) variant="b" ;;
+            deepseek) variant="c" ;;
+            lfm) variant="d" ;;
+            ministral) variant="e" ;;
+            qwen) variant="f" ;;
+            *) variant="a" ;;
         esac
+        local base_num="1"
+        $PHASE && base_num="2"
+        CONFIG_KEY="S${base_num}${variant}.${MODEL}"
     else
         CONFIG_KEY="custom"
     fi
@@ -648,6 +681,10 @@ install_python_deps() {
         mchp)
             pip install selenium beautifulsoup4 webdriver-manager lxml pyautogui lorem \
                 certifi chardet colorama configparser crayons idna requests urllib3
+            # Add LiteLLM if content augmentation is enabled
+            if [[ "$CONTENT" == "llm" ]]; then
+                pip install litellm torch transformers
+            fi
             ;;
         smolagents)
             pip install smolagents litellm torch transformers datasets numpy pandas requests duckduckgo-search ddgs
@@ -658,16 +695,6 @@ install_python_deps() {
             playwright install-deps chromium
             ;;
     esac
-
-    # Add LLM deps if content/mechanics uses LLM
-    if [[ "$BRAIN" == "mchp" ]]; then
-        if [[ "$CONTENT" == "smolagents" || "$MECHANICS" == "smolagents" ]]; then
-            pip install smolagents litellm torch transformers
-        fi
-        if [[ "$CONTENT" == "browseruse" || "$MECHANICS" == "browseruse" ]]; then
-            pip install langchain-ollama
-        fi
-    fi
 
     deactivate
 }
@@ -691,14 +718,12 @@ create_run_script() {
 
     log "Creating run script: $run_script"
 
-    # Map content/mechanics to runner args
+    # Map content to runner args
     local content_arg="none"
-    local mechanics_arg="none"
-    [[ "$CONTENT" != "mchp" ]] && content_arg="$CONTENT"
-    [[ "$MECHANICS" != "mchp" ]] && mechanics_arg="$MECHANICS"
+    [[ "$CONTENT" == "llm" ]] && content_arg="llm"
 
     local phase_arg=""
-    $PHASE && phase_arg="--phase"
+    $PHASE && phase_arg="--phase-timing"
 
     local model_name="${MODEL_NAMES[$MODEL]:-llama3.1:8b}"
 
@@ -717,26 +742,24 @@ create_run_script() {
             xvfb_prefix=""  # xvfb is handled inside run_m0.py
             ;;
         mchp)
-            local mchp_phase_arg=""
-            $PHASE && mchp_phase_arg="--phase-timing"
-            runner_cmd="python3 -m runners.run_mchp --content=$content_arg --mechanics=$mechanics_arg $model_arg $mchp_phase_arg"
+            runner_cmd="python3 -m runners.run_mchp --content=$content_arg $model_arg $phase_arg"
             xvfb_prefix="xvfb-run -a "
             ;;
         smolagents)
             if $PHASE; then
-                # S4-S6: Loop mode with MCHP workflows and PHASE timing
+                # S2 series: Loop mode with PHASE timing
                 runner_cmd="python3 -m runners.run_smolagents --loop $model_arg"
             else
-                # S1-S3: Single task mode
+                # S1 series: Single task mode
                 runner_cmd="python3 -m runners.run_smolagents \"\$TASK\" $model_arg"
             fi
             ;;
         browseruse)
             if $PHASE; then
-                # B4-B6: Loop mode with MCHP workflows and PHASE timing
+                # B2 series: Loop mode with PHASE timing
                 runner_cmd="python3 -m runners.run_browseruse --loop $model_arg"
             else
-                # B1-B3: Single task mode
+                # B1 series: Single task mode
                 runner_cmd="python3 -m runners.run_browseruse $model_arg"
             fi
             xvfb_prefix="xvfb-run -a "
@@ -813,14 +836,12 @@ run_directly() {
         install_ollama
     fi
 
-    # Map content/mechanics to runner args
+    # Map content to runner args
     local content_arg="none"
-    local mechanics_arg="none"
-    [[ "$CONTENT" != "mchp" ]] && content_arg="$CONTENT"
-    [[ "$MECHANICS" != "mchp" ]] && mechanics_arg="$MECHANICS"
+    [[ "$CONTENT" == "llm" ]] && content_arg="llm"
 
     local phase_arg=""
-    $PHASE && phase_arg="--phase"
+    $PHASE && phase_arg="--phase-timing"
 
     # Set environment
     export PYTHONPATH="$SCRIPT_DIR/src:${PYTHONPATH:-}"
@@ -835,10 +856,8 @@ run_directly() {
 
     case "$BRAIN" in
         mchp)
-            local mchp_phase_arg=""
-            $PHASE && mchp_phase_arg="--phase-timing"
             log "Running MCHP agent..."
-            exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" --mechanics="$mechanics_arg" $model_arg $mchp_phase_arg
+            exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" $model_arg $phase_arg
             ;;
         smolagents)
             if $PHASE; then
@@ -906,7 +925,6 @@ install_agent() {
     log "Installing $CONFIG_KEY..."
     log "  Brain: $BRAIN"
     log "  Content: $CONTENT"
-    log "  Mechanics: $MECHANICS"
     log "  Model: $MODEL"
     log "  PHASE: $PHASE"
     log "  Deploy directory: $deploy_dir"
@@ -988,7 +1006,6 @@ install_agent() {
     echo "Configuration: $CONFIG_KEY"
     echo "  Brain:      $BRAIN"
     echo "  Content:    $CONTENT"
-    echo "  Mechanics:  $MECHANICS"
     echo "  Model:      $MODEL"
     echo "  PHASE:      $PHASE"
     echo ""
@@ -1020,7 +1037,7 @@ main() {
     echo -e "${BLUE}================================${NC}"
     echo ""
     log_info "Config: $CONFIG_KEY"
-    log_info "Brain: $BRAIN | Content: $CONTENT | Mechanics: $MECHANICS | Model: $MODEL"
+    log_info "Brain: $BRAIN | Content: $CONTENT | Model: $MODEL"
     log_info "PHASE: $PHASE | Mode: $(if $RUNNER; then echo 'Runner'; else echo 'Install'; fi)"
     echo ""
 

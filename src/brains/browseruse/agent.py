@@ -1,7 +1,7 @@
 """
 BrowserUse Brain - AI-powered browser automation agent.
 
-Supports three-prompt configuration for content and mechanics control.
+Supports prompt configuration for content/behavior control.
 """
 import os
 import asyncio
@@ -163,11 +163,10 @@ class BrowserUseAgent:
         Returns:
             Result from the agent, or None on error
         """
-        # Build full prompt from task + content + mechanics guidelines
+        # Build full prompt from task + content guidelines
         full_prompt = BUPrompts(
             task=task,
             content=self.prompts.content,
-            mechanics=self.prompts.mechanics,
         ).build_full_prompt()
 
         log(f"Starting BrowserUse agent with model: {self.model_name}")

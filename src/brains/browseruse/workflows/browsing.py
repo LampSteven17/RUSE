@@ -102,7 +102,6 @@ class BrowsingWorkflow(BUWorkflow):
             full_prompt = BUPrompts(
                 task=task,
                 content=self.prompts.content,
-                mechanics=self.prompts.mechanics,
             ).build_full_prompt()
         else:
             full_prompt = task

@@ -13,6 +13,7 @@ from brains.smolagents.workflows.base import SmolWorkflow
 from brains.smolagents.tasks import DEFAULT_TASKS, TECHNICAL_TASKS, GENERAL_TASKS
 from common.config.model_config import get_model
 from common.logging.llm_callbacks import setup_litellm_callbacks
+from common.logging.task_categorizer import categorize_task
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -34,15 +35,15 @@ class ResearchWorkflow(SmolWorkflow):
     """
     Research workflow using SmolAgents.
 
-    Performs web searches and research tasks, categorized as
-    "Web Browsing" to match MCHP's workflow categories.
+    Performs web searches and research tasks with dynamic categorization
+    based on task content (browser, video, office, etc.).
     """
 
     def __init__(self, model: str = None, prompts=None):
         super().__init__(
             name=WORKFLOW_NAME,
             description=WORKFLOW_DESCRIPTION,
-            category="Web Browsing"
+            category="browser"  # Default, will be updated per-task
         )
         self.model_name = get_model(model)
         self.prompts = prompts
@@ -90,6 +91,18 @@ class ResearchWorkflow(SmolWorkflow):
             task = extra.get('task')
         if task is None:
             task = random.choice(self.all_tasks)
+            # Log task selection decision
+            if logger:
+                logger.decision(
+                    choice="research_task",
+                    options=self.all_tasks[:5] if len(self.all_tasks) > 5 else self.all_tasks,
+                    selected=task,
+                    context=f"Task from {len(self.all_tasks)} available tasks",
+                    method="random"
+                )
+
+        # Dynamically categorize based on task content
+        self.category = categorize_task(task, default="browser")
 
         # Update description for logging
         self.description = task[:50] + "..." if len(task) > 50 else task

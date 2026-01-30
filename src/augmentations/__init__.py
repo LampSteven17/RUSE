@@ -1,9 +1,9 @@
 """
 Augmentations module for SUP agents.
 
-Provides content and mechanics augmentations for brain customization.
+Provides content augmentation for MCHP brain customization.
+Content augmentation uses LLM to generate realistic text instead of lorem ipsum.
 """
 from augmentations import content
-from augmentations import mechanics
 
-__all__ = ['content', 'mechanics']
+__all__ = ['content']

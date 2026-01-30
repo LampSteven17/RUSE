@@ -1,7 +1,7 @@
 """
 SmolAgents Brain - HuggingFace smolagents-based research agent.
 
-Supports three-prompt configuration for content and mechanics control.
+Supports prompt configuration for content/behavior control.
 """
 import os
 import logging
@@ -66,7 +66,7 @@ class SmolAgent:
         if self.tools is None:
             self.tools = [DuckDuckGoSearchTool()]
 
-        # Build instructions from content + mechanics prompts
+        # Build instructions from content prompts
         instructions = prompts.build_system_prompt()
 
         # Create the underlying CodeAgent
