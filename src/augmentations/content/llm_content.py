@@ -51,8 +51,8 @@ class LLMContentGenerator(ABC):
         self._model_name: str = "unknown"
 
     @abstractmethod
-    def _execute_query(self, prompt: str, max_tokens: int = 200) -> str:
-        """Execute LLM query and return response text."""
+    def _execute_query(self, prompt: str, max_tokens: int = 200) -> tuple:
+        """Execute LLM query and return (response_text, tokens_dict or None)."""
         pass
 
     def _query_llm(self, prompt: str, action: str, max_tokens: int = 200) -> str:
@@ -67,11 +67,11 @@ class LLMContentGenerator(ABC):
         start_time = time.time()
 
         try:
-            result = self._execute_query(prompt, max_tokens)
+            result, tokens = self._execute_query(prompt, max_tokens)
             duration_ms = int((time.time() - start_time) * 1000)
 
             if self.logger:
-                self.logger.llm_response(output=result, duration_ms=duration_ms, model=self._model_name)
+                self.logger.llm_response(output=result, duration_ms=duration_ms, model=self._model_name, tokens=tokens)
 
             return result.strip()
 
@@ -234,14 +234,25 @@ class SmolLLMBackend(LLMContentGenerator):
                 f"Ensure Ollama is running with the model pulled. Error: {e}"
             ) from e
 
-    def _execute_query(self, prompt: str, max_tokens: int = 200) -> str:
-        """Execute LiteLLM query."""
+    def _execute_query(self, prompt: str, max_tokens: int = 200) -> tuple:
+        """Execute LiteLLM query and return (text, tokens)."""
         response = self._litellm.completion(
             model=self._model_name,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens
         )
-        return response.choices[0].message.content
+        text = response.choices[0].message.content
+
+        # Extract token counts from LiteLLM response
+        tokens = None
+        if hasattr(response, 'usage') and response.usage:
+            tokens = {
+                "input": getattr(response.usage, 'prompt_tokens', None),
+                "output": getattr(response.usage, 'completion_tokens', None),
+                "total": getattr(response.usage, 'total_tokens', None)
+            }
+
+        return text, tokens
 
 
 class BuLLMBackend(LLMContentGenerator):
@@ -275,45 +286,82 @@ class BuLLMBackend(LLMContentGenerator):
                 f"Ensure Ollama is running with the model pulled. Error: {e}"
             ) from e
 
-    def _execute_query(self, prompt: str, max_tokens: int = 200) -> str:
-        """Execute ChatOllama query."""
+    def _execute_query(self, prompt: str, max_tokens: int = 200) -> tuple:
+        """Execute ChatOllama query and return (text, tokens)."""
         response = self._llm.invoke(prompt)
-        return response.content
+        text = response.content
+
+        # Extract token counts from langchain-ollama response metadata
+        tokens = None
+        if hasattr(response, 'response_metadata') and response.response_metadata:
+            meta = response.response_metadata
+            # Ollama provides eval_count (output) and prompt_eval_count (input)
+            input_tokens = meta.get('prompt_eval_count')
+            output_tokens = meta.get('eval_count')
+            if input_tokens is not None or output_tokens is not None:
+                tokens = {
+                    "input": input_tokens,
+                    "output": output_tokens,
+                    "total": (input_tokens or 0) + (output_tokens or 0)
+                }
+
+        return text, tokens
 
 
 # Global logger instance (set by agent initialization)
 _global_logger: Optional[Any] = None
+# Cached backend instance (managed manually for logger updates)
+_cached_backend: Optional[LLMContentGenerator] = None
+_cached_backend_name: Optional[str] = None
 
 
 def set_logger(logger: Any) -> None:
-    """Set the global logger for LLM content functions."""
-    global _global_logger
+    """
+    Set the global logger for LLM content functions.
+
+    IMPORTANT: This also resets the cached backend so it gets recreated
+    with the new logger on next use.
+    """
+    global _global_logger, _cached_backend
     _global_logger = logger
+    # Clear the cached backend so it gets recreated with the new logger
+    _cached_backend = None
 
 
-@lru_cache(maxsize=1)
 def _get_backend() -> LLMContentGenerator:
     """
     Get the configured LLM backend.
 
-    Cached to prevent repeated initialization.
+    Manually cached to allow logger updates via set_logger().
     """
+    global _cached_backend, _cached_backend_name
+
     backend_name = os.getenv("HYBRID_LLM_BACKEND", "smol").lower()
 
+    # Return cached backend if it exists and backend type hasn't changed
+    if _cached_backend is not None and _cached_backend_name == backend_name:
+        return _cached_backend
+
+    # Create new backend with current logger
     if backend_name == "smol":
-        return SmolLLMBackend(logger=_global_logger)
+        _cached_backend = SmolLLMBackend(logger=_global_logger)
     elif backend_name == "bu":
-        return BuLLMBackend(logger=_global_logger)
+        _cached_backend = BuLLMBackend(logger=_global_logger)
     else:
         raise LLMUnavailableError(
             f"Unknown LLM backend: '{backend_name}'. "
             f"Set HYBRID_LLM_BACKEND to 'smol' or 'bu'."
         )
 
+    _cached_backend_name = backend_name
+    return _cached_backend
+
 
 def reset_backend() -> None:
     """Reset the cached backend (useful for testing or reconfiguration)."""
-    _get_backend.cache_clear()
+    global _cached_backend, _cached_backend_name
+    _cached_backend = None
+    _cached_backend_name = None
 
 
 # =============================================================================
