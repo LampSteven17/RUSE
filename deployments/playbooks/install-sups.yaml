@@ -15,7 +15,10 @@
 - name: Install SUPs
   hosts: sup_hosts
   become: yes
-  # Parallel execution: process multiple hosts simultaneously
+  # Process 10 hosts at a time to avoid apt lock contention
+  # (especially for CPU-only VMs that all install playwright deps simultaneously)
+  serial: 10
+  # Within each batch, let hosts progress independently through tasks
   strategy: free
   # SSH keepalive to prevent timeout during long-running tasks (CUDA install, model downloads)
   # SSH retries for initial connection failures (VMs may not be ready immediately)
