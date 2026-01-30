@@ -24,16 +24,24 @@ from browser_use.browser.session import BrowserSession
 from common.config.model_config import get_model
 from brains.browseruse.prompts import BUPrompts, DEFAULT_PROMPTS
 
+# LLM timeout in seconds - 5 minutes for CPU models
+LLM_TIMEOUT = 300
 
-def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None):
+
+def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None, timeout: int = LLM_TIMEOUT):
     """
     Create a browser_use.ChatOllama instance with logging wrapped around ainvoke.
 
     browser_use uses its own ChatOllama class (not LangChain) which directly calls
     ollama.AsyncClient. We wrap the Ollama client's chat method to capture token
     counts before browser_use discards them.
+
+    Args:
+        model: Ollama model name
+        logger: Optional AgentLogger for logging LLM calls
+        timeout: LLM request timeout in seconds (default 300s for CPU models)
     """
-    llm = ChatOllama(model=model)
+    llm = ChatOllama(model=model, timeout=timeout)
 
     if logger is None:
         return llm
