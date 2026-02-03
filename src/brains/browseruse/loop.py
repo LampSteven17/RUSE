@@ -1,15 +1,15 @@
 """
-BrowserUseLoop - MCHP-style continuous execution for BrowserUse.
+BrowserUseLoop - Continuous execution for BrowserUse.
 
-This module provides a loop-based agent that runs BrowserUse browsing
-tasks interleaved with MCHP workflows for activity diversity.
+Runs BrowserUse-native workflows (browse_web, web_search, browse_youtube)
+in clusters with configurable timing.
 """
 import signal
 import random
 import sys
 from datetime import datetime
 from time import sleep
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -25,15 +25,9 @@ DEFAULT_GROUP_INTERVAL = 500
 
 class BrowserUseLoop:
     """
-    BrowserUse agent with MCHP-style continuous execution.
+    BrowserUse agent with continuous execution.
 
-    Runs workflows in random clusters with configurable timing,
-    mixing BrowserUse browsing tasks with MCHP workflows for
-    diverse, human-like activity patterns.
-
-    Configurations:
-    - B1-B3: BrowserUse browsing only (single task mode)
-    - B4-B6: BrowserUse + MCHP workflows + PHASE timing (diverse activities)
+    Runs native BrowserUse workflows in random clusters with configurable timing.
     """
 
     def __init__(
@@ -42,8 +36,6 @@ class BrowserUseLoop:
         prompts: BUPrompts = None,
         headless: bool = True,
         max_steps: int = 10,
-        include_mchp: bool = True,
-        mchp_categories: Optional[List[str]] = None,
         cluster_size: int = DEFAULT_CLUSTER_SIZE,
         task_interval: int = DEFAULT_TASK_INTERVAL,
         group_interval: int = DEFAULT_GROUP_INTERVAL,
@@ -58,8 +50,6 @@ class BrowserUseLoop:
             prompts: Prompts configuration for browsing
             headless: Run browser in headless mode
             max_steps: Maximum steps per browsing task
-            include_mchp: Include MCHP workflows for diversity
-            mchp_categories: Which MCHP categories to include
             cluster_size: Max workflows per cluster (used if phase_timing disabled)
             task_interval: Max seconds between tasks (used if phase_timing disabled)
             group_interval: Max seconds between clusters (used if phase_timing disabled)
@@ -70,8 +60,6 @@ class BrowserUseLoop:
         self.prompts = prompts
         self.headless = headless
         self.max_steps = max_steps
-        self.include_mchp = include_mchp
-        self.mchp_categories = mchp_categories
         self.cluster_size = cluster_size
         self.task_interval = task_interval
         self.group_interval = group_interval
@@ -125,18 +113,16 @@ class BrowserUseLoop:
 
     def _load_workflows(self):
         """Load all workflows for the loop."""
-        from brains.browseruse.workflows.loader import load_diverse_workflows
+        from brains.browseruse.workflows.loader import load_workflows
 
         print("Loading workflows...")
         if self.logger:
             self.logger.info("Loading workflows")
-        workflows = load_diverse_workflows(
+        workflows = load_workflows(
             model=self.model,
             prompts=self.prompts,
             headless=self.headless,
             max_steps=self.max_steps,
-            include_mchp=self.include_mchp,
-            mchp_categories=self.mchp_categories,
         )
         print(f"Loaded {len(workflows)} workflows")
 
@@ -156,7 +142,7 @@ class BrowserUseLoop:
         return workflows
 
     def _emulation_loop(self):
-        """Main emulation loop - runs workflows in clusters like MCHP."""
+        """Main emulation loop - runs workflows in clusters."""
         while self._running:
             # Log activity level if using PHASE timing
             if self.use_phase_timing and self._phase_timing:
@@ -255,7 +241,6 @@ class BrowserUseLoop:
         signal.signal(signal.SIGTERM, self._signal_handler)
 
         print(f"\nStarting BrowserUseLoop with {len(self.workflows)} workflows")
-        print(f"MCHP integration: {self.include_mchp}")
         print(f"PHASE timing: {self.use_phase_timing}")
         if not self.use_phase_timing:
             print(f"Timing: cluster_size={self.cluster_size}, task_interval={self.task_interval}, group_interval={self.group_interval}")
@@ -264,7 +249,6 @@ class BrowserUseLoop:
         if self.logger:
             self.logger.info("BrowserUseLoop started", details={
                 "workflow_count": len(self.workflows),
-                "mchp_integration": self.include_mchp,
                 "phase_timing": self.use_phase_timing
             })
 
@@ -294,7 +278,6 @@ def run(
     prompts: BUPrompts = None,
     headless: bool = True,
     max_steps: int = 10,
-    include_mchp: bool = True,
     cluster_size: int = DEFAULT_CLUSTER_SIZE,
     task_interval: int = DEFAULT_TASK_INTERVAL,
     group_interval: int = DEFAULT_GROUP_INTERVAL,
@@ -305,7 +288,6 @@ def run(
         prompts=prompts,
         headless=headless,
         max_steps=max_steps,
-        include_mchp=include_mchp,
         cluster_size=cluster_size,
         task_interval=task_interval,
         group_interval=group_interval,
@@ -318,7 +300,6 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='BrowserUse Loop Agent')
     parser.add_argument('--model', choices=['llama', 'gemma', 'deepseek'], default='llama')
-    parser.add_argument('--no-mchp', action='store_true', help='Disable MCHP workflow integration')
     parser.add_argument('--no-headless', action='store_true', help='Run browser with GUI')
     parser.add_argument('--max-steps', type=int, default=10)
     parser.add_argument('--clustersize', type=int, default=DEFAULT_CLUSTER_SIZE)
@@ -330,7 +311,6 @@ if __name__ == '__main__':
         model=args.model,
         headless=not args.no_headless,
         max_steps=args.max_steps,
-        include_mchp=not args.no_mchp,
         cluster_size=args.clustersize,
         task_interval=args.taskinterval,
         group_interval=args.taskgroupinterval,

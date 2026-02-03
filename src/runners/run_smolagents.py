@@ -6,10 +6,10 @@ Single-Task Configurations:
 - S2.gemma: SmolAgents + gemma3:4b
 - S3.deepseek: SmolAgents + deepseek-r1:8b
 
-Loop Mode Configurations (MCHP-style continuous execution):
-- S4.llama: SmolAgentLoop + llama + MCHP workflows + PHASE timing
-- S5.gemma: SmolAgentLoop + gemma + MCHP workflows + PHASE timing
-- S6.deepseek: SmolAgentLoop + deepseek + MCHP workflows + PHASE timing
+Loop Mode Configurations (continuous execution with native workflows):
+- S4.llama: SmolAgentLoop + llama + PHASE timing
+- S5.gemma: SmolAgentLoop + gemma + PHASE timing
+- S6.deepseek: SmolAgentLoop + deepseek + PHASE timing
 """
 from datetime import datetime
 from runners.run_config import SUPConfig
@@ -77,16 +77,12 @@ def run_smolagents(config: SUPConfig, task: str = None):
         logger.session_end()
 
 
-def run_smolagents_loop(config: SUPConfig, include_mchp: bool = True, use_phase_timing: bool = True):
+def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True):
     """
-    Run SmolAgents in loop mode (MCHP-style continuous execution).
-
-    This mode runs SmolAgents research tasks interleaved with MCHP
-    workflows for diverse, human-like activity patterns.
+    Run SmolAgents in loop mode (continuous execution with native workflows).
 
     Args:
         config: SUP configuration
-        include_mchp: Include MCHP workflows for activity diversity
         use_phase_timing: Enable PHASE timing with time-of-day awareness
     """
     # Initialize structured logger
@@ -96,7 +92,6 @@ def run_smolagents_loop(config: SUPConfig, include_mchp: bool = True, use_phase_
         "model": config.model,
         "phase": config.phase,
         "loop_mode": True,
-        "include_mchp": include_mchp,
         "phase_timing": use_phase_timing,
         "config_key": config.config_key
     })
@@ -109,19 +104,16 @@ def run_smolagents_loop(config: SUPConfig, include_mchp: bool = True, use_phase_
     log(f"Running SmolAgents loop (config: {config.config_key})")
     log(f"PHASE mode: {config.phase}")
     log(f"PHASE timing: {use_phase_timing}")
-    log(f"MCHP workflows: {include_mchp}")
     logger.info("Starting SmolAgents loop", details={
         "config_key": config.config_key,
         "phase": config.phase,
-        "phase_timing": use_phase_timing,
-        "include_mchp": include_mchp
+        "phase_timing": use_phase_timing
     })
 
     try:
         agent = SmolAgentLoop(
             model=config.model,
             prompts=prompts,
-            include_mchp=include_mchp,
             logger=logger,
             use_phase_timing=use_phase_timing,
         )
@@ -145,9 +137,8 @@ if __name__ == "__main__":
     parser.add_argument("task", nargs="?", default=None, help="Task to perform (single-task mode)")
     parser.add_argument("--model", choices=["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"], default="llama")
     parser.add_argument("--phase", action="store_true", help="Enable PHASE-improved prompts")
-    parser.add_argument("--loop", action="store_true", help="Run in loop mode (MCHP-style)")
+    parser.add_argument("--loop", action="store_true", help="Run in loop mode")
     parser.add_argument("--cpu", action="store_true", help="CPU-only deployment (SC series)")
-    parser.add_argument("--no-mchp", action="store_true", help="Disable MCHP workflows in loop mode")
     parser.add_argument("--no-phase-timing", action="store_true",
                         help="Disable PHASE timing (use random timing instead)")
     args = parser.parse_args()
@@ -162,7 +153,6 @@ if __name__ == "__main__":
     if args.loop:
         run_smolagents_loop(
             config,
-            include_mchp=not args.no_mchp,
             use_phase_timing=not args.no_phase_timing
         )
     else:

@@ -1,8 +1,7 @@
 """
-Research workflow for SmolAgents.
+Browse YouTube workflow for SmolAgents.
 
-Wraps SmolAgents research tasks as a workflow that can be run
-in the MCHP-style loop alongside other workflows.
+Researches YouTube video content using CodeAgent + DuckDuckGoSearchTool.
 """
 import random
 from typing import Optional, TYPE_CHECKING
@@ -10,10 +9,8 @@ from typing import Optional, TYPE_CHECKING
 from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool
 
 from brains.smolagents.workflows.base import SmolWorkflow
-from brains.smolagents.tasks import DEFAULT_TASKS, TECHNICAL_TASKS, GENERAL_TASKS
 from common.config.model_config import get_model
 from common.logging.llm_callbacks import setup_litellm_callbacks
-from common.logging.task_categorizer import categorize_task
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -22,35 +19,50 @@ if TYPE_CHECKING:
 _litellm_callbacks_registered = False
 
 
-WORKFLOW_NAME = 'SmolResearch'
-WORKFLOW_DESCRIPTION = 'Research a topic using web search'
+WORKFLOW_NAME = 'BrowseYouTube'
+WORKFLOW_DESCRIPTION = 'Research YouTube video content'
+
+# YouTube research tasks - queries about video content
+BROWSE_YOUTUBE_TASKS = [
+    "What are the most popular tech YouTube channels right now?",
+    "Find trending machine learning video content on YouTube",
+    "What cooking tutorial channels are popular on YouTube?",
+    "Search for the best Python programming tutorial series on YouTube",
+    "What are the top science education YouTube channels?",
+    "Find popular travel vlog channels on YouTube",
+    "What gaming content is trending on YouTube this month?",
+    "Search for highly rated music production tutorial videos",
+    "What fitness and workout channels are popular on YouTube?",
+    "Find the best DIY and home improvement YouTube channels",
+    "What documentary-style YouTube channels cover history?",
+    "Search for popular product review channels on YouTube",
+    "What space and astronomy content is trending on YouTube?",
+    "Find educational math tutorial YouTube channels",
+    "What photography tutorial content is popular on YouTube?",
+]
 
 
 def load(model: str = None, prompts=None):
-    """Load the research workflow."""
-    return ResearchWorkflow(model=model, prompts=prompts)
+    """Load the browse YouTube workflow."""
+    return BrowseYouTubeWorkflow(model=model, prompts=prompts)
 
 
-class ResearchWorkflow(SmolWorkflow):
+class BrowseYouTubeWorkflow(SmolWorkflow):
     """
-    Research workflow using SmolAgents.
+    YouTube browsing workflow using SmolAgents.
 
-    Performs web searches and research tasks with dynamic categorization
-    based on task content (browser, video, office, etc.).
+    Researches YouTube video content using CodeAgent + DuckDuckGoSearchTool.
     """
 
     def __init__(self, model: str = None, prompts=None):
         super().__init__(
             name=WORKFLOW_NAME,
             description=WORKFLOW_DESCRIPTION,
-            category="browser"  # Default, will be updated per-task
+            category="video"
         )
         self.model_name = get_model(model)
         self.prompts = prompts
         self._agent = None
-
-        # Combine all task lists for variety
-        self.all_tasks = DEFAULT_TASKS + TECHNICAL_TASKS + GENERAL_TASKS
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -58,7 +70,6 @@ class ResearchWorkflow(SmolWorkflow):
             model_id = f"ollama/{self.model_name}"
             llm = LiteLLMModel(model_id=model_id)
 
-            # Build instructions from prompts if provided
             instructions = None
             if self.prompts is not None:
                 instructions = self.prompts.build_system_prompt()
@@ -71,51 +82,46 @@ class ResearchWorkflow(SmolWorkflow):
         return self._agent
 
     def action(self, extra=None, logger: Optional["AgentLogger"] = None):
-        """
-        Execute a research task.
-
-        Args:
-            extra: Extra parameters (can include 'task' to override random selection)
-            logger: Optional AgentLogger for structured logging
-        """
+        """Execute a YouTube browsing task."""
         global _litellm_callbacks_registered
 
-        # Set up LiteLLM callbacks if logger provided and not already registered
         if logger and not _litellm_callbacks_registered:
             setup_litellm_callbacks(logger)
             _litellm_callbacks_registered = True
 
-        # Get task from extra or pick random
         task = None
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            task = random.choice(self.all_tasks)
-            # Log task selection decision
+            task = random.choice(BROWSE_YOUTUBE_TASKS)
             if logger:
                 logger.decision(
-                    choice="research_task",
-                    options=self.all_tasks[:5] if len(self.all_tasks) > 5 else self.all_tasks,
+                    choice="browse_youtube_task",
+                    options=BROWSE_YOUTUBE_TASKS[:5],
                     selected=task,
-                    context=f"Task from {len(self.all_tasks)} available tasks",
+                    context=f"Task from {len(BROWSE_YOUTUBE_TASKS)} available tasks",
                     method="random"
                 )
 
-        # Dynamically categorize based on task content
-        self.category = categorize_task(task, default="browser")
-
-        # Update description for logging
+        self.category = "video"
         self.description = task[:50] + "..." if len(task) > 50 else task
-
         print(self.display)
+
+        step_name = "watch_video"
+        if logger:
+            logger.step_start(step_name, category="video", message=task)
 
         try:
             agent = self._get_agent()
             result = agent.run(task)
-            print(f"Research completed: {str(result)[:200]}...")
+            if logger:
+                logger.step_success(step_name)
+            print(f"YouTube browse completed: {str(result)[:200]}...")
             return result
         except Exception as e:
-            print(f"Research error: {e}")
+            if logger:
+                logger.step_error(step_name, message=str(e))
+            print(f"YouTube browse error: {e}")
             raise
 
     def cleanup(self):

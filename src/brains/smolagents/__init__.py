@@ -7,10 +7,12 @@ Configurations:
 - S3.deepseek: DEFAULT_PROMPTS + deepseek-r1:8b (single task mode)
 - S?.model+: POST-PHASE with PHASE-improved prompts
 
-Loop Mode (MCHP-style continuous execution):
-- S1+.llama: SmolAgentLoop + llama + MCHP workflows
-- S2+.gemma: SmolAgentLoop + gemma + MCHP workflows
-- S3+.deepseek: SmolAgentLoop + deepseek + MCHP workflows
+Loop Mode (continuous execution with native workflows):
+- S4.llama: SmolAgentLoop + llama + PHASE timing
+- S5.gemma: SmolAgentLoop + gemma + PHASE timing
+- S6.deepseek: SmolAgentLoop + deepseek + PHASE timing
+
+Native workflows: BrowseWeb, WebSearch, BrowseYouTube (all CodeAgent+DDG-based).
 """
 from brains.smolagents.agent import SmolAgent, run
 from brains.smolagents.prompts import SMOLPrompts, DEFAULT_PROMPTS, PHASE_PROMPTS, MCHP_LIKE_PROMPTS
