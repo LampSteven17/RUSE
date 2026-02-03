@@ -1,18 +1,22 @@
 """
-BrowserUse Workflows - MCHP-style workflow support for BrowserUse.
+BrowserUse Workflows - native workflow support for BrowserUse.
 
-This module provides workflow infrastructure that allows BrowserUse to:
-1. Run in a continuous loop like MCHP
-2. Include diverse MCHP workflows (documents, file ops, shell, video)
-3. Interleave browsing tasks with other activities for human-like behavior
+Provides three self-contained workflows implemented through BrowserUse's
+Playwright-based agent:
+1. BrowseWeb - Visit websites and read content
+2. WebSearch - Perform Google searches
+3. BrowseYouTube - Browse YouTube and watch videos
 """
 from brains.browseruse.workflows.base import BUWorkflow
-from brains.browseruse.workflows.browsing import BrowsingWorkflow
-from brains.browseruse.workflows.loader import load_workflows, load_mchp_workflows
+from brains.browseruse.workflows.browse_web import BrowseWebWorkflow
+from brains.browseruse.workflows.web_search import WebSearchWorkflow
+from brains.browseruse.workflows.browse_youtube import BrowseYouTubeWorkflow
+from brains.browseruse.workflows.loader import load_workflows
 
 __all__ = [
     'BUWorkflow',
-    'BrowsingWorkflow',
+    'BrowseWebWorkflow',
+    'WebSearchWorkflow',
+    'BrowseYouTubeWorkflow',
     'load_workflows',
-    'load_mchp_workflows',
 ]
