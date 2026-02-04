@@ -15,7 +15,7 @@ def _use_llm_augmentation():
     """Check if LLM augmentation should be used (M4/M5 configs)."""
     return os.environ.get("HYBRID_LLM_BACKEND") is not None
 
-WORKFLOW_NAME = 'GoogleSearcher'
+WORKFLOW_NAME = 'WebSearch'
 WORKFLOW_DESCRIPTION = 'Search for something on Google'
 DEFAULT_WAIT_TIME = 2
 MAX_PAGES = 5

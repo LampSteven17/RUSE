@@ -9,7 +9,7 @@ from selenium.common.exceptions import WebDriverException
 from selenium.common.exceptions import InvalidArgumentException
 from selenium.common.exceptions import TimeoutException
 
-WORKFLOW_NAME = 'WebBrowser'
+WORKFLOW_NAME = 'BrowseWeb'
 WORKFLOW_DESCRIPTION = 'Select a random website and browse'
 
 MAX_NAVIGATION_CLICKS = 15
