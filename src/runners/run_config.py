@@ -50,6 +50,7 @@ class SUPConfig:
     model: Optional[ModelType] = None
     calibration: Optional[str] = None    # "summer24"/"fall24"/"spring25"/None
     cpu_only: bool = False
+    seed: int = 42
 
     # Kept for backward compat with exp-2 code that reads config.phase
     @property
@@ -198,15 +199,17 @@ def build_config(brain: BrainType, content: ContentType = "none",
                  model: Optional[ModelType] = None,
                  calibration: Optional[str] = None,
                  cpu_only: bool = False,
-                 phase: bool = False) -> SUPConfig:
+                 phase: bool = False,
+                 seed: int = 42) -> SUPConfig:
     """Build a config from individual parameters.
 
     Args:
         phase: Backward compat flag. If True and calibration is None,
                defaults to calibration="summer24" (exp-2 behavior).
+        seed: Random seed for deterministic behavior (0 = non-deterministic).
     """
     # Backward compat: --phase without --calibration means summer24
     if phase and calibration is None:
         calibration = "summer24"
     return SUPConfig(brain=brain, content=content, model=model,
-                     calibration=calibration, cpu_only=cpu_only)
+                     calibration=calibration, cpu_only=cpu_only, seed=seed)

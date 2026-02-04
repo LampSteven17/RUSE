@@ -22,22 +22,22 @@
 #   - S1 vs S2/S3/S4: Timing profile impact on SmolAgents
 #   - llama vs gemma: Model comparison within each timing condition
 #
-# Total VMs: 22 (6 non-GPU, 16 v100)
+# Total VMs: 25 (9 non-GPU, 16 v100)
 
 deployment_name: exp-3
 
 flavor_capacity:
-  v1.14vcpu.28g: 6
+  v1.14vcpu.28g: 9
   v100-1gpu.14vcpu.28g: 19
 
 deployments:
-  # === Controls (2) - non-GPU ===
+  # === Controls (5) - non-GPU ===
   - behavior: C0
     flavor: v1.14vcpu.28g
-    count: 1
+    count: 3
   - behavior: M0
     flavor: v1.14vcpu.28g
-    count: 1
+    count: 2
 
   # === MCHP (4) - non-GPU, no LLM ===
   - behavior: M1

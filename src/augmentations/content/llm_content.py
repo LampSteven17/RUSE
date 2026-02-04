@@ -23,6 +23,8 @@ import time
 import random
 from typing import List, Optional, Any
 
+from common.config.model_config import get_ollama_seed
+
 try:
     from common.logging.agent_logger import AgentLogger
 except ImportError:
@@ -77,11 +79,16 @@ class LLMContentGenerator:
 
     def _execute_query(self, prompt: str, max_tokens: int = 200) -> tuple:
         """Execute LiteLLM query and return (text, tokens)."""
-        response = self._litellm.completion(
-            model=self._model_name,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens
-        )
+        kwargs = {
+            "model": self._model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+        }
+        ollama_seed = get_ollama_seed()
+        if ollama_seed is not None:
+            kwargs["seed"] = ollama_seed
+            kwargs["temperature"] = 0.0
+        response = self._litellm.completion(**kwargs)
         text = response.choices[0].message.content
 
         # Extract token counts from LiteLLM response

@@ -36,7 +36,8 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
         "content": config.content,
         "model": config.model,
         "calibration": calibration_profile,
-        "config_key": config.config_key
+        "config_key": config.config_key,
+        "seed": config.seed
     })
 
     # Set up environment for LLM-augmented configurations
@@ -69,6 +70,7 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False):
             # Legacy compat: fall back to use_phase_timing if no calibration
             use_phase_timing=use_phase_timing if not calibration_profile else False,
             exclude_windows_workflows=is_augmented,
+            seed=config.seed,
         )
         agent.run()
         logger.session_success(message="MCHP agent completed successfully")

@@ -139,20 +139,14 @@ class BrowseYouTubeWorkflow(BUWorkflow):
         self.description = task[:50] + "..." if len(task) > 50 else task
         print(self.display)
 
-        step_name = "watch_video"
-        if logger:
-            logger.step_start(step_name, category="video", message=task)
-
+        # Steps are logged at the action level by the LLM response parser
+        # in create_logged_chat_ollama (navigate, click, type_text, scroll, etc.)
         try:
             result = asyncio.run(self._run_task_async(task, logger))
-            if logger:
-                logger.step_success(step_name)
             if result:
                 print(f"YouTube browse completed: {str(result)[:200]}...")
             return result
         except Exception as e:
-            if logger:
-                logger.step_error(step_name, message=str(e))
             raise
 
     def cleanup(self):

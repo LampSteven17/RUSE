@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-SUP Log Collection System (Simplified)
+SUP Log Collection System
 
 Collects JSONL logs from remote SUP VMs and loads them into DuckDB.
 Focuses only on structured JSONL logs from AgentLogger - ignores systemd output.
 
 Usage:
-    python log_retrieval/collect_sup_logs.py                    # All experiments
-    python log_retrieval/collect_sup_logs.py --experiments exp-2
-    python log_retrieval/collect_sup_logs.py --dry-run          # Preview only
+    python log_retrieval/collect_sup_logs.py exp-3              # Single experiment
+    python log_retrieval/collect_sup_logs.py exp-2 exp-3        # Multiple experiments
+    python log_retrieval/collect_sup_logs.py --all              # All with inventory
+    python log_retrieval/collect_sup_logs.py --list             # Show configurations
+    python log_retrieval/collect_sup_logs.py --dry-run exp-3    # Preview only
 """
 
 import argparse
@@ -38,6 +40,86 @@ DEPLOYMENTS_DIR = Path("/home/ubuntu/DOLOS-DEPLOY/deployments")
 REMOTE_LOG_BASE = "/opt/dolos-deploy/deployed_sups"
 SSH_OPTIONS = "-o ProxyJump=axes -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes"
 SSH_USER = "ubuntu"
+
+
+# ============================================================================
+# EXPERIMENT CONFIGURATIONS
+# ============================================================================
+# Each experiment defines a DOLOS deployment to collect logs from.
+# Usage: python log_retrieval/collect_sup_logs.py exp-3
+#        python log_retrieval/collect_sup_logs.py --experiments exp-2 exp-3
+
+@dataclass
+class ExperimentConfig:
+    """Configuration for a log collection experiment."""
+    name: str
+    description: str
+    vm_count: int
+    behaviors: List[str]
+    db_name: Optional[str] = None  # Default: sup-logs-{name}.duckdb
+
+
+EXPERIMENTS = {
+    "test": ExperimentConfig(
+        name="test",
+        description="Quick log generation test (M1, B1a.llama, S1a.llama)",
+        vm_count=3,
+        behaviors=["M1", "B1a.llama", "S1a.llama"],
+    ),
+    "exp-1": ExperimentConfig(
+        name="exp-1",
+        description="Pre-PHASE experimental deployment (19 VMs, V100/RTX mix)",
+        vm_count=19,
+        behaviors=[
+            "M1", "M2a.llama", "M2b.gemma", "M2c.deepseek",
+            "M3a.llama", "M3b.gemma", "M3c.deepseek",
+            "B1a.llama", "B1b.gemma", "B1c.deepseek",
+            "S1a.llama", "S1b.gemma", "S1c.deepseek",
+            "B1a.llama", "B1b.gemma", "B1c.deepseek",  # RTX A duplicates
+            "S1a.llama", "S1b.gemma", "S1c.deepseek",
+        ],
+    ),
+    "exp-2": ExperimentConfig(
+        name="exp-2",
+        description="Simplified architecture deployment (38 VMs, Brain+Content+Model)",
+        vm_count=38,
+        behaviors=[
+            # Controls
+            "C0", "M0",
+            # MCHP
+            "M1", "M1a.llama", "M1b.gemma", "M1c.deepseek",
+            "M2a.llama", "M2b.gemma", "M2c.deepseek",
+            # BrowserUse
+            "B1a.llama", "B1b.gemma", "B1c.deepseek",
+            "B2a.llama", "B2b.gemma", "B2c.deepseek",
+            # SmolAgents
+            "S1a.llama", "S1b.gemma", "S1c.deepseek",
+            "S2a.llama", "S2b.gemma", "S2c.deepseek",
+            # CPU variants
+            "BC1a.llama", "BC1b.gemma", "BC1c.deepseek",
+            "BC1d.lfm", "BC1e.ministral", "BC1f.qwen",
+            "SC1a.llama", "SC1b.gemma", "SC1c.deepseek",
+            "SC1d.lfm", "SC1e.ministral", "SC1f.qwen",
+        ],
+    ),
+    "exp-3": ExperimentConfig(
+        name="exp-3",
+        description="Calibrated PHASE timing (22 VMs, semester profiles)",
+        vm_count=22,
+        behaviors=[
+            # Controls
+            "C0", "M0",
+            # MCHP (no LLM)
+            "M1", "M2", "M3", "M4",
+            # BrowserUse
+            "B1.llama", "B1.gemma", "B2.llama", "B2.gemma",
+            "B3.llama", "B3.gemma", "B4.llama", "B4.gemma",
+            # SmolAgents
+            "S1.llama", "S1.gemma", "S2.llama", "S2.gemma",
+            "S3.llama", "S3.gemma", "S4.llama", "S4.gemma",
+        ],
+    ),
+}
 
 
 # ============================================================================
@@ -138,6 +220,22 @@ def discover_experiments(deployments_dir: Path) -> List[str]:
             if path.name not in ("playbooks",):
                 experiments.append(path.name)
     return sorted(experiments)
+
+
+def list_experiments() -> None:
+    """Display available experiment configurations."""
+    available = discover_experiments(DEPLOYMENTS_DIR)
+    print("\nConfigured experiments:")
+    print("-" * 70)
+    for key, cfg in EXPERIMENTS.items():
+        has_inventory = key in available
+        status = "READY" if has_inventory else "NO INVENTORY"
+        print(f"  {key:<12} {cfg.vm_count:>2} VMs  [{status:<12}]  {cfg.description}")
+    # Show any discovered experiments not in EXPERIMENTS
+    extra = [e for e in available if e not in EXPERIMENTS]
+    if extra:
+        print(f"\n  (Also discovered: {', '.join(extra)})")
+    print()
 
 
 def parse_inventory(inventory_path: Path) -> List[VMInfo]:
@@ -610,24 +708,35 @@ def write_manifest(
 # ============================================================================
 
 def main():
+    experiment_names = ", ".join(EXPERIMENTS.keys())
     parser = argparse.ArgumentParser(
         description='Collect SUP JSONL logs from remote VMs into DuckDB',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
+Configured experiments: {experiment_names}
+
 Examples:
-    python log_retrieval/collect_sup_logs.py                              # All experiments
-    python log_retrieval/collect_sup_logs.py --experiments exp-2          # Single experiment
+    python log_retrieval/collect_sup_logs.py exp-3                        # Single experiment
+    python log_retrieval/collect_sup_logs.py exp-2 exp-3                  # Multiple experiments
     python log_retrieval/collect_sup_logs.py --experiments exp-2 --clean  # Delete and rebuild DB
-    python log_retrieval/collect_sup_logs.py --dry-run                    # Preview only
+    python log_retrieval/collect_sup_logs.py --all                        # All with inventory
+    python log_retrieval/collect_sup_logs.py --list                       # Show configurations
+    python log_retrieval/collect_sup_logs.py --dry-run exp-3              # Preview only
         """
     )
-    parser.add_argument('--experiments', nargs='+', help='Specific experiments to collect')
+    parser.add_argument('experiments', nargs='*', help='Experiments to collect (e.g., exp-2 exp-3)')
+    parser.add_argument('--all', action='store_true', help='Collect from all experiments with inventory')
+    parser.add_argument('--list', action='store_true', help='List configured experiments and exit')
     parser.add_argument('--dry-run', action='store_true', help='Preview without collecting')
     parser.add_argument('--parallel', type=int, default=4, help='Parallel SSH connections')
     parser.add_argument('--skip-load', action='store_true', help='Skip DuckDB loading')
     parser.add_argument('--db-name', type=str, default=None, help='Custom database name')
     parser.add_argument('--clean', action='store_true', help='Delete existing database first')
     args = parser.parse_args()
+
+    if args.list:
+        list_experiments()
+        return 0
 
     print("=" * 60)
     print("SUP Log Collection (JSONL only)")
@@ -643,26 +752,54 @@ Examples:
         return 1
     print("  All checks passed!")
 
-    # Discover experiments
-    all_experiments = discover_experiments(DEPLOYMENTS_DIR)
-    experiments = args.experiments if args.experiments else all_experiments
+    # Discover experiments with inventory files
+    available_experiments = discover_experiments(DEPLOYMENTS_DIR)
 
+    if args.all:
+        experiments = available_experiments
+    elif args.experiments:
+        experiments = args.experiments
+    else:
+        print("\nERROR: No experiments specified.")
+        print("Usage: python log_retrieval/collect_sup_logs.py exp-3")
+        print("       python log_retrieval/collect_sup_logs.py --all")
+        print("       python log_retrieval/collect_sup_logs.py --list")
+        return 1
+
+    # Validate experiments
     for exp in experiments:
-        if exp not in all_experiments:
-            print(f"\nERROR: Experiment '{exp}' not found. Available: {all_experiments}")
+        if exp not in available_experiments:
+            if exp in EXPERIMENTS:
+                print(f"\nERROR: Experiment '{exp}' is configured but has no inventory.ini.")
+                print(f"  Run provisioning first: cd deployments && bash deploy.sh")
+            else:
+                print(f"\nERROR: Unknown experiment '{exp}'.")
+                print(f"  Configured: {list(EXPERIMENTS.keys())}")
+                print(f"  With inventory: {available_experiments}")
             return 1
 
-    print(f"\nExperiments to process: {experiments}")
+    # Show experiment info
+    print(f"\nExperiments to process:")
+    for exp in experiments:
+        cfg = EXPERIMENTS.get(exp)
+        if cfg:
+            print(f"  {exp}: {cfg.description} ({cfg.vm_count} VMs)")
+        else:
+            print(f"  {exp}: (no configuration - discovered from inventory)")
 
     # Setup directories
     collection_date = datetime.now().strftime("%Y-%m-%d")
     raw_dir = BASE_OUTPUT_DIR / "raw" / collection_date
 
-    # Database naming
+    # Database naming: CLI flag > experiment config > convention
     if args.db_name:
         db_name = args.db_name if args.db_name.endswith('.duckdb') else f"{args.db_name}.duckdb"
     elif len(experiments) == 1:
-        db_name = f"sup-logs-{experiments[0]}.duckdb"
+        cfg = EXPERIMENTS.get(experiments[0])
+        if cfg and cfg.db_name:
+            db_name = cfg.db_name if cfg.db_name.endswith('.duckdb') else f"{cfg.db_name}.duckdb"
+        else:
+            db_name = f"sup-logs-{experiments[0]}.duckdb"
     else:
         db_name = "sup_logs.duckdb"
 

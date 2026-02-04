@@ -27,7 +27,7 @@ def log(msg: str):
     ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{ts}] {msg}")
 
-from common.config.model_config import get_model
+from common.config.model_config import get_model, get_ollama_seed
 from brains.smolagents.prompts import SMOLPrompts, DEFAULT_PROMPTS
 
 
@@ -61,7 +61,12 @@ class SmolAgent:
         # Build the LiteLLM model ID (Ollama format)
         # Use 5 minute timeout for CPU models
         model_id = f"ollama/{self.model_name}"
-        self._llm = LiteLLMModel(model_id=model_id, timeout=300)
+        llm_kwargs = {"model_id": model_id, "timeout": 300}
+        ollama_seed = get_ollama_seed()
+        if ollama_seed is not None:
+            llm_kwargs["seed"] = ollama_seed
+            llm_kwargs["temperature"] = 0.0
+        self._llm = LiteLLMModel(**llm_kwargs)
 
         # Default tools if none provided
         if self.tools is None:

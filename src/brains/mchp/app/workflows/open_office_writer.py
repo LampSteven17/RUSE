@@ -74,11 +74,6 @@ class DocumentEditor(BaseWorkflow):
     def _create_document(self, logger=None):
         app_name = "LibreOffice Writer" if IS_LINUX else "OpenOffice Writer"
 
-        # Semantic step: Create document
-        if logger:
-            logger.step_start("create_document", category="office",
-                              message=f"Creating new {app_name} document")
-
         if logger:
             logger.step_start("open_application", category="office",
                               message=app_name)
@@ -86,7 +81,6 @@ class DocumentEditor(BaseWorkflow):
         if logger:
             logger.step_success("open_application")
 
-        # Semantic step: Edit content
         if logger:
             logger.step_start("edit_content", category="office",
                               message="Typing paragraphs and sentences")
@@ -98,9 +92,8 @@ class DocumentEditor(BaseWorkflow):
         if logger:
             logger.step_success("edit_content")
 
-        # Semantic step: Format and modify
         if logger:
-            logger.step_start("format_and_modify", category="office",
+            logger.step_start("edit_content", category="office",
                               message="Performing random document actions")
         # Randomly perform actions
         for i in range(0, random.randint(6,15)):
@@ -114,9 +107,8 @@ class DocumentEditor(BaseWorkflow):
                            self._format_text])()
             sleep(self.default_wait_time)
         if logger:
-            logger.step_success("format_and_modify")
+            logger.step_success("edit_content")
 
-        # Semantic step: Save document
         if logger:
             logger.step_start("save_document", category="office",
                               message="Saving and closing document")
@@ -124,9 +116,6 @@ class DocumentEditor(BaseWorkflow):
         self._save_quit()
         if logger:
             logger.step_success("save_document")
-
-        if logger:
-            logger.step_success("create_document")
 
     def _insert_comment(self):
         pyautogui.hotkey('ctrl', 'alt', 'c') # insert comment

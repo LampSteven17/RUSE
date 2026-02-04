@@ -43,23 +43,11 @@ class WebBrowse(BaseWorkflow):
         self.driver.driver.set_page_load_timeout(self.default_timeout)
         website = self._get_random_website()
 
-        # Semantic step: Load website
-        if logger:
-            logger.step_start("load_website", category="browser",
-                              message=website.rstrip())
         self._browse(website, logger=logger)
-        if logger:
-            logger.step_success("load_website")
 
         sleep(random.randint(1,self.max_sleep_time))
 
-        # Semantic step: Browse site
-        if logger:
-            logger.step_start("browse_site", category="browser",
-                              message="Navigating through website")
         self._navigate_website(logger=logger)
-        if logger:
-            logger.step_success("browse_site")
 
 
     def _get_random_website(self):
@@ -118,7 +106,7 @@ class WebBrowse(BaseWorkflow):
                     if logger:
                         logger.warning("Invalid URL encountered", details={"click_num": num_click})
                     continue
-                step_name = f"nav_click_{num_click}"
+                step_name = "click"
                 try:
                     if logger:
                         logger.step_start(step_name, category="browser", message=url)

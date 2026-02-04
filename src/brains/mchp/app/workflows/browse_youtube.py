@@ -73,22 +73,22 @@ class YoutubeSearch(BaseWorkflow):
 
         # Perform a youtube search
         if logger:
-            logger.step_start("search_video", category="video", message=random_search)
+            logger.step_start("search", category="video", message=random_search)
         try:
             search_element = self.driver.driver.find_element(By.CSS_SELECTOR, 'input#search') # search bar
             search_element.send_keys(random_search)
             search_element.submit()
             if logger:
-                logger.step_success("search_video")
+                logger.step_success("search")
         except Exception as e:
             if logger:
-                logger.step_error("search_video", str(e), exception=e)
+                logger.step_error("search", str(e), exception=e)
             raise
         sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
 
         # Click on a random video from the search results
         if logger:
-            logger.step_start("click_video", category="video", message="Selecting video from search results")
+            logger.step_start("select_result", category="video", message="Selecting video from search results")
         try:
             WebDriverWait(self.driver.driver, 10).until(EC.presence_of_all_elements_located((By.ID, "video-title")))
             search_results = self.driver.driver.find_elements(By.ID, "video-title")
@@ -102,10 +102,10 @@ class YoutubeSearch(BaseWorkflow):
                 )
             search_results[video_index].click()
             if logger:
-                logger.step_success("click_video")
+                logger.step_success("select_result")
         except Exception as e:
             if logger:
-                logger.step_error("click_video", str(e), exception=e)
+                logger.step_error("select_result", str(e), exception=e)
             raise
 
         # Watch video
@@ -117,10 +117,10 @@ class YoutubeSearch(BaseWorkflow):
                 context=f"Seconds to watch video ({MIN_WATCH_TIME}-{MAX_WATCH_TIME}s range)",
                 method="random"
             )
-            logger.step_start("watch_video", category="video", message=f"Watching for {watch_time}s")
+            logger.step_start("play_video", category="video", message=f"Watching for {watch_time}s")
         sleep(watch_time)
         if logger:
-            logger.step_success("watch_video")
+            logger.step_success("play_video")
 
         # Click on suggested videos
         num_suggested = random.randrange(0, MAX_SUGGESTED_VIDEOS)
@@ -134,15 +134,15 @@ class YoutubeSearch(BaseWorkflow):
         for i in range(num_suggested):
             sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
             if logger:
-                logger.step_start("click_suggested", category="video", message=f"Suggested video {i+1}/{num_suggested}")
+                logger.step_start("click", category="video", message=f"Suggested video {i+1}/{num_suggested}")
             try:
                 suggested_videos = self.driver.driver.find_elements(By.ID, "video-title")
                 suggested_videos[random.randrange(0,len(suggested_videos)-1)].click()
                 if logger:
-                    logger.step_success("click_suggested")
+                    logger.step_success("click")
             except ElementNotInteractableException as e:
                 if logger:
-                    logger.step_error("click_suggested", str(e), exception=e)
+                    logger.step_error("click", str(e), exception=e)
                 pass
 
     def _get_random_search(self):

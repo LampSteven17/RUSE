@@ -3,6 +3,7 @@ BrowserUse Brain - AI-powered browser automation agent.
 
 Supports prompt configuration for content/behavior control.
 """
+import json
 import os
 import asyncio
 import time
@@ -21,11 +22,65 @@ def log(msg: str):
 from browser_use import Agent, ChatOllama
 from browser_use.browser.session import BrowserSession
 
-from common.config.model_config import get_model
+from common.config.model_config import get_model, get_ollama_seed
 from brains.browseruse.prompts import BUPrompts, DEFAULT_PROMPTS
 
 # LLM timeout in seconds - 5 minutes for CPU models
 LLM_TIMEOUT = 300
+
+# Mapping from browser_use action types to unified step names.
+# browser_use LLM responses contain JSON with an "action" list where each
+# element is a dict like {"go_to_url": {"url": "..."}} or {"click_element": {"index": 5}}.
+_BU_ACTION_MAP = {
+    "go_to_url": ("navigate", "browser"),
+    "open_tab": ("navigate", "browser"),
+    "switch_tab": ("navigate", "browser"),
+    "go_back": ("navigate", "browser"),
+    "click_element": ("click", "browser"),
+    "input_text": ("type_text", "browser"),
+    "send_keys": ("type_text", "browser"),
+    "scroll_down": ("scroll", "browser"),
+    "scroll_up": ("scroll", "browser"),
+    "scroll_to_text": ("scroll", "browser"),
+    "search_google": ("search", "browser"),
+    "extract_content": ("scroll", "browser"),
+    "extract_page_content": ("scroll", "browser"),
+    "save_file": ("save_document", "browser"),
+    "upload_file": ("download_file", "browser"),
+    "wait": ("wait", "browser"),
+    # "done" is intentionally omitted — it signals workflow completion, not a step
+}
+
+
+def _parse_bu_action(response_content: str):
+    """Parse browser_use LLM response to detect the action type.
+
+    Returns (step_name, category, message) or None if no action detected.
+    """
+    if not response_content:
+        return None
+    try:
+        data = json.loads(response_content)
+        actions = data.get("action", [])
+        if not actions or not isinstance(actions, list):
+            return None
+        action = actions[0]
+        if not isinstance(action, dict):
+            return None
+        action_type = next(iter(action))
+        mapped = _BU_ACTION_MAP.get(action_type)
+        if mapped is None:
+            return None
+        step_name, category = mapped
+        # Build a short message from the action params
+        params = action[action_type]
+        if isinstance(params, dict):
+            msg = params.get("url") or params.get("text") or params.get("query") or str(params)[:100]
+        else:
+            msg = str(params)[:100]
+        return step_name, category, msg
+    except (json.JSONDecodeError, KeyError, IndexError, StopIteration):
+        return None
 
 
 def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None, timeout: int = LLM_TIMEOUT):
@@ -36,6 +91,10 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
     ollama.AsyncClient. We wrap the Ollama client's chat method to capture token
     counts before browser_use discards them.
 
+    Each LLM response is also parsed for browser_use action types (go_to_url,
+    click_element, input_text, etc.) and logged as mechanical steps using the
+    unified step vocabulary (navigate, click, type_text, scroll, etc.).
+
     Args:
         model: Ollama model name
         logger: Optional AgentLogger for logging LLM calls
@@ -44,10 +103,26 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
     llm = ChatOllama(model=model, timeout=timeout)
 
     if logger is None:
+        # Even without logging, inject seed if configured
+        ollama_seed = get_ollama_seed()
+        if ollama_seed is not None:
+            original_get_client_nolog = llm.get_client
+            def get_seeded_client():
+                client = original_get_client_nolog()
+                original_chat_nolog = client.chat
+                async def seeded_chat(*args, **kwargs):
+                    kwargs.setdefault('options', {})
+                    kwargs['options']['seed'] = ollama_seed
+                    kwargs['options']['temperature'] = 0
+                    return await original_chat_nolog(*args, **kwargs)
+                client.chat = seeded_chat
+                return client
+            llm.get_client = get_seeded_client
         return llm
 
     # Store the original get_client method
     original_get_client = llm.get_client
+    ollama_seed = get_ollama_seed()
 
     def get_logged_client():
         """Return an Ollama client with logging wrapped around chat()."""
@@ -56,6 +131,12 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
 
         async def logged_chat(*args, **kwargs):
             """Wrapper that logs requests/responses with token counts."""
+            # Inject Ollama seed for deterministic generation
+            if ollama_seed is not None:
+                kwargs.setdefault('options', {})
+                kwargs['options']['seed'] = ollama_seed
+                kwargs['options']['temperature'] = 0
+
             # Log the request
             messages = kwargs.get('messages', args[1] if len(args) > 1 else [])
             action = "generate"
@@ -98,6 +179,15 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
                     model=model,
                     tokens=tokens
                 )
+
+                # Parse the LLM response for browser actions and log as steps
+                if output:
+                    parsed = _parse_bu_action(output)
+                    if parsed:
+                        step_name, category, msg = parsed
+                        logger.step_start(step_name, category=category, message=msg)
+                        logger.step_success(step_name)
+
                 return response
             except Exception as e:
                 logger.llm_error(error=str(e), action=f"llm_call_{model}", fatal=True)

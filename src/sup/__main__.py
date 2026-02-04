@@ -15,6 +15,8 @@ Examples:
     python -m sup --list                                # List all configs
 """
 import argparse
+import os
+import random
 import sys
 
 
@@ -44,6 +46,8 @@ Configuration Keys (exp-3):
         help="Calibration timing profile (semester)")
     parser.add_argument("--phase", action="store_true",
         help="Legacy: equivalent to --calibration=summer24")
+    parser.add_argument("--seed", type=int, default=42,
+        help="Random seed for deterministic behavior (default: 42, 0 = non-deterministic)")
     parser.add_argument("--task", type=str, default=None)
     parser.add_argument("--list", action="store_true")
 
@@ -91,11 +95,21 @@ Configuration Keys (exp-3):
         print("No configuration specified, defaulting to M1 (pure MCHP)")
         config = get_config("M1")
 
+    # CLI --seed takes precedence over config default
+    config.seed = args.seed
+
+    # Seed random early, before any runner/task selection calls
+    if config.seed != 0:
+        random.seed(config.seed)
+        # Also seed Ollama LLM output via environment variable
+        os.environ["SUP_OLLAMA_SEED"] = str(config.seed)
+
     print(f"Configuration: {config.config_key}")
     print(f"  Brain: {config.brain}")
     print(f"  Content: {config.content}")
     print(f"  Model: {config.model}")
     print(f"  Calibration: {config.calibration or 'none'}")
+    print(f"  Seed: {config.seed}")
     print("-" * 40)
 
     if config.brain == "mchp":

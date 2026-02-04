@@ -174,6 +174,33 @@ CATEGORY_PATTERNS = {
 }
 
 
+# Default mechanical step names for each category.
+# Used as fallback when no specific action is detected from LLM responses.
+# All frameworks (MCHP, BrowserUse, SmolAgents) share this vocabulary.
+CATEGORY_STEP_NAMES = {
+    "browser": "navigate",
+    "video": "navigate",
+    "office": "edit_content",
+    "shell": "spawn_shell",
+    "programming": "edit_content",
+    "email": "navigate",
+    "authentication": "navigate",
+    "other": "navigate",
+}
+
+
+def step_name_for_category(category: str) -> str:
+    """Get the default mechanical step name for a given category.
+
+    Args:
+        category: One of the StepCategory values (browser, video, shell, etc.)
+
+    Returns:
+        Mechanical step name (navigate, edit_content, spawn_shell, etc.)
+    """
+    return CATEGORY_STEP_NAMES.get(category, "navigate")
+
+
 def categorize_task(task: str, default: str = "browser") -> str:
     """
     Determine the category for a given task based on content analysis.

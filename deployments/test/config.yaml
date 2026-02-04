@@ -1,42 +1,20 @@
 ---
-# test: Minimal Test Deployment
-# Quick deployment for validating logging and system functionality
-#
-# VMs: 4 total
-#   - M1: MCHP baseline (CPU-only, no LLM)
-#   - M1a.llama: MCHP + llama content (GPU)
-#   - B1a.llama: BrowserUse + llama (GPU)
-#   - S1a.llama: SmolAgents + llama (GPU)
+# test: Quick log generation test
+# M1 (MCHP, no LLM), B1a.llama (BrowserUse), S1a.llama (SmolAgents)
 
 deployment_name: test
 
-# ═══════════════════════════════════════════════════════════════════
-# GPU CAPACITY - Minimal requirements for test
-# ═══════════════════════════════════════════════════════════════════
 flavor_capacity:
-  v100-1gpu.14vcpu.28g: 3       # Need 3 for M1a, B1a, S1a
-  v1.14vcpu.28g: 1              # Need 1 for M1
+  v1.14vcpu.28g: 1
+  v100-1gpu.14vcpu.28g: 2
 
-# ═══════════════════════════════════════════════════════════════════
-# DEPLOYMENTS - Test new simplified config naming
-# ═══════════════════════════════════════════════════════════════════
 deployments:
-  # M1: MCHP baseline (CPU-only, no LLM)
   - behavior: M1
     flavor: v1.14vcpu.28g
     count: 1
-
-  # M1a.llama: MCHP + llama content generation (GPU)
-  - behavior: M1a.llama
-    flavor: v100-1gpu.14vcpu.28g
-    count: 1
-
-  # B1a.llama: BrowserUse + llama (GPU)
   - behavior: B1a.llama
     flavor: v100-1gpu.14vcpu.28g
     count: 1
-
-  # S1a.llama: SmolAgents + llama (GPU)
   - behavior: S1a.llama
     flavor: v100-1gpu.14vcpu.28g
     count: 1

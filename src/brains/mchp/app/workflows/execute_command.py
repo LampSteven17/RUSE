@@ -24,12 +24,12 @@ class ExecuteCommand(BaseWorkflow):
             return
         for c in extra:
             if logger:
-                logger.step_start("execute_command", category="shell", message=c)
+                logger.step_start("spawn_shell", category="shell", message=c)
             try:
                 subprocess.Popen(c, shell=True)
                 if logger:
-                    logger.step_success("execute_command")
+                    logger.step_success("spawn_shell")
             except Exception as e:
                 if logger:
-                    logger.step_error("execute_command", str(e), exception=e)
+                    logger.step_error("spawn_shell", str(e), exception=e)
                 raise

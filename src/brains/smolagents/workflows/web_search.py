@@ -9,7 +9,7 @@ from typing import Optional, TYPE_CHECKING
 from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool
 
 from brains.smolagents.workflows.base import SmolWorkflow
-from common.config.model_config import get_model
+from common.config.model_config import get_model, get_ollama_seed
 from common.logging.llm_callbacks import setup_litellm_callbacks
 
 if TYPE_CHECKING:
@@ -68,7 +68,12 @@ class WebSearchWorkflow(SmolWorkflow):
         """Lazy-load the SmolAgents CodeAgent."""
         if self._agent is None:
             model_id = f"ollama/{self.model_name}"
-            llm = LiteLLMModel(model_id=model_id)
+            llm_kwargs = {"model_id": model_id}
+            ollama_seed = get_ollama_seed()
+            if ollama_seed is not None:
+                llm_kwargs["seed"] = ollama_seed
+                llm_kwargs["temperature"] = 0.0
+            llm = LiteLLMModel(**llm_kwargs)
 
             instructions = None
             if self.prompts is not None:
@@ -107,20 +112,14 @@ class WebSearchWorkflow(SmolWorkflow):
         self.description = task[:50] + "..." if len(task) > 50 else task
         print(self.display)
 
-        step_name = "web_search"
-        if logger:
-            logger.step_start(step_name, category="browser", message=task)
-
+        # Steps are logged at the action level by the LLM response parser
+        # in LiteLLMLoggingCallback (search, navigate, type_text, etc.)
         try:
             agent = self._get_agent()
             result = agent.run(task)
-            if logger:
-                logger.step_success(step_name)
             print(f"Search completed: {str(result)[:200]}...")
             return result
         except Exception as e:
-            if logger:
-                logger.step_error(step_name, message=str(e))
             print(f"Web search error: {e}")
             raise
 

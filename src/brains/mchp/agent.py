@@ -60,7 +60,9 @@ class MCHPAgent:
         use_phase_timing: bool = False,
         phase_config: Optional["PhaseTimingConfig"] = None,
         exclude_windows_workflows: bool = False,
+        seed: int = 42,
     ):
+        self.seed = seed
         self.cluster_size = cluster_size
         self.task_interval = task_interval
         self.group_interval = group_interval
@@ -244,7 +246,10 @@ class MCHPAgent:
 
     def run(self):
         """Start the MCHP emulation loop."""
-        random.seed()
+        if self.seed != 0:
+            random.seed(self.seed)
+        else:
+            random.seed()
         self.workflows = self._import_workflows()
         self._running = True
 
