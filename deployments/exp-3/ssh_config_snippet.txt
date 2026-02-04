@@ -1,0 +1,79 @@
+############# SUP VMs - exp-3 #############
+# Add this to your ~/.ssh/config
+# Requires ProxyJump through axes
+
+Host sup-*
+    User ubuntu
+    PreferredAuthentications publickey
+    IdentityFile ~/.ssh/id_rsa
+    ProxyJump axes
+    StrictHostKeyChecking no
+    ServerAliveInterval 120
+
+Host sup-C0-0
+    HostName 10.246.118.107
+
+Host sup-M0-0
+    HostName 10.246.117.102
+
+Host sup-M1-0
+    HostName 10.246.117.146
+
+Host sup-M2-0
+    HostName 10.246.117.8
+
+Host sup-M3-0
+    HostName 10.246.118.176
+
+Host sup-M4-0
+    HostName 10.246.115.6
+
+Host sup-B1-llama-0
+    HostName 10.246.118.224
+
+Host sup-B1-gemma-0
+    HostName 10.246.119.63
+
+Host sup-B2-llama-0
+    HostName 10.246.117.58
+
+Host sup-B2-gemma-0
+    HostName 10.246.117.19
+
+Host sup-B3-llama-0
+    HostName 10.246.115.118
+
+Host sup-B3-gemma-0
+    HostName 10.246.115.62
+
+Host sup-B4-llama-0
+    HostName 10.246.117.108
+
+Host sup-B4-gemma-0
+    HostName 10.246.115.86
+
+Host sup-S1-llama-0
+    HostName 10.246.116.80
+
+Host sup-S1-gemma-0
+    HostName 10.246.116.131
+
+Host sup-S2-llama-0
+    HostName 10.246.116.10
+
+Host sup-S2-gemma-0
+    HostName 10.246.116.202
+
+Host sup-S3-llama-0
+    HostName 10.246.117.56
+
+Host sup-S3-gemma-0
+    HostName 10.246.116.207
+
+Host sup-S4-llama-0
+    HostName 10.246.116.180
+
+Host sup-S4-gemma-0
+    HostName 10.246.119.3
+
+#############################################

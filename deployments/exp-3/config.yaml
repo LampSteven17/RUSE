@@ -1,0 +1,106 @@
+---
+# exp-3: Calibrated PHASE Timing
+# Tests calibrated timing from empirical semester profiles
+#
+# Naming Scheme: [Brain][Version].[Model]
+#   Brain:    M = MCHP, B = BrowserUse, S = SmolAgents
+#   Version:  1 = baseline (no timing)
+#             2 = calibrated to summer24
+#             3 = calibrated to fall24
+#             4 = calibrated to spring25
+#   Models:   llama (llama3.1:8b), gemma (gemma3:4b)
+#
+# Design:
+#   - MCHP = pure scripted automation (no LLM, no GPU)
+#   - BrowserUse/SmolAgents = LLM-driven (GPU required)
+#   - Only llama + gemma models (no deepseek)
+#   - All GPU VMs on v100, non-GPU on v1
+#
+# Comparison Goals:
+#   - M1 vs M2/M3/M4: Timing profile impact on scripted behavior
+#   - B1 vs B2/B3/B4: Timing profile impact on BrowserUse
+#   - S1 vs S2/S3/S4: Timing profile impact on SmolAgents
+#   - llama vs gemma: Model comparison within each timing condition
+#
+# Total VMs: 22 (6 non-GPU, 16 v100)
+
+deployment_name: exp-3
+
+flavor_capacity:
+  v1.14vcpu.28g: 6
+  v100-1gpu.14vcpu.28g: 19
+
+deployments:
+  # === Controls (2) - non-GPU ===
+  - behavior: C0
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: M0
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === MCHP (4) - non-GPU, no LLM ===
+  - behavior: M1
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: M2
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: M3
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: M4
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === BrowserUse (8) - all v100 ===
+  - behavior: B1.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B1.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B3.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B3.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B4.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B4.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === SmolAgents (8) - all v100 ===
+  - behavior: S1.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S1.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S3.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S3.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S4.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S4.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1

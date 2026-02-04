@@ -1,19 +1,21 @@
 #!/bin/bash
 
 # DOLOS-DEPLOY: Unified SUP Installer
-# Simplified Architecture v2: Brain + Content (MCHP only) + Model
+# Architecture: Brain + Model + Calibration
 #
-# Naming Scheme: [Brain][Version][Variant].[Model]
+# Naming Scheme (exp-3):
+#   [Brain][Version].[Model]
 #   Brain:    M = MCHP, B = BrowserUse, S = SmolAgents
-#             MC = MCHP CPU, BC = BrowserUse CPU, SC = SmolAgents CPU
-#   Version:  1 = Baseline, 2 = PHASE timing
-#   Variant:  a = llama, b = gemma, c = deepseek
-#             d = lfm, e = ministral, f = qwen (CPU only)
+#   Version:  1 = baseline (no timing)
+#             2 = calibrated to summer24
+#             3 = calibrated to fall24
+#             4 = calibrated to spring25
+#   Models:   llama (llama3.1:8b), gemma (gemma3:4b)
 #
 # Usage:
 #   ./INSTALL_SUP.sh --M1                    # Config key shorthand
-#   ./INSTALL_SUP.sh --M1a.llama --runner    # Run directly without install
-#   ./INSTALL_SUP.sh --brain mchp --content llm --model llama
+#   ./INSTALL_SUP.sh --B3.gemma --runner     # Run directly without install
+#   ./INSTALL_SUP.sh --brain browseruse --model llama --calibration fall24
 
 set -e
 set -u
@@ -48,77 +50,52 @@ log_info() { echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO:${NC} $1"; }
 
 usage() {
     cat << 'EOF'
-DOLOS-DEPLOY Unified Installer (Simplified Architecture v2)
+DOLOS-DEPLOY Unified Installer (exp-3: Calibrated PHASE Timing)
 
 Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 
-=== Configuration Keys ===
+=== Configuration Keys (exp-3) ===
 
   Control Series:
     --C0                Bare Ubuntu VM (no software - pure control)
 
-  M Series - MCHP Brain:
+  M Series - MCHP Brain (no LLM, no GPU):
     --M0                Upstream MITRE pyhuman (control - DO NOT MODIFY)
-    --M1                DOLOS MCHP baseline (no LLM)
-    --M1a.llama         MCHP + llama content
-    --M1b.gemma         MCHP + gemma content
-    --M1c.deepseek      MCHP + deepseek content
-    --M2a.llama         MCHP + llama + PHASE timing
-    --M2b.gemma         MCHP + gemma + PHASE timing
-    --M2c.deepseek      MCHP + deepseek + PHASE timing
-
-  MC Series - MCHP Brain (CPU-only):
-    --MC1a.llama        MCHP + llama content (CPU)
-    --MC1b.gemma        MCHP + gemma content (CPU)
-    --MC1c.deepseek     MCHP + deepseek content (CPU)
-    --MC1d.lfm          MCHP + lfm content (CPU)
-    --MC1e.ministral    MCHP + ministral content (CPU)
-    --MC1f.qwen         MCHP + qwen content (CPU)
-    --MC2a.llama        MCHP + llama + PHASE (CPU)
-    --MC2b.gemma        MCHP + gemma + PHASE (CPU)
-    --MC2c.deepseek     MCHP + deepseek + PHASE (CPU)
-    --MC2d.lfm          MCHP + lfm + PHASE (CPU)
-    --MC2e.ministral    MCHP + ministral + PHASE (CPU)
-    --MC2f.qwen         MCHP + qwen + PHASE (CPU)
+    --M1                MCHP baseline (no timing)
+    --M2                MCHP + summer24 calibrated timing
+    --M3                MCHP + fall24 calibrated timing
+    --M4                MCHP + spring25 calibrated timing
 
   B Series - BrowserUse Brain (GPU):
-    --B1a.llama         BrowserUse + llama3.1:8b
-    --B1b.gemma         BrowserUse + gemma3:4b
-    --B1c.deepseek      BrowserUse + deepseek-r1:8b
-    --B2a.llama         BrowserUse + llama + PHASE timing
-    --B2b.gemma         BrowserUse + gemma + PHASE timing
-    --B2c.deepseek      BrowserUse + deepseek + PHASE timing
-
-  BC Series - BrowserUse Brain (CPU-only):
-    --BC1a.llama        BrowserUse + llama (CPU)
-    --BC1b.gemma        BrowserUse + gemma (CPU)
-    --BC1c.deepseek     BrowserUse + deepseek (CPU)
-    --BC1d.lfm          BrowserUse + lfm (CPU)
-    --BC1e.ministral    BrowserUse + ministral (CPU)
-    --BC1f.qwen         BrowserUse + qwen (CPU)
+    --B1.llama          BrowserUse + llama (no timing)
+    --B1.gemma          BrowserUse + gemma (no timing)
+    --B2.llama          BrowserUse + llama + summer24 timing
+    --B2.gemma          BrowserUse + gemma + summer24 timing
+    --B3.llama          BrowserUse + llama + fall24 timing
+    --B3.gemma          BrowserUse + gemma + fall24 timing
+    --B4.llama          BrowserUse + llama + spring25 timing
+    --B4.gemma          BrowserUse + gemma + spring25 timing
 
   S Series - SmolAgents Brain (GPU):
-    --S1a.llama         SmolAgents + llama3.1:8b
-    --S1b.gemma         SmolAgents + gemma3:4b
-    --S1c.deepseek      SmolAgents + deepseek-r1:8b
-    --S2a.llama         SmolAgents + llama + PHASE timing
-    --S2b.gemma         SmolAgents + gemma + PHASE timing
-    --S2c.deepseek      SmolAgents + deepseek + PHASE timing
+    --S1.llama          SmolAgents + llama (no timing)
+    --S1.gemma          SmolAgents + gemma (no timing)
+    --S2.llama          SmolAgents + llama + summer24 timing
+    --S2.gemma          SmolAgents + gemma + summer24 timing
+    --S3.llama          SmolAgents + llama + fall24 timing
+    --S3.gemma          SmolAgents + gemma + fall24 timing
+    --S4.llama          SmolAgents + llama + spring25 timing
+    --S4.gemma          SmolAgents + gemma + spring25 timing
 
-  SC Series - SmolAgents Brain (CPU-only):
-    --SC1a.llama        SmolAgents + llama (CPU)
-    --SC1b.gemma        SmolAgents + gemma (CPU)
-    --SC1c.deepseek     SmolAgents + deepseek (CPU)
-    --SC1d.lfm          SmolAgents + lfm (CPU)
-    --SC1e.ministral    SmolAgents + ministral (CPU)
-    --SC1f.qwen         SmolAgents + qwen (CPU)
+=== Deprecated (exp-2 compat) ===
+
+  Old MCHP+LLM keys (M1a.llama, M2a.llama, etc.) map to M1/M2.
+  Old variant keys (B1a.llama, S2c.deepseek, etc.) map to new scheme.
 
 === Long-Form Options ===
 
   --brain <TYPE>        Brain type: mchp, smolagents, browseruse
-  --content <TYPE>      Content augmentation: none, llm (MCHP only)
-  --model <MODEL>       Model: llama, gemma, deepseek, lfm, ministral, qwen
-  --phase               Enable PHASE timing (time-of-day awareness)
+  --model <MODEL>       Model: llama, gemma
+  --calibration <PROF>  Calibration profile: summer24, fall24, spring25
 
 === Execution Options ===
 
@@ -131,10 +108,10 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 === Examples ===
 
   ./INSTALL_SUP.sh --M1                           # Install pure MCHP
-  ./INSTALL_SUP.sh --M1a.llama --runner           # Run MCHP + llama directly
-  ./INSTALL_SUP.sh --B1b.gemma                    # Install BrowserUse + gemma
-  ./INSTALL_SUP.sh --brain mchp --content llm --model llama
-  ./INSTALL_SUP.sh --S1a.llama --runner --task "Search for AI news"
+  ./INSTALL_SUP.sh --M3 --runner                   # Run MCHP + fall24 timing
+  ./INSTALL_SUP.sh --B2.gemma                      # Install BrowserUse + gemma + summer24
+  ./INSTALL_SUP.sh --brain browseruse --model llama --calibration fall24
+  ./INSTALL_SUP.sh --S4.llama --runner             # SmolAgents + spring25 timing
 
 EOF
 }
@@ -148,72 +125,94 @@ CONFIG_KEY=""
 BRAIN=""
 CONTENT=""
 MODEL=""
-PHASE=false
+CALIBRATION="none"
 RUNNER=false
 TASK=""
 STAGE=0  # 0=full install, 1=pre-reboot only, 2=post-reboot only
 
-# Pre-defined configurations: brain:content:model:phase
+# Pre-defined configurations: brain:content:model:calibration
 declare -A CONFIGS
 CONFIGS=(
     # Control
-    ["C0"]="mchp:none:none:false"
+    ["C0"]="mchp:none:none:none"
 
-    # M Series - MCHP brain (GPU)
-    ["M0"]="upstream:none:none:false"  # Upstream MITRE pyhuman (control)
-    ["M1"]="mchp:none:none:false"
-    ["M1a.llama"]="mchp:llm:llama:false"
-    ["M1b.gemma"]="mchp:llm:gemma:false"
-    ["M1c.deepseek"]="mchp:llm:deepseek:false"
-    ["M2a.llama"]="mchp:llm:llama:true"
-    ["M2b.gemma"]="mchp:llm:gemma:true"
-    ["M2c.deepseek"]="mchp:llm:deepseek:true"
-
-    # MC Series - MCHP brain (CPU-only)
-    ["MC1a.llama"]="mchp:llm:llama:false"
-    ["MC1b.gemma"]="mchp:llm:gemma:false"
-    ["MC1c.deepseek"]="mchp:llm:deepseek:false"
-    ["MC1d.lfm"]="mchp:llm:lfm:false"
-    ["MC1e.ministral"]="mchp:llm:ministral:false"
-    ["MC1f.qwen"]="mchp:llm:qwen:false"
-    ["MC2a.llama"]="mchp:llm:llama:true"
-    ["MC2b.gemma"]="mchp:llm:gemma:true"
-    ["MC2c.deepseek"]="mchp:llm:deepseek:true"
-    ["MC2d.lfm"]="mchp:llm:lfm:true"
-    ["MC2e.ministral"]="mchp:llm:ministral:true"
-    ["MC2f.qwen"]="mchp:llm:qwen:true"
+    # M Series - MCHP brain (no LLM)
+    ["M0"]="upstream:none:none:none"
+    ["M1"]="mchp:none:none:none"
+    ["M2"]="mchp:none:none:summer24"
+    ["M3"]="mchp:none:none:fall24"
+    ["M4"]="mchp:none:none:spring25"
 
     # B Series - BrowserUse brain (GPU)
-    ["B1a.llama"]="browseruse:none:llama:false"
-    ["B1b.gemma"]="browseruse:none:gemma:false"
-    ["B1c.deepseek"]="browseruse:none:deepseek:false"
-    ["B2a.llama"]="browseruse:none:llama:true"
-    ["B2b.gemma"]="browseruse:none:gemma:true"
-    ["B2c.deepseek"]="browseruse:none:deepseek:true"
-
-    # BC Series - BrowserUse brain (CPU-only)
-    ["BC1a.llama"]="browseruse:none:llama:false"
-    ["BC1b.gemma"]="browseruse:none:gemma:false"
-    ["BC1c.deepseek"]="browseruse:none:deepseek:false"
-    ["BC1d.lfm"]="browseruse:none:lfm:false"
-    ["BC1e.ministral"]="browseruse:none:ministral:false"
-    ["BC1f.qwen"]="browseruse:none:qwen:false"
+    ["B1.llama"]="browseruse:none:llama:none"
+    ["B1.gemma"]="browseruse:none:gemma:none"
+    ["B2.llama"]="browseruse:none:llama:summer24"
+    ["B2.gemma"]="browseruse:none:gemma:summer24"
+    ["B3.llama"]="browseruse:none:llama:fall24"
+    ["B3.gemma"]="browseruse:none:gemma:fall24"
+    ["B4.llama"]="browseruse:none:llama:spring25"
+    ["B4.gemma"]="browseruse:none:gemma:spring25"
 
     # S Series - SmolAgents brain (GPU)
-    ["S1a.llama"]="smolagents:none:llama:false"
-    ["S1b.gemma"]="smolagents:none:gemma:false"
-    ["S1c.deepseek"]="smolagents:none:deepseek:false"
-    ["S2a.llama"]="smolagents:none:llama:true"
-    ["S2b.gemma"]="smolagents:none:gemma:true"
-    ["S2c.deepseek"]="smolagents:none:deepseek:true"
+    ["S1.llama"]="smolagents:none:llama:none"
+    ["S1.gemma"]="smolagents:none:gemma:none"
+    ["S2.llama"]="smolagents:none:llama:summer24"
+    ["S2.gemma"]="smolagents:none:gemma:summer24"
+    ["S3.llama"]="smolagents:none:llama:fall24"
+    ["S3.gemma"]="smolagents:none:gemma:fall24"
+    ["S4.llama"]="smolagents:none:llama:spring25"
+    ["S4.gemma"]="smolagents:none:gemma:spring25"
 
-    # SC Series - SmolAgents brain (CPU-only)
-    ["SC1a.llama"]="smolagents:none:llama:false"
-    ["SC1b.gemma"]="smolagents:none:gemma:false"
-    ["SC1c.deepseek"]="smolagents:none:deepseek:false"
-    ["SC1d.lfm"]="smolagents:none:lfm:false"
-    ["SC1e.ministral"]="smolagents:none:ministral:false"
-    ["SC1f.qwen"]="smolagents:none:qwen:false"
+    # === Deprecated aliases (exp-2 backward compat) ===
+    # MCHP + LLM keys -> plain MCHP (no LLM in exp-3)
+    ["M1a.llama"]="mchp:llm:llama:none"
+    ["M1b.gemma"]="mchp:llm:gemma:none"
+    ["M1c.deepseek"]="mchp:llm:deepseek:none"
+    ["M2a.llama"]="mchp:llm:llama:summer24"
+    ["M2b.gemma"]="mchp:llm:gemma:summer24"
+    ["M2c.deepseek"]="mchp:llm:deepseek:summer24"
+
+    # BrowserUse exp-2 keys (with variant letter)
+    ["B1a.llama"]="browseruse:none:llama:none"
+    ["B1b.gemma"]="browseruse:none:gemma:none"
+    ["B1c.deepseek"]="browseruse:none:deepseek:none"
+    ["B2a.llama"]="browseruse:none:llama:summer24"
+    ["B2b.gemma"]="browseruse:none:gemma:summer24"
+    ["B2c.deepseek"]="browseruse:none:deepseek:summer24"
+
+    # SmolAgents exp-2 keys (with variant letter)
+    ["S1a.llama"]="smolagents:none:llama:none"
+    ["S1b.gemma"]="smolagents:none:gemma:none"
+    ["S1c.deepseek"]="smolagents:none:deepseek:none"
+    ["S2a.llama"]="smolagents:none:llama:summer24"
+    ["S2b.gemma"]="smolagents:none:gemma:summer24"
+    ["S2c.deepseek"]="smolagents:none:deepseek:summer24"
+
+    # CPU variants (exp-2)
+    ["MC1a.llama"]="mchp:llm:llama:none"
+    ["MC1b.gemma"]="mchp:llm:gemma:none"
+    ["MC1c.deepseek"]="mchp:llm:deepseek:none"
+    ["MC1d.lfm"]="mchp:llm:lfm:none"
+    ["MC1e.ministral"]="mchp:llm:ministral:none"
+    ["MC1f.qwen"]="mchp:llm:qwen:none"
+    ["MC2a.llama"]="mchp:llm:llama:summer24"
+    ["MC2b.gemma"]="mchp:llm:gemma:summer24"
+    ["MC2c.deepseek"]="mchp:llm:deepseek:summer24"
+    ["MC2d.lfm"]="mchp:llm:lfm:summer24"
+    ["MC2e.ministral"]="mchp:llm:ministral:summer24"
+    ["MC2f.qwen"]="mchp:llm:qwen:summer24"
+    ["BC1a.llama"]="browseruse:none:llama:none"
+    ["BC1b.gemma"]="browseruse:none:gemma:none"
+    ["BC1c.deepseek"]="browseruse:none:deepseek:none"
+    ["BC1d.lfm"]="browseruse:none:lfm:none"
+    ["BC1e.ministral"]="browseruse:none:ministral:none"
+    ["BC1f.qwen"]="browseruse:none:qwen:none"
+    ["SC1a.llama"]="smolagents:none:llama:none"
+    ["SC1b.gemma"]="smolagents:none:gemma:none"
+    ["SC1c.deepseek"]="smolagents:none:deepseek:none"
+    ["SC1d.lfm"]="smolagents:none:lfm:none"
+    ["SC1e.ministral"]="smolagents:none:ministral:none"
+    ["SC1f.qwen"]="smolagents:none:qwen:none"
 )
 
 # Model name mappings
@@ -223,69 +222,48 @@ MODEL_NAMES=(
     # GPU-optimized models
     ["llama"]="llama3.1:8b"
     ["gemma"]="gemma3:4b"
+    # Legacy (exp-2 compat)
     ["deepseek"]="deepseek-r1:8b"
-    # CPU-friendly models
     ["lfm"]="lfm2.5-thinking:latest"
     ["ministral"]="ministral-3:3b"
     ["qwen"]="qwen2.5:3b"
 )
 
 list_configs() {
-    echo "Available configurations:"
+    echo "Available configurations (exp-3):"
     echo ""
     echo "Control:"
     printf "  %-16s Bare Ubuntu VM (no software)\n" "--C0"
     echo ""
-    echo "M Series - MCHP Brain (M0/M1=CPU, M1a+=GPU):"
-    for key in M0 M1 M1a.llama M1b.gemma M1c.deepseek M2a.llama M2b.gemma M2c.deepseek; do
-        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
-        printf "  %-16s brain=%-10s content=%-4s model=%-8s phase=%s\n" \
-            "--$key" "$brain" "$content" "$model" "$phase"
-    done
-    echo ""
-    echo "MC Series - MCHP Brain (CPU-only):"
-    for key in MC1a.llama MC1b.gemma MC1c.deepseek MC1d.lfm MC1e.ministral MC1f.qwen \
-               MC2a.llama MC2b.gemma MC2c.deepseek MC2d.lfm MC2e.ministral MC2f.qwen; do
-        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
-        printf "  %-16s brain=%-10s content=%-4s model=%-10s phase=%s\n" \
-            "--$key" "$brain" "$content" "$model" "$phase"
+    echo "M Series - MCHP Brain (no LLM, no GPU):"
+    for key in M0 M1 M2 M3 M4; do
+        IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-10s calibration=%s\n" \
+            "--$key" "$brain" "$calibration"
     done
     echo ""
     echo "B Series - BrowserUse Brain (GPU):"
-    for key in B1a.llama B1b.gemma B1c.deepseek B2a.llama B2b.gemma B2c.deepseek; do
-        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
-        printf "  %-16s brain=%-10s model=%-8s phase=%s\n" \
-            "--$key" "$brain" "$model" "$phase"
-    done
-    echo ""
-    echo "BC Series - BrowserUse Brain (CPU-only):"
-    for key in BC1a.llama BC1b.gemma BC1c.deepseek BC1d.lfm BC1e.ministral BC1f.qwen; do
-        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
-        printf "  %-16s brain=%-10s model=%-10s phase=%s\n" \
-            "--$key" "$brain" "$model" "$phase"
+    for key in B1.llama B1.gemma B2.llama B2.gemma B3.llama B3.gemma B4.llama B4.gemma; do
+        IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-12s model=%-8s calibration=%s\n" \
+            "--$key" "$brain" "$model" "$calibration"
     done
     echo ""
     echo "S Series - SmolAgents Brain (GPU):"
-    for key in S1a.llama S1b.gemma S1c.deepseek S2a.llama S2b.gemma S2c.deepseek; do
-        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
-        printf "  %-16s brain=%-10s model=%-8s phase=%s\n" \
-            "--$key" "$brain" "$model" "$phase"
+    for key in S1.llama S1.gemma S2.llama S2.gemma S3.llama S3.gemma S4.llama S4.gemma; do
+        IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-12s model=%-8s calibration=%s\n" \
+            "--$key" "$brain" "$model" "$calibration"
     done
     echo ""
-    echo "SC Series - SmolAgents Brain (CPU-only):"
-    for key in SC1a.llama SC1b.gemma SC1c.deepseek SC1d.lfm SC1e.ministral SC1f.qwen; do
-        IFS=':' read -r brain content model phase <<< "${CONFIGS[$key]}"
-        printf "  %-16s brain=%-10s model=%-10s phase=%s\n" \
-            "--$key" "$brain" "$model" "$phase"
-    done
+    echo "Deprecated exp-2 keys are still accepted but map to exp-3 configs."
 }
 
 parse_config_key() {
     local key="$1"
     if [[ -v "CONFIGS[$key]" ]]; then
-        IFS=':' read -r BRAIN CONTENT MODEL PHASE <<< "${CONFIGS[$key]}"
+        IFS=':' read -r BRAIN CONTENT MODEL CALIBRATION <<< "${CONFIGS[$key]}"
         CONFIG_KEY="$key"
-        [[ "$PHASE" == "true" ]] && PHASE=true || PHASE=false
         return 0
     fi
     return 1
@@ -301,37 +279,35 @@ parse_args() {
                 exit 0
                 ;;
 
-            # Config key shortcuts - M Series
-            --M0|--M1|--M1a.llama|--M1b.gemma|--M1c.deepseek|\
-            --M2a.llama|--M2b.gemma|--M2c.deepseek)
+            # Config key shortcuts - M Series (exp-3)
+            --M0|--M1|--M2|--M3|--M4)
                 parse_config_key "${1#--}"
                 ;;
 
-            # Config key shortcuts - MC Series (CPU)
-            --MC1a.llama|--MC1b.gemma|--MC1c.deepseek|--MC1d.lfm|--MC1e.ministral|--MC1f.qwen|\
-            --MC2a.llama|--MC2b.gemma|--MC2c.deepseek|--MC2d.lfm|--MC2e.ministral|--MC2f.qwen)
+            # Config key shortcuts - B Series (exp-3)
+            --B1.llama|--B1.gemma|--B2.llama|--B2.gemma|\
+            --B3.llama|--B3.gemma|--B4.llama|--B4.gemma)
                 parse_config_key "${1#--}"
                 ;;
 
-            # Config key shortcuts - B Series
+            # Config key shortcuts - S Series (exp-3)
+            --S1.llama|--S1.gemma|--S2.llama|--S2.gemma|\
+            --S3.llama|--S3.gemma|--S4.llama|--S4.gemma)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Deprecated exp-2 config keys (still accepted)
+            --M1a.llama|--M1b.gemma|--M1c.deepseek|\
+            --M2a.llama|--M2b.gemma|--M2c.deepseek|\
             --B1a.llama|--B1b.gemma|--B1c.deepseek|\
-            --B2a.llama|--B2b.gemma|--B2c.deepseek)
-                parse_config_key "${1#--}"
-                ;;
-
-            # Config key shortcuts - BC Series (CPU)
-            --BC1a.llama|--BC1b.gemma|--BC1c.deepseek|--BC1d.lfm|--BC1e.ministral|--BC1f.qwen)
-                parse_config_key "${1#--}"
-                ;;
-
-            # Config key shortcuts - S Series
+            --B2a.llama|--B2b.gemma|--B2c.deepseek|\
             --S1a.llama|--S1b.gemma|--S1c.deepseek|\
-            --S2a.llama|--S2b.gemma|--S2c.deepseek)
-                parse_config_key "${1#--}"
-                ;;
-
-            # Config key shortcuts - SC Series (CPU)
+            --S2a.llama|--S2b.gemma|--S2c.deepseek|\
+            --MC1a.llama|--MC1b.gemma|--MC1c.deepseek|--MC1d.lfm|--MC1e.ministral|--MC1f.qwen|\
+            --MC2a.llama|--MC2b.gemma|--MC2c.deepseek|--MC2d.lfm|--MC2e.ministral|--MC2f.qwen|\
+            --BC1a.llama|--BC1b.gemma|--BC1c.deepseek|--BC1d.lfm|--BC1e.ministral|--BC1f.qwen|\
             --SC1a.llama|--SC1b.gemma|--SC1c.deepseek|--SC1d.lfm|--SC1e.ministral|--SC1f.qwen)
+                log_info "Deprecated config key '${1#--}' - using exp-2 compat"
                 parse_config_key "${1#--}"
                 ;;
 
@@ -342,7 +318,9 @@ parse_args() {
             --content=*) CONTENT="${1#*=}" ;;
             --model) shift; MODEL="$1" ;;
             --model=*) MODEL="${1#*=}" ;;
-            --phase) PHASE=true ;;
+            --calibration) shift; CALIBRATION="$1" ;;
+            --calibration=*) CALIBRATION="${1#*=}" ;;
+            --phase) CALIBRATION="summer24" ;;  # Legacy compat
 
             # Execution options
             --runner) RUNNER=true ;;
@@ -386,7 +364,7 @@ parse_args() {
 
     # Default model based on brain type
     if [[ -z "$MODEL" ]]; then
-        if [[ "$BRAIN" == "mchp" && "$CONTENT" == "none" ]]; then
+        if [[ "$BRAIN" == "mchp" || "$BRAIN" == "upstream" ]]; then
             MODEL="none"
         else
             MODEL="llama"
@@ -400,53 +378,19 @@ parse_args() {
 }
 
 generate_config_key() {
+    local version="1"
+    case "$CALIBRATION" in
+        summer24) version="2" ;;
+        fall24) version="3" ;;
+        spring25) version="4" ;;
+    esac
+
     if [[ "$BRAIN" == "mchp" ]]; then
-        if [[ "$CONTENT" == "none" ]]; then
-            CONFIG_KEY="M1"
-        else
-            # Determine variant letter from model
-            local variant
-            case "$MODEL" in
-                llama) variant="a" ;;
-                gemma) variant="b" ;;
-                deepseek) variant="c" ;;
-                lfm) variant="d" ;;
-                ministral) variant="e" ;;
-                qwen) variant="f" ;;
-                *) variant="a" ;;
-            esac
-            local base_num="1"
-            $PHASE && base_num="2"
-            CONFIG_KEY="M${base_num}${variant}.${MODEL}"
-        fi
+        CONFIG_KEY="M${version}"
     elif [[ "$BRAIN" == "browseruse" ]]; then
-        local variant
-        case "$MODEL" in
-            llama) variant="a" ;;
-            gemma) variant="b" ;;
-            deepseek) variant="c" ;;
-            lfm) variant="d" ;;
-            ministral) variant="e" ;;
-            qwen) variant="f" ;;
-            *) variant="a" ;;
-        esac
-        local base_num="1"
-        $PHASE && base_num="2"
-        CONFIG_KEY="B${base_num}${variant}.${MODEL}"
+        CONFIG_KEY="B${version}.${MODEL}"
     elif [[ "$BRAIN" == "smolagents" ]]; then
-        local variant
-        case "$MODEL" in
-            llama) variant="a" ;;
-            gemma) variant="b" ;;
-            deepseek) variant="c" ;;
-            lfm) variant="d" ;;
-            ministral) variant="e" ;;
-            qwen) variant="f" ;;
-            *) variant="a" ;;
-        esac
-        local base_num="1"
-        $PHASE && base_num="2"
-        CONFIG_KEY="S${base_num}${variant}.${MODEL}"
+        CONFIG_KEY="S${version}.${MODEL}"
     else
         CONFIG_KEY="custom"
     fi
@@ -663,7 +607,6 @@ install_system_deps() {
     esac
 
     # Install CUDA if GPU is present and model requires it (for LLM acceleration)
-    # This applies to ALL brain types when MODEL != none
     if [[ "$MODEL" != "none" ]]; then
         install_cuda
     fi
@@ -722,20 +665,14 @@ create_run_script() {
     local content_arg="none"
     [[ "$CONTENT" == "llm" ]] && content_arg="llm"
 
-    local phase_arg=""
-    $PHASE && phase_arg="--phase-timing"
+    local calibration_arg=""
+    [[ "$CALIBRATION" != "none" ]] && calibration_arg="--calibration=$CALIBRATION"
 
     local model_name="${MODEL_NAMES[$MODEL]:-llama3.1:8b}"
 
     # Build model arg (skip if none)
     local model_arg=""
     [[ "$MODEL" != "none" ]] && model_arg="--model=$MODEL"
-
-    # Detect CPU-only configs (BC, SC, MC prefixes)
-    local cpu_arg=""
-    if [[ "$CONFIG_KEY" =~ ^(BC|SC|MC) ]]; then
-        cpu_arg="--cpu"
-    fi
 
     # Build runner command based on brain
     local runner_cmd=""
@@ -748,26 +685,16 @@ create_run_script() {
             xvfb_prefix=""  # xvfb is handled inside run_m0.py
             ;;
         mchp)
-            runner_cmd="python3 -m runners.run_mchp --content=$content_arg $model_arg $phase_arg"
+            runner_cmd="python3 -m runners.run_mchp --content=$content_arg $model_arg $calibration_arg"
             xvfb_prefix="xvfb-run -a "
             ;;
         smolagents)
             # Always use loop mode for continuous execution and JSONL logging
-            # --phase enables PHASE timing (time-of-day awareness)
-            if $PHASE; then
-                runner_cmd="python3 -m runners.run_smolagents --loop --phase $cpu_arg $model_arg"
-            else
-                runner_cmd="python3 -m runners.run_smolagents --loop $cpu_arg $model_arg"
-            fi
+            runner_cmd="python3 -m runners.run_smolagents --loop $model_arg $calibration_arg"
             ;;
         browseruse)
             # Always use loop mode for continuous execution and JSONL logging
-            # --phase enables PHASE timing (time-of-day awareness)
-            if $PHASE; then
-                runner_cmd="python3 -m runners.run_browseruse --loop --phase $cpu_arg $model_arg"
-            else
-                runner_cmd="python3 -m runners.run_browseruse --loop $cpu_arg $model_arg"
-            fi
+            runner_cmd="python3 -m runners.run_browseruse --loop $model_arg $calibration_arg"
             xvfb_prefix="xvfb-run -a "
             ;;
     esac
@@ -789,6 +716,7 @@ export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
 export PYTHONPATH="$deploy_dir/src:\${PYTHONPATH:-}"
 export LOG_DIR="$deploy_dir/logs"
+export CALIBRATION_PROFILE="${CALIBRATION}"
 
 # Task (for LLM agents)
 TASK="\${1:-Research the latest technology news}"
@@ -842,17 +770,11 @@ run_directly() {
         install_ollama
     fi
 
-    # Map content to runner args
-    local content_arg="none"
-    [[ "$CONTENT" == "llm" ]] && content_arg="llm"
-
-    local phase_arg=""
-    $PHASE && phase_arg="--phase-timing"
-
     # Set environment
     export PYTHONPATH="$SCRIPT_DIR/src:${PYTHONPATH:-}"
     export OLLAMA_MODEL="${MODEL_NAMES[$MODEL]:-llama3.1:8b}"
     export LITELLM_MODEL="ollama/$OLLAMA_MODEL"
+    export CALIBRATION_PROFILE="${CALIBRATION}"
 
     cd "$SCRIPT_DIR/src"
 
@@ -860,36 +782,26 @@ run_directly() {
     local model_arg=""
     [[ "$MODEL" != "none" ]] && model_arg="--model=$MODEL"
 
-    # Detect CPU-only configs (BC, SC, MC prefixes)
-    local cpu_arg=""
-    if [[ "$CONFIG_KEY" =~ ^(BC|SC|MC) ]]; then
-        cpu_arg="--cpu"
-    fi
+    # Build calibration arg
+    local calibration_arg=""
+    [[ "$CALIBRATION" != "none" ]] && calibration_arg="--calibration=$CALIBRATION"
+
+    # Map content to runner args
+    local content_arg="none"
+    [[ "$CONTENT" == "llm" ]] && content_arg="llm"
 
     case "$BRAIN" in
         mchp)
             log "Running MCHP agent..."
-            exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" $model_arg $phase_arg
+            exec xvfb-run -a python3 -m runners.run_mchp --content="$content_arg" $model_arg $calibration_arg
             ;;
         smolagents)
-            # Always use loop mode for continuous execution and JSONL logging
-            if $PHASE; then
-                log "Running SmolAgents loop mode with PHASE timing..."
-                exec python3 -m runners.run_smolagents --loop --phase $cpu_arg $model_arg
-            else
-                log "Running SmolAgents loop mode..."
-                exec python3 -m runners.run_smolagents --loop $cpu_arg $model_arg
-            fi
+            log "Running SmolAgents loop mode..."
+            exec python3 -m runners.run_smolagents --loop $model_arg $calibration_arg
             ;;
         browseruse)
-            # Always use loop mode for continuous execution and JSONL logging
-            if $PHASE; then
-                log "Running BrowserUse loop mode with PHASE timing..."
-                exec xvfb-run -a python3 -m runners.run_browseruse --loop --phase $cpu_arg $model_arg
-            else
-                log "Running BrowserUse loop mode..."
-                exec xvfb-run -a python3 -m runners.run_browseruse --loop $cpu_arg $model_arg
-            fi
+            log "Running BrowserUse loop mode..."
+            exec xvfb-run -a python3 -m runners.run_browseruse --loop $model_arg $calibration_arg
             ;;
     esac
 }
@@ -939,7 +851,7 @@ install_agent() {
     log "  Brain: $BRAIN"
     log "  Content: $CONTENT"
     log "  Model: $MODEL"
-    log "  PHASE: $PHASE"
+    log "  Calibration: $CALIBRATION"
     log "  Deploy directory: $deploy_dir"
     log "  Service name: $service_name"
     [[ "$STAGE" != "0" ]] && log "  Stage: $STAGE"
@@ -1017,10 +929,10 @@ install_agent() {
     echo -e "${GREEN}================================${NC}"
     echo ""
     echo "Configuration: $CONFIG_KEY"
-    echo "  Brain:      $BRAIN"
-    echo "  Content:    $CONTENT"
-    echo "  Model:      $MODEL"
-    echo "  PHASE:      $PHASE"
+    echo "  Brain:        $BRAIN"
+    echo "  Content:      $CONTENT"
+    echo "  Model:        $MODEL"
+    echo "  Calibration:  $CALIBRATION"
     echo ""
     echo "Deploy directory: $deploy_dir"
     echo "Service: $service_name"
@@ -1051,7 +963,7 @@ main() {
     echo ""
     log_info "Config: $CONFIG_KEY"
     log_info "Brain: $BRAIN | Content: $CONTENT | Model: $MODEL"
-    log_info "PHASE: $PHASE | Mode: $(if $RUNNER; then echo 'Runner'; else echo 'Install'; fi)"
+    log_info "Calibration: $CALIBRATION | Mode: $(if $RUNNER; then echo 'Runner'; else echo 'Install'; fi)"
     echo ""
 
     if $RUNNER; then

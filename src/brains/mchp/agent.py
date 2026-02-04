@@ -4,11 +4,12 @@ MCHP Brain - Human behavior emulation agent.
 This is a thin wrapper around the original human.py logic,
 providing a class-based interface for the unified SUP runner.
 
-Configurations:
+Configurations (exp-3):
 - M0: Upstream MITRE pyhuman (control - DO NOT MODIFY)
-- M1: DOLOS MCHP baseline (original timing)
-- M1+: DOLOS MCHP with PHASE timing (time-of-day awareness)
-- M2/M3: MCHP with LLM augmentations
+- M1: DOLOS MCHP baseline (no timing)
+- M2: MCHP + summer24 calibrated timing
+- M3: MCHP + fall24 calibrated timing
+- M4: MCHP + spring25 calibrated timing
 """
 import signal
 import os
@@ -43,8 +44,9 @@ class MCHPAgent:
     Runs workflows in random clusters with configurable timing.
 
     Timing Modes:
-    - use_phase_timing=False: Original random timing (M1 baseline)
-    - use_phase_timing=True: PHASE timing with time-of-day awareness (M1+)
+    - No timing: Original random timing (M1 baseline)
+    - calibration_profile: Calibrated timing from empirical profile (M2-M4)
+    - use_phase_timing: Legacy PHASE timing (exp-2 compat)
     """
 
     def __init__(
@@ -54,6 +56,7 @@ class MCHPAgent:
         group_interval: int = DEFAULT_GROUP_INTERVAL,
         extra: list = None,
         logger: Optional["AgentLogger"] = None,
+        calibration_profile: Optional[str] = None,
         use_phase_timing: bool = False,
         phase_config: Optional["PhaseTimingConfig"] = None,
         exclude_windows_workflows: bool = False,
@@ -65,22 +68,30 @@ class MCHPAgent:
         self.workflows = []
         self._running = False
         self.logger = logger
-        self.use_phase_timing = use_phase_timing
+        self.calibration_profile = calibration_profile
+        self.use_phase_timing = use_phase_timing or (calibration_profile is not None)
         self._phase_timing = None
         self._phase_config = phase_config
         self._tasks_completed = 0
         self.exclude_windows_workflows = exclude_windows_workflows
 
-        # Initialize PHASE timing if enabled
-        if self.use_phase_timing:
+        if self.calibration_profile:
+            self._init_calibrated_timing()
+        elif self.use_phase_timing:
             self._init_phase_timing()
 
+    def _init_calibrated_timing(self):
+        """Initialize calibrated timing from an empirical profile."""
+        from common.timing.phase_timing import CalibratedTiming, load_calibration_profile
+        config = load_calibration_profile(self.calibration_profile)
+        self._phase_timing = CalibratedTiming(config)
+        print(f"Calibrated timing ({self.calibration_profile}) - activity level: {self._phase_timing.get_activity_level()}")
+
     def _init_phase_timing(self):
-        """Initialize PHASE timing module."""
+        """Initialize legacy PHASE timing module."""
         from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
 
         if self._phase_config is None:
-            # Use default config with time-of-day awareness enabled
             self._phase_config = PhaseTimingConfig(
                 min_cluster_size=3,
                 max_cluster_size=8,
