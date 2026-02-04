@@ -24,7 +24,8 @@ def run_smolagents(config: SUPConfig, task: str = None):
         "brain": config.brain,
         "model": config.model,
         "calibration": config.calibration,
-        "config_key": config.config_key
+        "config_key": config.config_key,
+        "seed": config.seed
     })
 
     from brains.smolagents import SmolAgent, DEFAULT_PROMPTS, PHASE_PROMPTS
@@ -67,7 +68,8 @@ def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True):
         "model": config.model,
         "calibration": calibration_profile,
         "loop_mode": True,
-        "config_key": config.config_key
+        "config_key": config.config_key,
+        "seed": config.seed
     })
 
     from brains.smolagents import SmolAgentLoop, DEFAULT_PROMPTS, PHASE_PROMPTS
@@ -89,6 +91,7 @@ def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True):
             calibration_profile=calibration_profile,
             # Legacy compat: fall back to use_phase_timing if no calibration
             use_phase_timing=use_phase_timing if not calibration_profile else False,
+            seed=config.seed,
         )
         agent.run()
         logger.session_success(message="SmolAgents loop completed successfully")

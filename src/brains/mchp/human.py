@@ -42,8 +42,11 @@ def load_module(root, file):
     return getattr(workflow_module, 'load')()
 
 
-def run(clustersize, taskinterval, taskgroupinterval, extra):
-    random.seed()
+def run(clustersize, taskinterval, taskgroupinterval, extra, seed=42):
+    if seed != 0:
+        random.seed(seed)
+    else:
+        random.seed()
     workflows = import_workflows()
 
     def signal_handler(sig, frame):
@@ -64,6 +67,8 @@ if __name__ == '__main__':
     parser.add_argument('--taskinterval', type=int, default=TASK_INTERVAL_SECONDS)
     parser.add_argument('--taskgroupinterval', type=int, default=GROUPING_INTERVAL_SECONDS)
     parser.add_argument('--extra', nargs='*', default=EXTRA_DEFAULTS)
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for deterministic behavior (default: 42, 0 = non-deterministic)')
     args = parser.parse_args()
 
     try:
@@ -71,7 +76,8 @@ if __name__ == '__main__':
             clustersize=args.clustersize,
             taskinterval=args.taskinterval,
             taskgroupinterval=args.taskgroupinterval,
-            extra=args.extra
+            extra=args.extra,
+            seed=args.seed
         )
     except KeyboardInterrupt:
         print(" Terminating human execution...")

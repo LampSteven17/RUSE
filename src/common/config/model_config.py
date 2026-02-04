@@ -56,3 +56,15 @@ def get_model_key(model_name: str) -> str:
 def list_models() -> dict:
     """Return all available models."""
     return MODELS.copy()
+
+
+def get_ollama_seed():
+    """Get the Ollama seed from environment, or None if not set.
+
+    Returns:
+        int seed value, or None for non-deterministic (default).
+    """
+    val = os.environ.get("SUP_OLLAMA_SEED")
+    if val is not None:
+        return int(val)
+    return None

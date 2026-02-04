@@ -38,7 +38,9 @@ class SmolAgentLoop:
         logger: Optional["AgentLogger"] = None,
         calibration_profile: Optional[str] = None,
         use_phase_timing: bool = True,
+        seed: int = 42,
     ):
+        self.seed = seed
         self.model = model
         self.prompts = prompts
         self.cluster_size = cluster_size
@@ -207,7 +209,10 @@ class SmolAgentLoop:
 
     def run(self):
         """Start the SmolAgentLoop emulation."""
-        random.seed()
+        if self.seed != 0:
+            random.seed(self.seed)
+        else:
+            random.seed()
         self.workflows = self._load_workflows()
 
         if not self.workflows:

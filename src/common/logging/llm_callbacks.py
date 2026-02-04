@@ -20,12 +20,51 @@ Usage:
     llm = ChatOllama(model=model, callbacks=callbacks)
 """
 
+import re
 import time
-from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 from uuid import UUID
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
+
+
+# =============================================================================
+# SmolAgents Action Parsing
+# =============================================================================
+
+# Patterns to detect tool calls and actions in SmolAgents CodeAgent output.
+# SmolAgents generates Python code that calls tools; we parse the code to
+# detect which mechanical actions are being performed.
+_SMOL_ACTION_PATTERNS: List[Tuple[re.Pattern, str, str]] = [
+    # Tool calls → search
+    (re.compile(r"(?:web_search|duckduckgo_search|DuckDuckGoSearchTool)\s*\(", re.IGNORECASE), "search", "browser"),
+    # URL navigation
+    (re.compile(r"""(?:requests\.get|urllib\.request|open|fetch)\s*\(\s*['"]https?://""", re.IGNORECASE), "navigate", "browser"),
+    # Print / output → scroll (reading results)
+    (re.compile(r"\bprint\s*\(", re.IGNORECASE), "scroll", "browser"),
+]
+
+
+def _parse_smol_action(response_content: str) -> Optional[Tuple[str, str, str]]:
+    """Parse SmolAgents LLM response to detect the action type.
+
+    SmolAgents' CodeAgent generates Python code. We look for tool calls
+    and common patterns to determine what mechanical action is happening.
+
+    Returns (step_name, category, message) or None if no action detected.
+    """
+    if not response_content:
+        return None
+    for pattern, step_name, category in _SMOL_ACTION_PATTERNS:
+        match = pattern.search(response_content)
+        if match:
+            # Extract a short context around the match for the message
+            start = max(0, match.start() - 10)
+            end = min(len(response_content), match.end() + 50)
+            msg = response_content[start:end].strip()[:100]
+            return step_name, category, msg
+    return None
 
 
 # =============================================================================
@@ -129,6 +168,14 @@ class LiteLLMLoggingCallback(LiteLLMCustomLogger):
             model=model,
             tokens=tokens if any(v is not None for v in tokens.values()) else None
         )
+
+        # Parse the LLM response for SmolAgents actions and log as steps
+        if output:
+            parsed = _parse_smol_action(output)
+            if parsed:
+                step_name, category, msg = parsed
+                self.logger.step_start(step_name, category=category, message=msg)
+                self.logger.step_success(step_name)
 
     def _extract_tokens(self, response_obj: Any, kwargs: Dict) -> Dict[str, Optional[int]]:
         """Extract token usage from response, handling multiple formats."""

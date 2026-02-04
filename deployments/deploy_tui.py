@@ -32,16 +32,34 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Rich library for TUI
+# ANSI escape codes for terminal control
+CLEAR_SCREEN = "\033[2J"
+CURSOR_HOME = "\033[H"
+CLEAR_LINE = "\033[2K"
+HIDE_CURSOR = "\033[?25l"
+SHOW_CURSOR = "\033[?25h"
+ALT_SCREEN_ON = "\033[?1049h"   # Switch to alternate screen buffer
+ALT_SCREEN_OFF = "\033[?1049l"  # Switch back to main screen buffer
+
+# Colors
+COLOR_RESET = "\033[0m"
+COLOR_BOLD = "\033[1m"
+COLOR_DIM = "\033[2m"
+COLOR_RED = "\033[31m"
+COLOR_GREEN = "\033[32m"
+COLOR_YELLOW = "\033[33m"
+COLOR_CYAN = "\033[36m"
+COLOR_MAGENTA = "\033[35m"
+
+# Rich is optional now - only used for final summary
 try:
     from rich.console import Console
-    from rich.live import Live
     from rich.table import Table
-    from rich.text import Text
     from rich import box
+    HAS_RICH = True
 except ImportError:
-    print("ERROR: 'rich' library is required. Install with: pip install rich")
-    sys.exit(1)
+    HAS_RICH = False
+    Console = None
 
 try:
     import yaml
@@ -59,7 +77,7 @@ PLAYBOOKS_DIR = SCRIPT_DIR / "playbooks"
 
 # Deployment steps and their display order
 DEPLOY_STEPS = ["provision", "deploy", "reboot", "install"]
-TEARDOWN_STEPS = ["discover", "delete"]
+TEARDOWN_STEPS = ["discover", "del_vm", "del_vol"]
 
 
 # =============================================================================
@@ -240,11 +258,11 @@ class DeploymentMonitor:
         """Process a DOLOS event and update state."""
         event_type = event.get("type", "")
         data = event.get("data", {})
-
-        # Track output for display
         task = event.get("task", "")
-        if task and event_type in ("task_start", "task_ok", "task_failed"):
-            self._add_output_line(event_type, task, data)
+
+        # NOTE: We don't add output lines here because raw Ansible stdout
+        # is already being captured and displayed. Adding event-based lines
+        # would cause duplicates and visual flashing.
 
         # Handle specific event types
         if event_type == "playbook_start":
@@ -317,11 +335,25 @@ class DeploymentMonitor:
                     self.sups[name].start_step("discover")
                     self.sups[name].complete_step("discover")
 
-        elif event_type == "resource_deleted":
+        elif event_type == "vm_deleted":
             name = data.get("name", "")
             if name in self.sups:
-                self.sups[name].start_step("delete")
-                self.sups[name].complete_step("delete")
+                self.sups[name].complete_step("del_vm")
+
+        elif event_type == "volume_deleted":
+            name = data.get("name", "")
+            if name in self.sups:
+                self.sups[name].start_step("del_vol")
+                self.sups[name].complete_step("del_vol")
+                self.sups[name].complete()
+                self.completed_count += 1
+
+        elif event_type == "resource_deleted":
+            # Legacy event - treat as VM deleted
+            name = data.get("name", "")
+            if name in self.sups:
+                self.sups[name].start_step("del_vm")
+                self.sups[name].complete_step("del_vm")
                 self.sups[name].complete()
                 self.completed_count += 1
 
@@ -417,15 +449,36 @@ class DeploymentMonitor:
 
 
 # =============================================================================
-# TUI RENDERER
+# TUI RENDERER (Pure ANSI - no Rich)
 # =============================================================================
 
 class TUIRenderer:
-    """Rich-based TUI renderer."""
+    """Pure ANSI terminal renderer."""
+
+    STYLES = {
+        "bold": COLOR_BOLD,
+        "dim": COLOR_DIM,
+        "red": COLOR_RED,
+        "green": COLOR_GREEN,
+        "yellow": COLOR_YELLOW,
+        "cyan": COLOR_CYAN,
+        "magenta": COLOR_MAGENTA,
+    }
 
     def __init__(self, monitor: DeploymentMonitor):
         self.monitor = monitor
-        self.console = Console()
+
+    def _style(self, text: str, style: str) -> str:
+        """Apply ANSI style to text."""
+        if not style:
+            return text
+        codes = []
+        for s in style.split():
+            if s in self.STYLES:
+                codes.append(self.STYLES[s])
+        if codes:
+            return "".join(codes) + text + COLOR_RESET
+        return text
 
     def _format_time(self, seconds: float) -> str:
         """Format seconds as HH:MM:SS."""
@@ -447,87 +500,65 @@ class TUIRenderer:
             return f"{h}:{m:02d}:{s:02d}"
         return f"{total_mins:02d}:{s:02d}"
 
-    def _style_step_time(self, sup: SUPState, step: str) -> str:
-        """Get styled step time string."""
-        if step not in sup.step_times:
-            if step == sup.current_step:
-                # Currently running - show elapsed
-                if step in sup.step_start_times:
-                    elapsed = time.time() - sup.step_start_times[step]
-                    return f"[yellow]{self._format_step_time(elapsed)}[/yellow]"
-                return "[yellow]...[/yellow]"
-            return "[dim]--[/dim]"
-
-        duration = sup.step_times[step]
-        if duration < 0:
-            return "[cyan]SKIP[/cyan]"
-        return f"[green]{self._format_step_time(duration)}[/green]"
-
-    def build_display(self) -> Text:
-        """Build the complete display."""
+    def render(self) -> str:
+        """Build display as plain string with ANSI codes."""
         term_width = shutil.get_terminal_size().columns
         mon = self.monitor
         elapsed = time.time() - mon.start_time if mon.start_time else 0
-
-        display = Text()
         steps = mon.get_steps()
 
-        # Calculate column widths
-        sup_col_width = 22
-        step_col_width = 8
-        total_col_width = 10
+        lines = []
 
-        # Header row using Rich Table for proper alignment
-        header = f"{'SUP':<{sup_col_width}}"
+        # Header row
+        header = f"{'SUP':<22}"
         for step in steps:
-            header += f" {step:>{step_col_width}}"
-        header += f" {'│':^3}"
-        header += f" {'total':>{step_col_width}}"
-        header += f" {'r-total':>{total_col_width}}"
-
-        display.append_text(Text.from_markup(f"[bold]{header}[/bold]\n"))
+            header += f"{step:>9}"
+        header += " │"
+        header += f"{'total':>8}"
+        header += f"{'r-total':>11}"
+        lines.append(self._style(header, "bold"))
 
         # SUP rows
         running_total = 0.0
         for sup in mon.sups.values():
-            # SUP name with status color
-            name_display = sup.name[:sup_col_width-2]
+            # Determine style
             if sup.status == Status.COMPLETED:
-                row = f"[green]{name_display:<{sup_col_width}}[/green]"
+                style = "green"
             elif sup.status == Status.FAILED:
-                row = f"[red]{name_display:<{sup_col_width}}[/red]"
+                style = "red"
             elif sup.status == Status.RUNNING:
-                row = f"[yellow]{name_display:<{sup_col_width}}[/yellow]"
+                style = "yellow"
             else:
-                row = f"[dim]{name_display:<{sup_col_width}}[/dim]"
+                style = "dim"
 
-            # Step times
+            # Build row
+            name_display = sup.name[:20]
+            row = f"{name_display:<22}"
+
             for step in steps:
-                styled = self._style_step_time(sup, step)
-                row += f" {styled:>{step_col_width}}"
+                step_str = self._get_step_str(sup, step)
+                row += f"{step_str:>9}"
 
-            # Separator
-            row += f" [dim]│[/dim] "
+            row += " │"
 
-            # Total time
             total = sup.total_time()
             if total > 0:
-                row += f" {self._format_step_time(total):>{step_col_width}}"
+                row += f"{self._format_step_time(total):>8}"
                 if sup.status in (Status.COMPLETED, Status.FAILED):
                     running_total += total
             else:
-                row += f" [dim]{'--':>{step_col_width}}[/dim]"
+                row += f"{'--':>8}"
 
-            # Running total
             if running_total > 0:
-                row += f" [bold]{self._format_time(running_total):>{total_col_width}}[/bold]"
+                row += f"{self._format_time(running_total):>11}"
             else:
-                row += f" [dim]{'--:--:--':>{total_col_width}}[/dim]"
+                row += f"{'--:--:--':>11}"
 
-            display.append_text(Text.from_markup(row + "\n"))
+            lines.append(self._style(row, style))
 
         # Separator
-        display.append("─" * min(term_width, 100) + "\n", style="dim")
+        sep = "─" * min(term_width, 100)
+        lines.append(self._style(sep, "dim"))
 
         # Progress bar
         total_sups = len(mon.sups)
@@ -539,53 +570,50 @@ class TUIRenderer:
         bar = "=" * filled + "-" * (bar_width - filled)
 
         mode_name = "DOLOS Teardown" if mon.mode == "teardown" else "DOLOS Deployment"
-        header = f"{mode_name}  [{bar}]  {completed}/{total_sups}"
+        progress_line = f"{mode_name}  [{bar}]  {completed}/{total_sups}"
         if running > 0:
-            header += f" ({running} running)"
+            progress_line += f" ({running} running)"
         if mon.failed_count > 0:
-            header += f" ({mon.failed_count} failed)"
-        header += f"   Elapsed: {self._format_time(elapsed)}"
-        display.append(header + "\n", style="bold")
-
-        # Status line (colored by status)
-        status_parts = []
-        for sup in mon.sups.values():
-            short = sup.behavior[:8]
-            if sup.status == Status.COMPLETED:
-                status_parts.append(f"[green]{short}[/green]")
-            elif sup.status == Status.FAILED:
-                status_parts.append(f"[red]{short}[/red]")
-            elif sup.status == Status.RUNNING:
-                status_parts.append(f"[yellow bold]{short}[/yellow bold]")
-            else:
-                status_parts.append(f"[dim]{short}[/dim]")
-
-        # Wrap status line if too long
-        line = "  ".join(status_parts)
-        display.append_text(Text.from_markup(line + "\n"))
+            progress_line += f" ({mon.failed_count} failed)"
+        progress_line += f"   Elapsed: {self._format_time(elapsed)}"
+        lines.append(self._style(progress_line, "bold"))
 
         # Separator
-        display.append("─" * min(term_width, 100) + "\n", style="dim")
+        lines.append(self._style(sep, "dim"))
 
-        # Output log
-        for line in mon.output_lines[-20:]:
-            # Truncate long lines
+        # Output log (last 10 lines to fit screen)
+        for line in mon.output_lines[-10:]:
             if len(line) > term_width - 2:
                 line = line[:term_width - 5] + "..."
             if "FAILED" in line or "ERROR" in line or "fatal:" in line.lower():
-                display.append(line + "\n", style="red")
+                lines.append(self._style(line, "red"))
             elif "changed:" in line:
-                display.append(line + "\n", style="yellow")
+                lines.append(self._style(line, "yellow"))
             elif "ok:" in line:
-                display.append(line + "\n", style="green")
+                lines.append(self._style(line, "green"))
             elif line.startswith("TASK"):
-                display.append(line + "\n", style="bold cyan")
+                lines.append(self._style(line, "bold cyan"))
             elif line.startswith("PLAY"):
-                display.append(line + "\n", style="bold magenta")
+                lines.append(self._style(line, "bold magenta"))
             else:
-                display.append(line + "\n")
+                lines.append(line)
 
-        return display
+        # Use carriage return to ensure column 0, then clear line, then content
+        # \033[K clears from cursor to end of line
+        CLEAR_TO_EOL = "\033[K"
+        return "\n".join("\r" + line + CLEAR_TO_EOL for line in lines)
+
+    def _get_step_str(self, sup: SUPState, step: str) -> str:
+        """Get step time as plain string."""
+        if step not in sup.step_times:
+            if step == sup.current_step and step in sup.step_start_times:
+                elapsed = time.time() - sup.step_start_times[step]
+                return self._format_step_time(elapsed)
+            return "--"
+        duration = sup.step_times[step]
+        if duration < 0:
+            return "SKIP"
+        return self._format_step_time(duration)
 
 
 # =============================================================================
@@ -598,7 +626,7 @@ class DeploymentRunner:
     def __init__(self, deployment_name: str, args: argparse.Namespace):
         self.deployment_name = deployment_name
         self.args = args
-        self.console = Console()
+        self.console = Console() if HAS_RICH else None
 
         # Paths
         self.deploy_dir = SCRIPT_DIR / deployment_name
@@ -628,12 +656,12 @@ class DeploymentRunner:
         # Process management
         self.process: Optional[subprocess.Popen] = None
         self.output_queue: queue.Queue = queue.Queue()
-        self.live: Optional[Live] = None
+        self._last_render_time = 0
 
     def _load_config(self) -> Dict[str, Any]:
         """Load deployment config.yaml."""
         if not self.config_file.exists():
-            self.console.print(f"[red]Config not found: {self.config_file}[/red]")
+            print(f"{COLOR_RED}Config not found: {self.config_file}{COLOR_RESET}")
             sys.exit(1)
 
         with open(self.config_file) as f:
@@ -714,9 +742,11 @@ class DeploymentRunner:
             for event in self.event_parser.read_events():
                 self.monitor.process_event(event)
 
-            # Update display
-            if self.live:
-                self.live.update(self.renderer.build_display())
+            # Update display (throttled to 4 Hz)
+            now = time.time()
+            if now - self._last_render_time >= 0.25:
+                self._refresh_display()
+                self._last_render_time = now
 
             time.sleep(0.05)
 
@@ -738,11 +768,13 @@ class DeploymentRunner:
 
     def _parse_ansible_output(self, line: str):
         """Parse raw Ansible output for state tracking."""
-        # Track TASK lines
+        # Track current task for context
         if line.startswith("TASK ["):
             match = re.match(r"TASK \[([^\]]+)\]", line)
             if match:
                 task_name = match.group(1).lower()
+                self._current_task = task_name
+
                 # Detect install stages from task names
                 if "install_sup.sh stage 1" in task_name:
                     for sup in self.monitor.sups.values():
@@ -750,6 +782,30 @@ class DeploymentRunner:
                             sup.start_step("install")
                 elif "install_sup.sh stage 2" in task_name:
                     pass  # Continue install phase
+
+                # Teardown: detect discovery phase
+                elif "get list of sup servers" in task_name:
+                    for sup in self.monitor.sups.values():
+                        sup.start_step("discover")
+                        sup.status = Status.RUNNING
+                        if sup.start_time is None:
+                            sup.start_time = time.time()
+
+                # Teardown: detect VM deletion phase
+                elif "delete sup servers" in task_name:
+                    for sup in self.monitor.sups.values():
+                        if "discover" not in sup.step_times:
+                            sup.step_times["discover"] = 0
+                        sup.complete_step("discover")
+                        sup.start_step("del_vm")
+
+                # Teardown: detect volume deletion phase
+                elif "delete orphaned sup volumes" in task_name or "delete volumes" in task_name:
+                    for sup in self.monitor.sups.values():
+                        if sup.status == Status.RUNNING:
+                            if "del_vm" in sup.step_start_times and "del_vm" not in sup.step_times:
+                                sup.complete_step("del_vm")
+                            sup.start_step("del_vol")
 
         # Track ok/changed/failed per host
         elif line.startswith("ok:") or line.startswith("changed:"):
@@ -763,6 +819,12 @@ class DeploymentRunner:
                         if sup.start_time is None:
                             sup.start_time = time.time()
 
+                    # For teardown: track per-VM deletion completion
+                    current_task = getattr(self, '_current_task', '')
+                    if "wait for servers to be deleted" in current_task:
+                        if "del_vm" not in sup.step_times:
+                            sup.complete_step("del_vm")
+
         elif line.startswith("fatal:") or line.startswith("failed:"):
             match = re.match(r"(?:fatal|failed): \[([^\]]+)\]", line)
             if match:
@@ -772,7 +834,13 @@ class DeploymentRunner:
 
         # Track PLAY RECAP for final status
         elif "PLAY RECAP" in line:
-            pass  # Events will handle this
+            # Mark volume deletion complete for all running SUPs
+            for sup in self.monitor.sups.values():
+                if sup.status == Status.RUNNING:
+                    if "del_vol" in sup.step_start_times and "del_vol" not in sup.step_times:
+                        sup.complete_step("del_vol")
+                    sup.complete()
+                    self.monitor.completed_count += 1
 
         # Track reboot
         elif "Rebooting" in line or "rebooted" in line.lower():
@@ -784,7 +852,7 @@ class DeploymentRunner:
     def run_provision(self) -> bool:
         """Run provision playbook."""
         if not self.hosts_file.exists():
-            self.console.print(f"[red]Hosts file not found: {self.hosts_file}[/red]")
+            print(f"{COLOR_RED}Hosts file not found: {self.hosts_file}{COLOR_RESET}")
             return False
 
         self.monitor.current_phase = "provision"
@@ -799,8 +867,8 @@ class DeploymentRunner:
     def run_install(self) -> bool:
         """Run install playbook."""
         if not self.inventory_file.exists():
-            self.console.print(f"[red]Inventory not found: {self.inventory_file}[/red]")
-            self.console.print("[yellow]Run provision first or create inventory.ini[/yellow]")
+            print(f"{COLOR_RED}Inventory not found: {self.inventory_file}{COLOR_RESET}")
+            print(f"{COLOR_YELLOW}Run provision first or create inventory.ini{COLOR_RESET}")
             return False
 
         self.monitor.current_phase = "install"
@@ -817,13 +885,23 @@ class DeploymentRunner:
     def run_teardown(self) -> bool:
         """Run teardown playbook."""
         if not self.hosts_file.exists():
-            self.console.print(f"[red]Hosts file not found: {self.hosts_file}[/red]")
+            print(f"{COLOR_RED}Hosts file not found: {self.hosts_file}{COLOR_RESET}")
             return False
 
         self.monitor.current_phase = "teardown"
 
         rc = self._run_playbook("teardown.yaml", self.hosts_file)
         return rc == 0
+
+    def _refresh_display(self):
+        """Refresh the terminal display using ANSI codes."""
+        # Move cursor home first, then clear screen, then write content
+        # This order prevents flashing by overwriting from top-left
+        output = CURSOR_HOME + self.renderer.render()
+        # Clear to end of screen after content to remove any old lines
+        output += "\033[J"  # Clear from cursor to end of screen
+        sys.stdout.write(output)
+        sys.stdout.flush()
 
     def run(self):
         """Run the deployment with TUI."""
@@ -838,39 +916,39 @@ class DeploymentRunner:
 
         old_handler = signal.signal(signal.SIGINT, signal_handler)
 
-        # Clear screen
-        self.console.clear()
+        # Switch to alternate screen buffer, clear, and hide cursor
+        sys.stdout.write(ALT_SCREEN_ON + CLEAR_SCREEN + CURSOR_HOME + HIDE_CURSOR)
+        sys.stdout.flush()
 
         try:
-            with Live(self.renderer.build_display(), console=self.console, refresh_per_second=8) as live:
-                self.live = live
-
-                if self.args.teardown:
-                    success = self.run_teardown()
-                elif self.args.provision:
-                    success = self.run_provision()
-                elif self.args.install:
+            if self.args.teardown:
+                success = self.run_teardown()
+            elif self.args.provision:
+                success = self.run_provision()
+            elif self.args.install:
+                success = self.run_install()
+            else:
+                # Full deploy: provision + install
+                success = self.run_provision()
+                if success and not self._interrupted:
+                    self._refresh_display()
+                    time.sleep(2)
                     success = self.run_install()
-                else:
-                    # Full deploy: provision + install
-                    success = self.run_provision()
-                    if success and not self._interrupted:
-                        live.update(self.renderer.build_display())
-                        # Brief pause before install
-                        time.sleep(2)
-                        success = self.run_install()
 
-                # Final update
-                live.update(self.renderer.build_display())
-                self.live = None
+            # Final update
+            self._refresh_display()
 
         except KeyboardInterrupt:
             self._interrupted = True
-            self.console.print("\n[yellow]Interrupted[/yellow]")
+            print(f"\n{COLOR_YELLOW}Interrupted{COLOR_RESET}")
             if self.process:
                 self.process.terminate()
 
         finally:
+            # Show cursor and switch back to main screen buffer
+            sys.stdout.write(SHOW_CURSOR + ALT_SCREEN_OFF)
+            sys.stdout.flush()
+
             # Restore signal handler
             signal.signal(signal.SIGINT, old_handler)
 
@@ -883,59 +961,63 @@ class DeploymentRunner:
                     pass
 
             if self._interrupted:
-                self.console.print("\n[yellow]Deployment interrupted by user[/yellow]")
+                print(f"\n{COLOR_YELLOW}Deployment interrupted by user{COLOR_RESET}")
             else:
                 self._print_summary()
 
     def _print_summary(self):
         """Print final summary."""
-        self.console.print("\n")
+        print("\n")
 
         mon = self.monitor
         elapsed = time.time() - mon.start_time if mon.start_time else 0
 
-        # Summary table
-        table = Table(title=f"{mon.deployment_name} Deployment Summary", box=box.SIMPLE)
-        table.add_column("SUP", style="cyan")
-        table.add_column("Behavior")
-        table.add_column("Status", justify="center")
+        print(f"{COLOR_BOLD}=== {mon.deployment_name} Deployment Summary ==={COLOR_RESET}\n")
 
-        for step in mon.get_steps():
-            table.add_column(step.capitalize(), justify="right")
+        # Header
+        steps = mon.get_steps()
+        header = f"{'SUP':<22} {'Behavior':<12} {'Status':^8}"
+        for step in steps:
+            header += f" {step:>8}"
+        header += f" {'Total':>10}"
+        print(f"{COLOR_BOLD}{header}{COLOR_RESET}")
+        print("─" * len(header))
 
-        table.add_column("Total", justify="right")
-
+        # Rows
         for sup in mon.sups.values():
-            status = "[green]OK[/green]" if sup.status == Status.COMPLETED else \
-                     "[red]FAIL[/red]" if sup.status == Status.FAILED else \
-                     "[dim]--[/dim]"
+            if sup.status == Status.COMPLETED:
+                status = f"{COLOR_GREEN}OK{COLOR_RESET}"
+            elif sup.status == Status.FAILED:
+                status = f"{COLOR_RED}FAIL{COLOR_RESET}"
+            else:
+                status = f"{COLOR_DIM}--{COLOR_RESET}"
 
-            row = [sup.name, sup.behavior, status]
+            row = f"{sup.name:<22} {sup.behavior:<12} {status:^8}"
 
-            for step in mon.get_steps():
+            for step in steps:
                 if step in sup.step_times:
                     t = sup.step_times[step]
                     if t < 0:
-                        row.append("SKIP")
+                        row += f" {'SKIP':>8}"
                     else:
-                        row.append(self.renderer._format_step_time(t))
+                        row += f" {self.renderer._format_step_time(t):>8}"
                 else:
-                    row.append("-")
+                    row += f" {'-':>8}"
 
             total = sup.total_time()
-            row.append(self.renderer._format_time(total) if total > 0 else "-")
+            row += f" {self.renderer._format_time(total) if total > 0 else '-':>10}"
 
-            table.add_row(*row)
+            print(row)
 
-        self.console.print(table)
+        print()
 
         # Final status
         if mon.failed_count == 0 and mon.completed_count > 0:
-            self.console.print(f"[bold green]All {mon.completed_count} SUPs deployed successfully[/bold green]")
+            print(f"{COLOR_GREEN}{COLOR_BOLD}All {mon.completed_count} SUPs completed successfully{COLOR_RESET}")
         elif mon.failed_count > 0:
-            self.console.print(f"[yellow]Completed: {mon.completed_count}, Failed: {mon.failed_count}[/yellow]")
+            print(f"{COLOR_YELLOW}Completed: {mon.completed_count}, Failed: {mon.failed_count}{COLOR_RESET}")
 
-        self.console.print(f"[dim]Total time: {self.renderer._format_time(elapsed)}[/dim]")
+        print(f"{COLOR_DIM}Total time: {self.renderer._format_time(elapsed)}{COLOR_RESET}")
 
 
 # =============================================================================
@@ -944,8 +1026,7 @@ class DeploymentRunner:
 
 def list_deployments():
     """List available deployments."""
-    console = Console()
-    console.print("[bold]Available deployments:[/bold]\n")
+    print(f"{COLOR_BOLD}Available deployments:{COLOR_RESET}\n")
 
     for path in sorted(SCRIPT_DIR.iterdir()):
         if path.is_dir() and (path / "config.yaml").exists():
@@ -960,14 +1041,13 @@ def list_deployments():
                 total_vms = sum(d.get("count", 1) for d in config.get("deployments", []))
                 desc = config.get("deployment_name", name)
 
-                console.print(f"  [cyan]{name:<20}[/cyan] {total_vms} VMs - {desc}")
+                print(f"  {COLOR_CYAN}{name:<20}{COLOR_RESET} {total_vms} VMs - {desc}")
             except Exception:
-                console.print(f"  [cyan]{name:<20}[/cyan] (error reading config)")
+                print(f"  {COLOR_CYAN}{name:<20}{COLOR_RESET} (error reading config)")
 
 
 def show_deployment_preview(deployment_name: str):
     """Show preview of what would be deployed."""
-    console = Console()
     deploy_dir = SCRIPT_DIR / deployment_name
     config_file = deploy_dir / "config.yaml"
 
@@ -976,7 +1056,7 @@ def show_deployment_preview(deployment_name: str):
 
     monitor = DeploymentMonitor(deployment_name, config)
 
-    console.print(f"\n[bold cyan]Deployment: {deployment_name}[/bold cyan]\n")
+    print(f"\n{COLOR_BOLD}{COLOR_CYAN}Deployment: {deployment_name}{COLOR_RESET}\n")
 
     # Group by flavor
     by_flavor: Dict[str, List[SUPState]] = {}
@@ -985,34 +1065,25 @@ def show_deployment_preview(deployment_name: str):
             by_flavor[sup.flavor] = []
         by_flavor[sup.flavor].append(sup)
 
-    # Create table
-    table = Table(title=f"SUPs to Deploy ({len(monitor.sups)} total)", box=box.SIMPLE)
-    table.add_column("Flavor", style="cyan")
-    table.add_column("Count", justify="right")
-    table.add_column("Reboot", justify="center")
-    table.add_column("SUPs")
+    # Print table
+    print(f"{COLOR_BOLD}SUPs to Deploy ({len(monitor.sups)} total){COLOR_RESET}")
+    print(f"{'Flavor':<36} {'Count':>6} {'Reboot':>8}  SUPs")
+    print("─" * 80)
 
     for flavor, sups in sorted(by_flavor.items()):
-        needs_reboot = "Yes" if sups[0].needs_reboot else "[dim]No[/dim]"
+        needs_reboot = "Yes" if sups[0].needs_reboot else "No"
         sup_names = ", ".join(s.behavior for s in sups[:5])
         if len(sups) > 5:
             sup_names += f" (+{len(sups) - 5} more)"
-        table.add_row(
-            flavor[:35],
-            str(len(sups)),
-            needs_reboot,
-            sup_names,
-        )
-
-    console.print(table)
+        print(f"{COLOR_CYAN}{flavor[:35]:<36}{COLOR_RESET} {len(sups):>6} {needs_reboot:>8}  {sup_names}")
 
     # Show steps
-    console.print("\n[bold]Deployment Steps:[/bold]")
-    console.print("  1. [cyan]provision[/cyan] - Create VMs on OpenStack")
-    console.print("  2. [cyan]deploy[/cyan]    - Wait for SSH, clone repo")
-    console.print("  3. [cyan]reboot[/cyan]    - Reboot for NVIDIA drivers (GPU only)")
-    console.print("  4. [cyan]install[/cyan]   - Install Ollama, Python, services")
-    console.print()
+    print(f"\n{COLOR_BOLD}Deployment Steps:{COLOR_RESET}")
+    print(f"  1. {COLOR_CYAN}provision{COLOR_RESET} - Create VMs on OpenStack")
+    print(f"  2. {COLOR_CYAN}deploy{COLOR_RESET}    - Wait for SSH, clone repo")
+    print(f"  3. {COLOR_CYAN}reboot{COLOR_RESET}    - Reboot for NVIDIA drivers (GPU only)")
+    print(f"  4. {COLOR_CYAN}install{COLOR_RESET}   - Install Ollama, Python, services")
+    print()
 
 
 def main():
@@ -1050,8 +1121,8 @@ Examples:
     # Validate deployment exists
     deploy_dir = SCRIPT_DIR / args.deployment
     if not deploy_dir.exists() or not (deploy_dir / "config.yaml").exists():
-        Console().print(f"[red]Deployment not found: {args.deployment}[/red]")
-        Console().print("\nAvailable deployments:")
+        print(f"{COLOR_RED}Deployment not found: {args.deployment}{COLOR_RESET}")
+        print("\nAvailable deployments:")
         list_deployments()
         return 1
 
