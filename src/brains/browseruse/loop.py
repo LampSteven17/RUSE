@@ -40,22 +40,9 @@ class BrowserUseLoop:
         task_interval: int = DEFAULT_TASK_INTERVAL,
         group_interval: int = DEFAULT_GROUP_INTERVAL,
         logger: Optional["AgentLogger"] = None,
+        calibration_profile: Optional[str] = None,
         use_phase_timing: bool = True,
     ):
-        """
-        Initialize the BrowserUseLoop.
-
-        Args:
-            model: Model name for BrowserUse (llama, gemma, deepseek)
-            prompts: Prompts configuration for browsing
-            headless: Run browser in headless mode
-            max_steps: Maximum steps per browsing task
-            cluster_size: Max workflows per cluster (used if phase_timing disabled)
-            task_interval: Max seconds between tasks (used if phase_timing disabled)
-            group_interval: Max seconds between clusters (used if phase_timing disabled)
-            logger: AgentLogger for structured logging
-            use_phase_timing: Enable PHASE timing with time-of-day awareness
-        """
         self.model = model
         self.prompts = prompts
         self.headless = headless
@@ -64,28 +51,30 @@ class BrowserUseLoop:
         self.task_interval = task_interval
         self.group_interval = group_interval
         self.logger = logger
-        self.use_phase_timing = use_phase_timing
+        self.calibration_profile = calibration_profile
+        self.use_phase_timing = use_phase_timing or (calibration_profile is not None)
 
         self.workflows = []
         self._running = False
         self._phase_timing = None
         self._tasks_completed = 0
 
-        # Initialize PHASE timing if enabled
-        if self.use_phase_timing:
+        if self.calibration_profile:
+            self._init_calibrated_timing()
+        elif self.use_phase_timing:
             self._init_phase_timing()
 
-    def _init_phase_timing(self):
-        """Initialize PHASE timing module."""
-        from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
+    def _init_calibrated_timing(self):
+        from common.timing.phase_timing import CalibratedTiming, load_calibration_profile
+        config = load_calibration_profile(self.calibration_profile)
+        self._phase_timing = CalibratedTiming(config)
 
+    def _init_phase_timing(self):
+        from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
         config = PhaseTimingConfig(
-            min_cluster_size=3,
-            max_cluster_size=8,
-            min_task_delay=5.0,
-            max_task_delay=30.0,
-            min_cluster_delay=120.0,
-            max_cluster_delay=600.0,
+            min_cluster_size=3, max_cluster_size=8,
+            min_task_delay=5.0, max_task_delay=30.0,
+            min_cluster_delay=120.0, max_cluster_delay=600.0,
             enable_hourly_adjustment=True,
         )
         self._phase_timing = PhaseTiming(config)

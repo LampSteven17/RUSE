@@ -13,6 +13,7 @@ from runners.run_config import (
     CONFIGS,
     get_config,
     list_configs,
+    list_aliases,
     build_config,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     'CONFIGS',
     'get_config',
     'list_configs',
+    'list_aliases',
     'build_config',
 ]

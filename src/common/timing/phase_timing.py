@@ -337,3 +337,140 @@ def get_preset_config(name: str) -> PhaseTimingConfig:
         available = ", ".join(PRESET_CONFIGS.keys())
         raise ValueError(f"Unknown preset '{name}'. Available: {available}")
     return PRESET_CONFIGS[name]
+
+
+# ============================================================================
+# Calibrated Timing (exp-3+)
+# ============================================================================
+
+@dataclass
+class CalibratedTimingConfig:
+    """Configuration loaded from an empirical timing profile."""
+    dataset: str                        # "summer24", "fall24", "spring25"
+    hourly_fractions: list              # 24-element array (mean_fraction per hour)
+    burst_duration: dict                # percentile data {5, 25, 50, 75, 95}
+    idle_gap: dict                      # percentile data {5, 25, 50, 75, 95}
+    connections_per_burst: dict         # percentile data {5, 25, 50, 75, 95}
+
+
+class CalibratedTiming:
+    """
+    Timing controller that samples from empirical distributions.
+
+    Uses percentile-based interpolation from real network traffic profiles
+    instead of hardcoded timing parameters. Same public interface as PhaseTiming.
+    """
+
+    _PERCENTILE_POINTS = [0.05, 0.25, 0.50, 0.75, 0.95]
+    _PERCENTILE_KEYS = ["5", "25", "50", "75", "95"]
+
+    def __init__(self, config: CalibratedTimingConfig):
+        self.config = config
+        self._last_activity_time: Optional[float] = None
+
+        # Normalize hourly fractions so peak hour = 1.0
+        max_fraction = max(config.hourly_fractions)
+        if max_fraction > 0:
+            self._hourly_scale = [f / max_fraction for f in config.hourly_fractions]
+        else:
+            self._hourly_scale = [1.0] * 24
+
+    def _sample_percentile(self, percentiles: dict) -> float:
+        """Sample by interpolating between p5/p25/p50/p75/p95 breakpoints."""
+        u = random.random()
+        points = self._PERCENTILE_POINTS
+        values = [float(percentiles[k]) for k in self._PERCENTILE_KEYS]
+
+        if u <= points[0]:
+            return values[0]
+        if u >= points[-1]:
+            overshoot = (u - points[-1]) / (1.0 - points[-1])
+            return values[-1] * (1.0 + 0.5 * overshoot)
+
+        for i in range(len(points) - 1):
+            if points[i] <= u <= points[i + 1]:
+                t = (u - points[i]) / (points[i + 1] - points[i])
+                return values[i] + t * (values[i + 1] - values[i])
+
+        return values[2]  # fallback: median
+
+    def _get_hourly_scale(self) -> float:
+        """Get current hour's activity scale factor (0..1, peak=1.0)."""
+        return self._hourly_scale[datetime.now().hour]
+
+    def get_cluster_size(self) -> int:
+        """Sample connections_per_burst from the profile."""
+        raw = self._sample_percentile(self.config.connections_per_burst)
+        scaled = raw * self._get_hourly_scale()
+        return max(1, min(int(scaled), 15))
+
+    def get_task_delay(self) -> float:
+        """Intra-burst pacing derived from burst_duration / connections_per_burst."""
+        burst_min = self._sample_percentile(self.config.burst_duration)
+        conns = max(1, self._sample_percentile(self.config.connections_per_burst))
+        per_task_seconds = (burst_min * 60.0) / conns
+        return max(2.0, min(per_task_seconds, 60.0))
+
+    def get_cluster_delay(self) -> float:
+        """Sample idle_gap, scaled inversely by hourly activity."""
+        gap_minutes = self._sample_percentile(self.config.idle_gap)
+        hourly_scale = self._get_hourly_scale()
+        scale_factor = 1.0 / hourly_scale if hourly_scale > 0.05 else 20.0
+        gap_seconds = gap_minutes * 60.0 * scale_factor
+        return max(30.0, min(gap_seconds, 3600.0))
+
+    def should_take_break(self, tasks_completed: int) -> bool:
+        """Decide whether to take an extended break based on hourly fraction."""
+        hourly_scale = self._get_hourly_scale()
+        break_threshold = max(2, int(8 * hourly_scale))
+        return tasks_completed >= break_threshold and random.random() > 0.4
+
+    def get_break_duration(self) -> float:
+        """Extended idle gap for breaks (5-30 minutes)."""
+        gap_minutes = self._sample_percentile(self.config.idle_gap)
+        break_minutes = gap_minutes * random.uniform(2.0, 5.0)
+        return max(300.0, min(break_minutes * 60.0, 1800.0))
+
+    def is_active_hour(self) -> bool:
+        return self._get_hourly_scale() >= 0.5
+
+    def get_activity_level(self) -> str:
+        scale = self._get_hourly_scale()
+        if scale < 0.3:
+            return "minimal"
+        elif scale < 0.5:
+            return "low"
+        elif scale < 0.7:
+            return "moderate"
+        elif scale < 0.9:
+            return "high"
+        else:
+            return "peak"
+
+    def record_activity(self) -> None:
+        self._last_activity_time = time.time()
+
+    def time_since_last_activity(self) -> Optional[float]:
+        if self._last_activity_time is None:
+            return None
+        return time.time() - self._last_activity_time
+
+
+def load_calibration_profile(dataset: str) -> CalibratedTimingConfig:
+    """Load a CalibratedTimingConfig from a bundled profile JSON.
+
+    Args:
+        dataset: One of "summer24", "fall24", "spring25"
+    """
+    from common.timing.profiles import load_profile
+
+    profile = load_profile(dataset)
+    burst = profile["burst_characteristics"]
+
+    return CalibratedTimingConfig(
+        dataset=dataset,
+        hourly_fractions=profile["hourly_distribution"]["mean_fraction"],
+        burst_duration=burst["burst_duration_minutes"]["percentiles"],
+        idle_gap=burst["idle_gap_minutes"]["percentiles"],
+        connections_per_burst=burst["connections_per_burst"]["percentiles"],
+    )

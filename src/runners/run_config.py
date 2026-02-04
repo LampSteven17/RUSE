@@ -3,203 +3,210 @@ Configuration loader for SUP runners.
 
 Maps configuration keys to brain/content/model combinations.
 
-SIMPLIFIED ARCHITECTURE (v2):
-- Removed "mechanics" concept (redundant with brain)
-- Content augmentation only applies to MCHP brain (for text generation)
-- BrowserUse and SmolAgents don't need content augmentation (LLM handles everything)
+ARCHITECTURE: Brain + Content (MCHP only) + Model + Calibration
 
-NAMING SCHEME:
-[Brain][Version][Variant].[Model]
+NAMING SCHEME (exp-3):
+[Brain][Version].[Model]
 
 Brain:    M = MCHP, B = BrowserUse, S = SmolAgents
-          MC = MCHP CPU, BC = BrowserUse CPU, SC = SmolAgents CPU
-Version:  1 = Baseline, 2 = PHASE timing
-Variant:  a = llama, b = gemma, c = deepseek
-          d = lfm, e = ministral, f = qwen (CPU only)
+Version:  1 = baseline (no timing)
+          2 = calibrated to summer24
+          3 = calibrated to fall24
+          4 = calibrated to spring25
+Models:   llama (llama3.1:8b), gemma (gemma3:4b)
+
+MCHP has no LLM — pure scripted automation, no model suffix.
 
 Examples:
-- M1          = MCHP baseline (no LLM)
-- M1a.llama   = MCHP + llama content
-- M2c.deepseek = MCHP + deepseek + PHASE timing
-- B1b.gemma   = BrowserUse + gemma
-- S2a.llama   = SmolAgents + llama + PHASE timing
+- M1          = MCHP baseline (no timing)
+- M2          = MCHP + summer24 calibrated timing
+- B3.gemma    = BrowserUse + gemma + fall24 calibrated timing
+- S4.llama    = SmolAgents + llama + spring25 calibrated timing
 """
+import warnings
 from dataclasses import dataclass
 from typing import Optional, Literal
 
 BrainType = Literal["mchp", "browseruse", "smolagents"]
-ContentType = Literal["none", "llm"]  # Simplified: none or LLM-augmented
+ContentType = Literal["none", "llm"]
 ModelType = Literal["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"]
+
+# Version number -> calibration dataset mapping
+_VERSION_TO_CALIBRATION = {
+    1: None,
+    2: "summer24",
+    3: "fall24",
+    4: "spring25",
+}
+
+_CALIBRATION_TO_VERSION = {v: k for k, v in _VERSION_TO_CALIBRATION.items()}
 
 
 @dataclass
 class SUPConfig:
     """Configuration for a SUP agent run."""
-
     brain: BrainType
-    content: ContentType = "none"  # Only relevant for MCHP brain
-    model: ModelType = "llama"
-    phase: bool = False
-    cpu_only: bool = False  # True for BC/SC/MC series (CPU-only deployment)
+    content: ContentType = "none"
+    model: Optional[ModelType] = None
+    calibration: Optional[str] = None    # "summer24"/"fall24"/"spring25"/None
+    cpu_only: bool = False
+
+    # Kept for backward compat with exp-2 code that reads config.phase
+    @property
+    def phase(self) -> bool:
+        """Backward compat: True if any calibration is set."""
+        return self.calibration is not None
 
     @property
     def config_key(self) -> str:
-        """Generate the configuration key (e.g., M1, M1a.llama, BC1a.llama)."""
+        """Generate the configuration key (e.g., M1, B3.gemma)."""
+        version = _CALIBRATION_TO_VERSION.get(self.calibration, 1)
+
         if self.brain == "mchp":
-            if self.content == "none":
-                return "M1"
-            else:
-                # M1a/M1b/M1c = baseline, M2a/M2b/M2c = PHASE
-                # MC1a/MC2a = CPU-only variants
-                prefix = "MC" if self.cpu_only else "M"
-                base_num = "2" if self.phase else "1"
-                variant = _model_to_variant(self.model)
-                return f"{prefix}{base_num}{variant}.{self.model}"
-
+            prefix = "MC" if self.cpu_only else "M"
+            return f"{prefix}{version}"
         elif self.brain == "browseruse":
-            # B1a/B1b/B1c = baseline, B2a/B2b/B2c = PHASE
-            # BC1a/BC1b = CPU-only variants
             prefix = "BC" if self.cpu_only else "B"
-            base_num = "2" if self.phase else "1"
-            variant = _model_to_variant(self.model)
-            return f"{prefix}{base_num}{variant}.{self.model}"
-
+            return f"{prefix}{version}.{self.model}"
         elif self.brain == "smolagents":
-            # S1a/S1b/S1c = baseline, S2a/S2b/S2c = PHASE
-            # SC1a/SC1b = CPU-only variants
             prefix = "SC" if self.cpu_only else "S"
-            base_num = "2" if self.phase else "1"
-            variant = _model_to_variant(self.model)
-            return f"{prefix}{base_num}{variant}.{self.model}"
-
+            return f"{prefix}{version}.{self.model}"
         return f"{self.brain}-{self.content}-{self.model}"
 
 
-def _model_to_variant(model: ModelType) -> str:
-    """Map model name to variant letter."""
-    return {
-        "llama": "a",
-        "gemma": "b",
-        "deepseek": "c",
-        "lfm": "d",
-        "ministral": "e",
-        "qwen": "f",
-    }.get(model, "a")
+# ============================================================================
+# Primary configurations (22 for exp-3)
+# ============================================================================
 
-
-# Pre-defined configuration shortcuts
 CONFIGS = {
-    # =========================================================================
-    # M Series - MCHP brain
-    # =========================================================================
-    # Controls (CPU-only, no LLM)
-    "M0": SUPConfig(brain="mchp"),  # Upstream MITRE pyhuman (control - DO NOT MODIFY)
-    "M1": SUPConfig(brain="mchp"),  # DOLOS MCHP baseline (no LLM)
+    # === Controls ===
+    "C0": SUPConfig(brain="mchp"),
+    "M0": SUPConfig(brain="mchp"),
 
-    # With LLM content (GPU recommended)
-    "M1a.llama": SUPConfig(brain="mchp", content="llm", model="llama"),
-    "M1b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma"),
-    "M1c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek"),
+    # === MCHP (no LLM, no model) ===
+    "M1": SUPConfig(brain="mchp"),
+    "M2": SUPConfig(brain="mchp", calibration="summer24"),
+    "M3": SUPConfig(brain="mchp", calibration="fall24"),
+    "M4": SUPConfig(brain="mchp", calibration="spring25"),
 
-    # PHASE timing enabled
-    "M2a.llama": SUPConfig(brain="mchp", content="llm", model="llama", phase=True),
-    "M2b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma", phase=True),
-    "M2c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek", phase=True),
+    # === BrowserUse ===
+    "B1.llama": SUPConfig(brain="browseruse", model="llama"),
+    "B1.gemma": SUPConfig(brain="browseruse", model="gemma"),
+    "B2.llama": SUPConfig(brain="browseruse", model="llama", calibration="summer24"),
+    "B2.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="summer24"),
+    "B3.llama": SUPConfig(brain="browseruse", model="llama", calibration="fall24"),
+    "B3.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="fall24"),
+    "B4.llama": SUPConfig(brain="browseruse", model="llama", calibration="spring25"),
+    "B4.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="spring25"),
 
-    # =========================================================================
-    # MC Series - MCHP brain (CPU-only)
-    # =========================================================================
-    # Baseline (no PHASE timing)
-    "MC1a.llama": SUPConfig(brain="mchp", content="llm", model="llama", cpu_only=True),
-    "MC1b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma", cpu_only=True),
-    "MC1c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek", cpu_only=True),
-    "MC1d.lfm": SUPConfig(brain="mchp", content="llm", model="lfm", cpu_only=True),
-    "MC1e.ministral": SUPConfig(brain="mchp", content="llm", model="ministral", cpu_only=True),
-    "MC1f.qwen": SUPConfig(brain="mchp", content="llm", model="qwen", cpu_only=True),
+    # === SmolAgents ===
+    "S1.llama": SUPConfig(brain="smolagents", model="llama"),
+    "S1.gemma": SUPConfig(brain="smolagents", model="gemma"),
+    "S2.llama": SUPConfig(brain="smolagents", model="llama", calibration="summer24"),
+    "S2.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="summer24"),
+    "S3.llama": SUPConfig(brain="smolagents", model="llama", calibration="fall24"),
+    "S3.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="fall24"),
+    "S4.llama": SUPConfig(brain="smolagents", model="llama", calibration="spring25"),
+    "S4.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="spring25"),
+}
 
-    # PHASE timing enabled
-    "MC2a.llama": SUPConfig(brain="mchp", content="llm", model="llama", phase=True, cpu_only=True),
-    "MC2b.gemma": SUPConfig(brain="mchp", content="llm", model="gemma", phase=True, cpu_only=True),
-    "MC2c.deepseek": SUPConfig(brain="mchp", content="llm", model="deepseek", phase=True, cpu_only=True),
-    "MC2d.lfm": SUPConfig(brain="mchp", content="llm", model="lfm", phase=True, cpu_only=True),
-    "MC2e.ministral": SUPConfig(brain="mchp", content="llm", model="ministral", phase=True, cpu_only=True),
-    "MC2f.qwen": SUPConfig(brain="mchp", content="llm", model="qwen", phase=True, cpu_only=True),
+# ============================================================================
+# Deprecated aliases (exp-2 backward compat)
+# ============================================================================
 
-    # =========================================================================
-    # B Series - BrowserUse brain (GPU)
-    # =========================================================================
-    # Baseline (no PHASE timing)
-    "B1a.llama": SUPConfig(brain="browseruse", model="llama"),
-    "B1b.gemma": SUPConfig(brain="browseruse", model="gemma"),
-    "B1c.deepseek": SUPConfig(brain="browseruse", model="deepseek"),
+_ALIASES = {
+    # MCHP exp-2 keys -> exp-3 (MCHP has no LLM now, map to base M configs)
+    "M1a.llama": "M1",
+    "M1b.gemma": "M1",
+    "M1c.deepseek": "M1",
+    "M2a.llama": "M2",
+    "M2b.gemma": "M2",
+    "M2c.deepseek": "M2",
 
-    # PHASE timing enabled
-    "B2a.llama": SUPConfig(brain="browseruse", model="llama", phase=True),
-    "B2b.gemma": SUPConfig(brain="browseruse", model="gemma", phase=True),
-    "B2c.deepseek": SUPConfig(brain="browseruse", model="deepseek", phase=True),
+    # BrowserUse exp-2 keys -> exp-3 (drop variant letter, drop deepseek)
+    "B1a.llama": "B1.llama",
+    "B1b.gemma": "B1.gemma",
+    "B1c.deepseek": "B1.llama",
+    "B2a.llama": "B2.llama",
+    "B2b.gemma": "B2.gemma",
+    "B2c.deepseek": "B2.llama",
 
-    # =========================================================================
-    # BC Series - BrowserUse brain (CPU-only)
-    # =========================================================================
-    "BC1a.llama": SUPConfig(brain="browseruse", model="llama", cpu_only=True),
-    "BC1b.gemma": SUPConfig(brain="browseruse", model="gemma", cpu_only=True),
-    "BC1c.deepseek": SUPConfig(brain="browseruse", model="deepseek", cpu_only=True),
-    "BC1d.lfm": SUPConfig(brain="browseruse", model="lfm", cpu_only=True),
-    "BC1e.ministral": SUPConfig(brain="browseruse", model="ministral", cpu_only=True),
-    "BC1f.qwen": SUPConfig(brain="browseruse", model="qwen", cpu_only=True),
+    # SmolAgents exp-2 keys -> exp-3 (drop variant letter, drop deepseek)
+    "S1a.llama": "S1.llama",
+    "S1b.gemma": "S1.gemma",
+    "S1c.deepseek": "S1.llama",
+    "S2a.llama": "S2.llama",
+    "S2b.gemma": "S2.gemma",
+    "S2c.deepseek": "S2.llama",
 
-    # =========================================================================
-    # S Series - SmolAgents brain (GPU)
-    # =========================================================================
-    # Baseline (no PHASE timing)
-    "S1a.llama": SUPConfig(brain="smolagents", model="llama"),
-    "S1b.gemma": SUPConfig(brain="smolagents", model="gemma"),
-    "S1c.deepseek": SUPConfig(brain="smolagents", model="deepseek"),
-
-    # PHASE timing enabled
-    "S2a.llama": SUPConfig(brain="smolagents", model="llama", phase=True),
-    "S2b.gemma": SUPConfig(brain="smolagents", model="gemma", phase=True),
-    "S2c.deepseek": SUPConfig(brain="smolagents", model="deepseek", phase=True),
-
-    # =========================================================================
-    # SC Series - SmolAgents brain (CPU-only)
-    # =========================================================================
-    "SC1a.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True),
-    "SC1b.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True),
-    "SC1c.deepseek": SUPConfig(brain="smolagents", model="deepseek", cpu_only=True),
-    "SC1d.lfm": SUPConfig(brain="smolagents", model="lfm", cpu_only=True),
-    "SC1e.ministral": SUPConfig(brain="smolagents", model="ministral", cpu_only=True),
-    "SC1f.qwen": SUPConfig(brain="smolagents", model="qwen", cpu_only=True),
-
-    # =========================================================================
-    # C Series - Control (bare VM)
-    # =========================================================================
-    "C0": SUPConfig(brain="mchp"),  # Bare Ubuntu VM (no software installed)
+    # CPU variants -> map to base configs (no CPU configs in exp-3)
+    "MC1a.llama": "M1",
+    "MC1b.gemma": "M1",
+    "MC1c.deepseek": "M1",
+    "MC1d.lfm": "M1",
+    "MC1e.ministral": "M1",
+    "MC1f.qwen": "M1",
+    "MC2a.llama": "M2",
+    "MC2b.gemma": "M2",
+    "MC2c.deepseek": "M2",
+    "MC2d.lfm": "M2",
+    "MC2e.ministral": "M2",
+    "MC2f.qwen": "M2",
+    "BC1a.llama": "B1.llama",
+    "BC1b.gemma": "B1.gemma",
+    "BC1c.deepseek": "B1.llama",
+    "BC1d.lfm": "B1.llama",
+    "BC1e.ministral": "B1.llama",
+    "BC1f.qwen": "B1.llama",
+    "SC1a.llama": "S1.llama",
+    "SC1b.gemma": "S1.gemma",
+    "SC1c.deepseek": "S1.llama",
+    "SC1d.lfm": "S1.llama",
+    "SC1e.ministral": "S1.llama",
+    "SC1f.qwen": "S1.llama",
 }
 
 
 def get_config(key: str) -> Optional[SUPConfig]:
-    """Get a pre-defined configuration by key."""
-    return CONFIGS.get(key)
+    """Look up a config by key, checking aliases with deprecation warning."""
+    if key in CONFIGS:
+        return CONFIGS[key]
+
+    if key in _ALIASES:
+        target = _ALIASES[key]
+        warnings.warn(
+            f"Config key '{key}' is deprecated, use '{target}' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return CONFIGS[target]
+
+    return None
 
 
 def list_configs() -> list:
-    """List all available configuration keys."""
+    """List all primary config keys (not aliases)."""
     return list(CONFIGS.keys())
 
 
-def build_config(
-    brain: BrainType,
-    content: ContentType = "none",
-    model: ModelType = "llama",
-    phase: bool = False,
-    cpu_only: bool = False,
-) -> SUPConfig:
-    """Build a configuration from individual parameters."""
-    return SUPConfig(
-        brain=brain,
-        content=content,
-        model=model,
-        phase=phase,
-        cpu_only=cpu_only,
-    )
+def list_aliases() -> dict:
+    """List all deprecated alias mappings."""
+    return dict(_ALIASES)
+
+
+def build_config(brain: BrainType, content: ContentType = "none",
+                 model: Optional[ModelType] = None,
+                 calibration: Optional[str] = None,
+                 cpu_only: bool = False,
+                 phase: bool = False) -> SUPConfig:
+    """Build a config from individual parameters.
+
+    Args:
+        phase: Backward compat flag. If True and calibration is None,
+               defaults to calibration="summer24" (exp-2 behavior).
+    """
+    # Backward compat: --phase without --calibration means summer24
+    if phase and calibration is None:
+        calibration = "summer24"
+    return SUPConfig(brain=brain, content=content, model=model,
+                     calibration=calibration, cpu_only=cpu_only)
