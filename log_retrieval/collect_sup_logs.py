@@ -104,8 +104,8 @@ EXPERIMENTS = {
     ),
     "exp-3": ExperimentConfig(
         name="exp-3",
-        description="Calibrated PHASE timing (22 VMs, semester profiles)",
-        vm_count=22,
+        description="Calibrated PHASE timing (25 VMs, semester profiles)",
+        vm_count=25,
         behaviors=[
             # Controls
             "C0", "M0",
@@ -731,7 +731,8 @@ Examples:
     parser.add_argument('--parallel', type=int, default=4, help='Parallel SSH connections')
     parser.add_argument('--skip-load', action='store_true', help='Skip DuckDB loading')
     parser.add_argument('--db-name', type=str, default=None, help='Custom database name')
-    parser.add_argument('--clean', action='store_true', help='Delete existing database first')
+    parser.add_argument('--clean', action='store_true', default=True, help='Delete and rebuild database (default)')
+    parser.add_argument('--append', action='store_true', help='Append to existing database instead of rebuilding')
     args = parser.parse_args()
 
     if args.list:
@@ -806,14 +807,18 @@ Examples:
     db_path = BASE_OUTPUT_DIR / db_name
     manifest_path = BASE_OUTPUT_DIR / db_name.replace('.duckdb', '_manifest.json')
 
+    # --append disables the default --clean behavior
+    clean = args.clean and not args.append
+
     print(f"\nDatabase: {db_path}")
     if db_path.exists():
-        print(f"  Status: EXISTS (will append)")
-        if not args.clean:
-            print(f"  Tip: Use --clean to rebuild from scratch")
+        if clean:
+            print(f"  Status: EXISTS (will rebuild)")
+        else:
+            print(f"  Status: EXISTS (will append)")
 
-    # Handle --clean
-    if args.clean and not args.dry_run:
+    # Handle --clean (default)
+    if clean and not args.dry_run:
         if db_path.exists():
             print(f"\n[--clean] Deleting: {db_path}")
             db_path.unlink()
