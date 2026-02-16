@@ -10,7 +10,7 @@
 #             d = lfm, e = ministral, f = qwen (CPU only)
 #
 # Comparison Goals:
-#   - M0 vs M1: Upstream MITRE vs DOLOS MCHP
+#   - M0 vs M1: Upstream MITRE vs RUSE MCHP
 #   - M1a vs M2a: Baseline content vs PHASE timing
 #   - B1 vs B2: Baseline BrowserUse vs PHASE timing
 #   - S1 vs S2: Baseline SmolAgents vs PHASE timing
@@ -55,7 +55,7 @@ deployments:
     count: 1
 
   # ─────────────────────────────────────────────────────────────────
-  # BASELINE: M1 (DOLOS MCHP - no LLM)
+  # BASELINE: M1 (RUSE MCHP - no LLM)
   # ─────────────────────────────────────────────────────────────────
   - behavior: M1
     flavor: v1.14vcpu.28g

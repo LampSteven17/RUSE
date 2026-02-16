@@ -35,8 +35,8 @@ except ImportError as e:
 # ============================================================================
 
 BASE_OUTPUT_DIR = Path("/mnt/AXES2U1/SUP_LOGS")
-DEPLOYMENTS_DIR = Path("/home/ubuntu/DOLOS-DEPLOY/deployments")
-REMOTE_LOG_BASE = "/opt/dolos-deploy/deployed_sups"
+DEPLOYMENTS_DIR = Path("/home/ubuntu/RUSE/deployments")
+REMOTE_LOG_BASE = "/opt/ruse/deployed_sups"
 SSH_OPTIONS = "-o ProxyJump=axes -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes"
 SSH_USER = "ubuntu"
 
@@ -44,7 +44,7 @@ SSH_USER = "ubuntu"
 # ============================================================================
 # EXPERIMENT CONFIGURATIONS
 # ============================================================================
-# Each experiment defines a DOLOS deployment to collect logs from.
+# Each experiment defines a RUSE deployment to collect logs from.
 # Usage: python log_retrieval/collect_sup_logs.py exp-3
 #        python log_retrieval/collect_sup_logs.py --experiments exp-2 exp-3
 

@@ -1,1 +1,1 @@
-# Ansible callback plugins for DOLOS deployment monitoring
+# Ansible callback plugins for RUSE deployment monitoring

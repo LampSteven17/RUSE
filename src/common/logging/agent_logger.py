@@ -1,5 +1,5 @@
 """
-DOLOS-DEPLOY Agent Logger
+RUSE Agent Logger
 
 Unified logging framework for all agent types with timestamped event tracking
 for experiment analysis. Outputs JSON-Lines format for easy parsing.
@@ -16,8 +16,10 @@ Usage:
     logger.session_end()
 """
 
+import atexit
 import json
 import os
+import signal
 import uuid
 import time
 from contextlib import contextmanager
@@ -97,7 +99,7 @@ class LogEvent:
 
 class AgentLogger:
     """
-    Unified logging framework for DOLOS-DEPLOY agents.
+    Unified logging framework for RUSE agents.
 
     Outputs JSON-Lines format with one event per line for easy parsing
     and post-hoc analysis of agent behavior.
@@ -131,17 +133,21 @@ class AgentLogger:
         # Session outcome tracking
         self._session_outcome: Optional[str] = None  # "success" or "fail"
 
+        # Shutdown guard: ensures session_end is written exactly once
+        self._session_ended = False
+        self._shutdown_registered = False
+
         # Set up log directory
         if log_dir:
             self.log_dir = Path(log_dir)
         else:
-            # Check for DOLOS_LOG_DIR environment variable first (set by deployment)
-            env_log_dir = os.environ.get("DOLOS_LOG_DIR")
+            # Check for RUSE_LOG_DIR environment variable first (set by deployment)
+            env_log_dir = os.environ.get("RUSE_LOG_DIR")
             if env_log_dir:
                 self.log_dir = Path(env_log_dir)
             else:
-                # Default: Use /opt/dolos-deploy if it exists (deployed), otherwise relative
-                deployed_base = Path("/opt/dolos-deploy/deployed_sups")
+                # Default: Use /opt/ruse if it exists (deployed), otherwise relative
+                deployed_base = Path("/opt/ruse/deployed_sups")
                 if deployed_base.exists():
                     self.log_dir = deployed_base / agent_type / "logs"
                 else:
@@ -197,12 +203,18 @@ class AgentLogger:
     def session_start(self, config: Optional[Dict[str, Any]] = None) -> LogEvent:
         """Log session start event."""
         self._session_start_time = time.time()
+        self._session_ended = False
         details = {"config": config} if config else {}
         details["log_file"] = str(self.log_file)
-        return self._log(EventType.SESSION_START, details=details)
+        event = self._log(EventType.SESSION_START, details=details)
+        self._register_shutdown_handlers()
+        return event
 
     def session_end(self, summary: Optional[Dict[str, Any]] = None) -> LogEvent:
-        """Log session end event."""
+        """Log session end event. Guarded against double-call."""
+        if self._session_ended:
+            return None
+        self._session_ended = True
         details = summary or {}
         if self._session_start_time:
             details["total_duration_ms"] = int((time.time() - self._session_start_time) * 1000)
@@ -638,6 +650,56 @@ class AgentLogger:
         return self._log(EventType.INFO, details=info_details)
 
     # =========================================================================
+    # Shutdown Handling
+    # =========================================================================
+
+    def _register_shutdown_handlers(self) -> None:
+        """Register atexit and signal handlers to ensure session_end on termination."""
+        if self._shutdown_registered:
+            return
+        self._shutdown_registered = True
+
+        # Save original signal handlers so we can restore them
+        self._orig_sigterm = signal.getsignal(signal.SIGTERM)
+        self._orig_sigint = signal.getsignal(signal.SIGINT)
+
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        signal.signal(signal.SIGINT, self._signal_handler)
+
+        atexit.register(self._atexit_handler)
+
+    def _signal_handler(self, signum: int, frame) -> None:
+        """Handle SIGTERM/SIGINT: write session_end then re-raise."""
+        sig_name = signal.Signals(signum).name
+        if not self._session_ended:
+            if self._session_outcome is None:
+                self.session_fail(
+                    message=f"Session terminated by {sig_name}",
+                    error=sig_name,
+                )
+            self.session_end()
+        self.close()
+
+        # Restore original handler and re-raise so the process exits
+        # with the correct signal exit code
+        if signum == signal.SIGTERM:
+            signal.signal(signal.SIGTERM, self._orig_sigterm or signal.SIG_DFL)
+        elif signum == signal.SIGINT:
+            signal.signal(signal.SIGINT, self._orig_sigint or signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    def _atexit_handler(self) -> None:
+        """atexit fallback: write session_end if not already done."""
+        if not self._session_ended and self._session_start_time:
+            if self._session_outcome is None:
+                self.session_fail(
+                    message="Session terminated unexpectedly (atexit)",
+                    error="unexpected_exit",
+                )
+            self.session_end()
+        self.close()
+
+    # =========================================================================
     # Utility Methods
     # =========================================================================
 
@@ -652,11 +714,12 @@ class AgentLogger:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Context manager exit."""
-        if exc_type is not None:
+        if exc_type is not None and self._session_outcome is None:
             self.session_fail(
                 message=f"Session ended with exception: {exc_val}",
                 exception=exc_val
             )
+        self.session_end()
         self.close()
 
     def get_log_path(self) -> Path:

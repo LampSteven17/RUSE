@@ -30,10 +30,10 @@
     deployment_dir: "{{ playbook_dir }}"
     config_file: "{{ deployment_dir }}/config.yaml"
 
-    # Git repo for DOLOS-DEPLOY
-    dolos_repo: "https://github.com/LampSteven17/DOLOS-DEPLOY.git"
-    dolos_branch: "main"
-    dolos_path: "/opt/dolos-deploy"
+    # Git repo for RUSE
+    ruse_repo: "https://github.com/LampSteven17/RUSE.git"
+    ruse_branch: "main"
+    ruse_path: "/opt/ruse"
 
   pre_tasks:
     - name: Wait for SSH to become available
@@ -72,21 +72,21 @@
           - wget
         state: present
 
-    - name: Clone DOLOS-DEPLOY repo
+    - name: Clone RUSE repo
       git:
-        repo: "{{ dolos_repo }}"
-        dest: "{{ dolos_path }}"
-        version: "{{ dolos_branch }}"
+        repo: "{{ ruse_repo }}"
+        dest: "{{ ruse_path }}"
+        version: "{{ ruse_branch }}"
         force: yes
 
     - name: Make INSTALL_SUP.sh executable
       file:
-        path: "{{ dolos_path }}/INSTALL_SUP.sh"
+        path: "{{ ruse_path }}/INSTALL_SUP.sh"
         mode: '0755'
 
     - name: Run INSTALL_SUP.sh Stage 1 (system deps, drivers)
       shell: |
-        cd {{ dolos_path }}
+        cd {{ ruse_path }}
         ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=1
       args:
         executable: /bin/bash
@@ -101,15 +101,24 @@
         msg: "Rebooting for NVIDIA driver to load"
       when: stage1_result.rc == 100
 
+    - name: Track Stage 1 outcome
+      set_fact:
+        install_stage1: "OK"
+        install_reboot: "{{ 'YES' if stage1_result.rc == 100 else 'skip' }}"
+
     - name: Run INSTALL_SUP.sh Stage 2 (ollama, python, services)
       shell: |
-        cd {{ dolos_path }}
+        cd {{ ruse_path }}
         ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
       args:
         executable: /bin/bash
       async: 1800
       poll: 30
       register: stage2_result
+
+    - name: Track Stage 2 outcome
+      set_fact:
+        install_stage2: "OK"
 
     - name: Display install result
       debug:
@@ -121,44 +130,70 @@
       register: service_status
       changed_when: false
 
+    - name: Track service status
+      set_fact:
+        install_service: "{{ service_status.stdout | default('none') | trim }}"
+
 - name: Deployment Summary
   hosts: localhost
   gather_facts: false
-
   vars:
     deployment_dir: "{{ playbook_dir }}"
-
+    _output_dir: "{{ run_dir | default(deployment_dir) }}"
   tasks:
-    - name: Display PLAY RECAP legend
+    - name: Display deployment matrix
+      vars:
+        matrix_hosts: "{{ groups['sup_hosts'] | sort }}"
       pause:
         seconds: 0
         prompt: |
 
-          ┌───────────────────────────────────────────────────────────────────┐
-          │  PLAY RECAP Legend (number = count of Ansible tasks):             │
-          │                                                                   │
-          │    ok=13     → 13 tasks ran successfully                          │
-          │    changed=5 → 5 tasks made changes (installed packages, etc.)    │
-          │    skipped=1 → 1 task skipped (e.g. no reboot needed, no GPU)     │
-          │    failed=0  → 0 tasks failed (this is good!)                     │
-          │                                                                   │
-          │  If failed=0 for all hosts, deployment was successful!            │
-          └───────────────────────────────────────────────────────────────────┘
+          ═══════════════════════════════════════════════════════════════════════════════
+            DEPLOYMENT MATRIX  ({{ matrix_hosts | length }} hosts)
+          ═══════════════════════════════════════════════════════════════════════════════
+            {{ "%-24s %-14s %-8s %-8s %-8s %s" | format("HOST", "CONFIG", "STAGE1", "REBOOT", "STAGE2", "SERVICE") }}
+            {{ "─" * 74 }}
+          {% for host in matrix_hosts %}
+          {% set hv = hostvars[host] %}
+          {% set config = hv.sup_behavior | default('?') %}
+          {% set is_ctl = config in ['C0', 'M0'] %}
+          {% set s1 = hv.install_stage1 | default('FAIL') %}
+          {% set rb = hv.install_reboot | default('--') %}
+          {% set s2 = hv.install_stage2 | default('FAIL') %}
+          {% set svc = 'n/a' if is_ctl else (hv.install_service | default('FAIL')) %}
+            {{ "%-24s %-14s %-8s %-8s %-8s %s" | format(host, config, s1, rb, s2, svc) }}
+          {% endfor %}
+            {{ "─" * 74 }}
+          {% set ns = namespace(ok=0, fail=0) %}
+          {% for host in matrix_hosts %}
+          {% if hostvars[host].install_stage2 | default('') == 'OK' %}
+          {% set ns.ok = ns.ok + 1 %}
+          {% else %}
+          {% set ns.fail = ns.fail + 1 %}
+          {% endif %}
+          {% endfor %}
+            RESULT: {{ ns.ok }} installed / {{ ns.fail }} failed
+          ═══════════════════════════════════════════════════════════════════════════════
+
+          STAGE1  = System deps + GPU drivers (INSTALL_SUP.sh --stage=1)
+          REBOOT  = NVIDIA driver reload (YES = rebooted, skip = not needed)
+          STAGE2  = Ollama + Python + services (INSTALL_SUP.sh --stage=2)
+          SERVICE = systemd service status after install
 
     - name: Check for SSH config file
       stat:
-        path: "{{ deployment_dir }}/ssh_config_snippet.txt"
+        path: "{{ _output_dir }}/ssh_config_snippet.txt"
       register: ssh_config_file
 
     - name: Read SSH config
-      command: cat "{{ deployment_dir }}/ssh_config_snippet.txt"
+      command: cat "{{ _output_dir }}/ssh_config_snippet.txt"
       register: ssh_config_content
       when: ssh_config_file.stat.exists
       changed_when: false
 
     - name: Display SSH Config
       pause:
-        seconds: 1
+        seconds: 0
         prompt: |
 
           ═══════════════════════════════════════════════════════════════
@@ -166,6 +201,6 @@
           ═══════════════════════════════════════════════════════════════
           {{ ssh_config_content.stdout }}
           ═══════════════════════════════════════════════════════════════
-            Saved to: {{ deployment_dir }}/ssh_config_snippet.txt
+            Saved to: {{ _output_dir }}/ssh_config_snippet.txt
           ═══════════════════════════════════════════════════════════════
       when: ssh_config_file.stat.exists

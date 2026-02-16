@@ -39,9 +39,9 @@ usage() {
     echo "  --help            Display this help message"
     echo ""
     echo "Examples:"
-    echo "  $0 --agent=MCHP --path=/home/user/DOLOS-DEPLOY"
-    echo "  $0 --agent=SMOL --path=/home/user/DOLOS-DEPLOY"
-    echo "  $0 --agent=BU --path=/home/user/DOLOS-DEPLOY"
+    echo "  $0 --agent=MCHP --path=/home/user/RUSE"
+    echo "  $0 --agent=SMOL --path=/home/user/RUSE"
+    echo "  $0 --agent=BU --path=/home/user/RUSE"
 }
 
 # Parse arguments

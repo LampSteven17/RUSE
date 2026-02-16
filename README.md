@@ -1,20 +1,27 @@
 ```
- _ .-') _                                        .-')
-( (  OO) )                                      ( OO ).
- \     .'_  .-'),-----.  ,--.      .-'),-----. (_)---\_)
- ,`'--..._)( OO'  .-.  ' |  |.-') ( OO'  .-.  '/    _ |
- |  |  \  '/   |  | |  | |  | OO )/   |  | |  |\  :` `.
- |  |   ' |\_) |  |\|  | |  |`-' |\_) |  |\|  | '..`''.)
- |  |   / :  \ |  | |  |(|  '---.'  \ |  | |  |.-._)   \
- |  '--'  /   `'  '-'  ' |      |    `'  '-'  '\       /
- `-------'      `-----'  `------'      `-----'  `-----'
+RRRRRRRRRRRRRRRRR    UUUUUUUU     UUUUUUUU    SSSSSSSSSSSSSSS  EEEEEEEEEEEEEEEEEEEEEE
+R::::::::::::::::R   U::::::U     U::::::U  SS:::::::::::::::S E::::::::::::::::::::E
+R::::::RRRRRR:::::R  U::::::U     U::::::U S:::::SSSSSS::::::S E::::::::::::::::::::E
+RR:::::R     R:::::R UU:::::U     U:::::UU S:::::S     SSSSSSS EE::::::EEEEEEEEE::::E
+  R::::R     R:::::R  U:::::U     U:::::U  S:::::S               E:::::E       EEEEEE
+  R::::R     R:::::R  U:::::D     D:::::U  S:::::S               E:::::E
+  R::::RRRRRR:::::R   U:::::D     D:::::U   S::::SSSS            E::::::EEEEEEEEEE
+  R:::::::::::::RR    U:::::D     D:::::U    SS::::::SSSSS       E:::::::::::::::E
+  R::::RRRRRR:::::R   U:::::D     D:::::U      SSS::::::::SS     E:::::::::::::::E
+  R::::R     R:::::R  U:::::D     D:::::U         SSSSSS::::S    E::::::EEEEEEEEEE
+  R::::R     R:::::R  U:::::D     D:::::U              S:::::S   E:::::E
+  R::::R     R:::::R  U::::::U   U::::::U              S:::::S   E:::::E       EEEEEE
+RR:::::R     R:::::R  U:::::::UUU:::::::U  SSSSSSS     S:::::S EE::::::EEEEEEEE:::::E
+R::::::R     R:::::R   UU:::::::::::::UU   S::::::SSSSSS:::::S E::::::::::::::::::::E
+R::::::R     R:::::R     UU:::::::::UU     S:::::::::::::::SS  E::::::::::::::::::::E
+RRRRRRRR     RRRRRRR       UUUUUUUUU       SSSSSSSSSSSSSSS    EEEEEEEEEEEEEEEEEEEEEE
 ```
 
-# dolos-engine
+# RUSE — Realistic User Simulation Engine
 
-**Deployment system for Simulated User Profile (SUP) agents**
+**Deployment system for Synthetic User Persona (SUP) agents**
 
-dolos-engine provides a unified installation and management system for agents that simulate human-like computer behavior. Whether you need scripted automation, LLM-powered browsing, or hybrid approaches combining both, DOLOS has you covered.
+RUSE provides a unified installation and management system for agents that simulate human-like computer behavior. Whether you need scripted automation, LLM-powered browsing, or hybrid approaches combining both, RUSE has you covered.
 
 ---
 
@@ -22,8 +29,8 @@ dolos-engine provides a unified installation and management system for agents th
 
 ```bash
 # Clone the repository
-git clone https://github.com/LampSteven17/DOLOS-DEPLOY.git
-cd DOLOS-DEPLOY
+git clone https://github.com/LampSteven17/RUSE.git
+cd RUSE
 
 # Install using config keys (creates systemd service)
 ./INSTALL_SUP.sh --M1                      # Pure MCHP (no LLM)
@@ -201,7 +208,7 @@ The codebase uses a **Brain → Augmentations → Model** architecture:
 ## Directory Structure
 
 ```
-DOLOS-DEPLOY/
+RUSE/
 ├── INSTALL_SUP.sh              # Unified installer
 ├── README.md                   # This file
 ├── CLAUDE.md                   # Claude Code guidance
@@ -319,9 +326,9 @@ Time-of-day aware activity patterns:
 Validate an installation:
 
 ```bash
-./src/install_scripts/test_agent.sh --agent=MCHP --path=/path/to/DOLOS-DEPLOY
-./src/install_scripts/test_agent.sh --agent=SMOL --path=/path/to/DOLOS-DEPLOY
-./src/install_scripts/test_agent.sh --agent=BU --path=/path/to/DOLOS-DEPLOY
+./src/install_scripts/test_agent.sh --agent=MCHP --path=/path/to/RUSE
+./src/install_scripts/test_agent.sh --agent=SMOL --path=/path/to/RUSE
+./src/install_scripts/test_agent.sh --agent=BU --path=/path/to/RUSE
 ```
 
 ---
