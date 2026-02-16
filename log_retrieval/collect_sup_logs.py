@@ -21,13 +21,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import duckdb
-    import pandas as pd
 except ImportError as e:
-    print(f"ERROR: Missing dependency: {e}. Run: pip install duckdb pandas")
+    print(f"ERROR: Missing dependency: {e}. Run: pip install duckdb")
     sys.exit(1)
 
 
@@ -105,6 +104,23 @@ EXPERIMENTS = {
     "exp-3": ExperimentConfig(
         name="exp-3",
         description="Calibrated PHASE timing (25 VMs, semester profiles)",
+        vm_count=25,
+        behaviors=[
+            # Controls
+            "C0", "M0",
+            # MCHP (no LLM)
+            "M1", "M2", "M3", "M4",
+            # BrowserUse
+            "B1.llama", "B1.gemma", "B2.llama", "B2.gemma",
+            "B3.llama", "B3.gemma", "B4.llama", "B4.gemma",
+            # SmolAgents
+            "S1.llama", "S1.gemma", "S2.llama", "S2.gemma",
+            "S3.llama", "S3.gemma", "S4.llama", "S4.gemma",
+        ],
+    ),
+    "exp-4": ExperimentConfig(
+        name="exp-4",
+        description="PHASE feedback engine evaluation (25 VMs, feedback configs)",
         vm_count=25,
         behaviors=[
             # Controls
@@ -213,12 +229,27 @@ CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
 # ============================================================================
 
 def discover_experiments(deployments_dir: Path) -> List[str]:
-    """Find all experiments with inventory.ini files."""
+    """Find all experiments with inventory.ini files.
+
+    Discovers both legacy (root inventory.ini) and multi-run (runs/<id>/inventory.ini)
+    layouts. Multi-run experiments are returned as 'config/run_id'.
+    """
     experiments = []
     for path in deployments_dir.iterdir():
-        if path.is_dir() and (path / "inventory.ini").exists():
-            if path.name not in ("playbooks",):
-                experiments.append(path.name)
+        if not path.is_dir() or path.name in ("playbooks", "lib", "logs"):
+            continue
+
+        # Check for legacy root inventory
+        if (path / "inventory.ini").exists():
+            experiments.append(path.name)
+
+        # Check for multi-run inventories in runs/ subdirs
+        runs_dir = path / "runs"
+        if runs_dir.is_dir():
+            for run_dir in sorted(runs_dir.iterdir()):
+                if run_dir.is_dir() and (run_dir / "inventory.ini").exists():
+                    experiments.append(f"{path.name}/{run_dir.name}")
+
     return sorted(experiments)
 
 
@@ -228,11 +259,20 @@ def list_experiments() -> None:
     print("\nConfigured experiments:")
     print("-" * 70)
     for key, cfg in EXPERIMENTS.items():
-        has_inventory = key in available
-        status = "READY" if has_inventory else "NO INVENTORY"
+        # Check for legacy (bare name) or multi-run (config/run_id) entries
+        matching = [a for a in available if a == key or a.startswith(f"{key}/")]
+        if matching:
+            runs_str = ", ".join(matching)
+            status = "READY"
+        else:
+            runs_str = ""
+            status = "NO INVENTORY"
         print(f"  {key:<12} {cfg.vm_count:>2} VMs  [{status:<12}]  {cfg.description}")
+        if runs_str and runs_str != key:
+            print(f"  {'':12}         runs: {runs_str}")
     # Show any discovered experiments not in EXPERIMENTS
-    extra = [e for e in available if e not in EXPERIMENTS]
+    known_prefixes = set(EXPERIMENTS.keys())
+    extra = [e for e in available if e.split("/")[0] not in known_prefixes]
     if extra:
         print(f"\n  (Also discovered: {', '.join(extra)})")
     print()
@@ -292,133 +332,63 @@ def ssh_command(ip: str, remote_cmd: str, timeout: int = 60) -> Tuple[bool, str]
         return False, str(e)
 
 
-def scp_file(ip: str, remote_path: str, local_path: Path, timeout: int = 300) -> bool:
-    """SCP a file from remote to local."""
-    cmd = f"scp {SSH_OPTIONS} {SSH_USER}@{ip}:{remote_path} {local_path}"
-    try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
 def collect_logs_from_vm(
     vm: VMInfo,
     experiment: str,
     output_dir: Path,
     dry_run: bool = False
 ) -> CollectionResult:
-    """SSH to VM and collect JSONL logs only."""
+    """Collect JSONL logs from a VM via rsync (single SSH connection)."""
     result = CollectionResult(experiment=experiment, vm=vm)
 
-    # Only look for .jsonl files (not .log systemd files)
-    remote_log_dir = f"{REMOTE_LOG_BASE}/{vm.sup_behavior}/logs"
-    list_cmd = f"ls -1 {remote_log_dir}/*.jsonl 2>/dev/null || echo ''"
-    success, output = ssh_command(vm.ip, list_cmd)
+    remote_log_dir = f"{REMOTE_LOG_BASE}/{vm.sup_behavior}/logs/"
 
-    if not success:
-        result.errors.append(f"SSH failed: {output}")
-        return result
-
-    # Parse file list - only .jsonl files
-    remote_files = [
-        f.strip() for f in output.strip().split('\n')
-        if f.strip() and f.endswith('.jsonl')
-    ]
-
-    if not remote_files:
-        result.success = True  # No logs is not an error
+    if dry_run:
+        list_cmd = f"ls -1 {remote_log_dir}*.jsonl 2>/dev/null || echo ''"
+        success, output = ssh_command(vm.ip, list_cmd)
+        if not success:
+            result.success = True  # No logs dir is not an error
+            return result
+        remote_files = [
+            f for f in output.strip().split('\n')
+            if f.strip() and f.endswith('.jsonl') and 'latest.jsonl' not in f
+        ]
+        result.files_collected = len(remote_files)
+        result.success = True
         return result
 
     # Create output directory
     vm_output_dir = output_dir / experiment / vm.hostname
-    if not dry_run:
-        vm_output_dir.mkdir(parents=True, exist_ok=True)
+    vm_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy each file
-    for remote_file in remote_files:
-        filename = Path(remote_file).name
+    # Single rsync: 1 SSH connection instead of N separate SCP calls
+    rsync_cmd = (
+        f'rsync -az '
+        f'--exclude="latest.jsonl" --include="*.jsonl" --exclude="*" '
+        f'-e "ssh {SSH_OPTIONS}" '
+        f'{SSH_USER}@{vm.ip}:{remote_log_dir} {vm_output_dir}/'
+    )
 
-        # Skip symlinks (latest.jsonl)
-        if filename == 'latest.jsonl':
-            continue
-
-        if dry_run:
-            result.files_collected += 1
-            continue
-
-        local_path = vm_output_dir / filename
-        if scp_file(vm.ip, remote_file, local_path):
-            result.files_collected += 1
+    try:
+        proc = subprocess.run(
+            rsync_cmd, shell=True, capture_output=True, text=True, timeout=300
+        )
+        if proc.returncode == 0:
+            result.files_collected = len(list(vm_output_dir.glob("*.jsonl")))
+            result.success = True
+        elif proc.returncode in (23, 24):
+            # 23=partial transfer (source dir may not exist), 24=files vanished
+            result.files_collected = len(list(vm_output_dir.glob("*.jsonl")))
+            result.success = True
         else:
-            result.errors.append(f"SCP failed: {filename}")
+            result.errors.append(f"rsync failed (rc={proc.returncode}): {proc.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        result.errors.append("rsync timeout")
+    except Exception as e:
+        result.errors.append(str(e))
 
-    result.success = len(result.errors) == 0 or result.files_collected > 0
+    result.success = result.success or result.files_collected > 0
     return result
-
-
-# ============================================================================
-# JSONL Parsing
-# ============================================================================
-
-def parse_jsonl_file(
-    file_path: Path,
-    metadata: EventMetadata
-) -> Generator[Dict[str, Any], None, None]:
-    """Parse JSONL file and yield enriched events."""
-    with open(file_path, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError as e:
-                print(f"  WARNING: {file_path.name}:{line_num}: Invalid JSON: {e}")
-                continue
-
-            # Enrich with metadata
-            event['experiment_name'] = metadata.experiment_name
-            event['vm_hostname'] = metadata.vm_hostname
-            event['vm_ip'] = metadata.vm_ip
-            event['sup_behavior'] = metadata.sup_behavior
-            event['sup_flavor'] = metadata.sup_flavor
-            event['source_file'] = metadata.source_file
-            event['collection_timestamp'] = metadata.collection_timestamp.isoformat()
-            event['line_number'] = line_num
-
-            # Extract common fields from details for indexing
-            details = event.get('details', {})
-            if isinstance(details, dict):
-                event['duration_ms'] = details.get('duration_ms')
-                event['success'] = details.get('success')
-                event['error_message'] = details.get('error') or details.get('message')
-                event['model'] = details.get('model')
-                event['action'] = details.get('action')
-                event['category'] = details.get('category')
-                event['step_name'] = details.get('step_name')
-                event['status'] = details.get('status')
-
-                # LLM-specific fields
-                tokens = details.get('tokens', {})
-                if isinstance(tokens, dict):
-                    event['input_tokens'] = tokens.get('input')
-                    event['output_tokens'] = tokens.get('output')
-                    event['total_tokens'] = tokens.get('total')
-                else:
-                    event['input_tokens'] = None
-                    event['output_tokens'] = None
-                    event['total_tokens'] = None
-                event['llm_output'] = details.get('output')
-            else:
-                # Set all extracted fields to None
-                for field in ['duration_ms', 'success', 'error_message', 'model', 'action',
-                              'category', 'step_name', 'status', 'input_tokens',
-                              'output_tokens', 'total_tokens', 'llm_output']:
-                    event[field] = None
-
-            yield event
 
 
 # ============================================================================
@@ -440,8 +410,8 @@ def load_events_to_duckdb(
     experiments: List[str],
     vm_info_map: Dict[str, VMInfo]
 ) -> int:
-    """Load JSONL events into DuckDB."""
-    collection_ts = datetime.now()
+    """Load JSONL events into DuckDB using native JSON reader."""
+    collection_ts = datetime.now().isoformat()
     total_loaded = 0
 
     # Get max existing ID
@@ -451,81 +421,92 @@ def load_events_to_duckdb(
     except Exception:
         event_id = 0
 
-    batch_size = 50000
-    rows = []
-
     for experiment in experiments:
         exp_dir = raw_dir / experiment
         if not exp_dir.exists():
             continue
 
-        for vm_dir in exp_dir.iterdir():
+        for vm_dir in sorted(exp_dir.iterdir()):
             if not vm_dir.is_dir():
+                continue
+
+            jsonl_files = sorted([
+                str(f) for f in vm_dir.glob("*.jsonl")
+                if not f.is_symlink()
+            ])
+            if not jsonl_files:
                 continue
 
             vm_key = f"{experiment}:{vm_dir.name}"
             vm = vm_info_map.get(vm_key)
+            vm_ip = (vm.ip if vm else "").replace("'", "''")
+            sup_behavior = (vm.sup_behavior if vm else "").replace("'", "''")
+            sup_flavor = (vm.sup_flavor if vm else "").replace("'", "''")
+            vm_hostname = vm_dir.name.replace("'", "''")
+            exp_escaped = experiment.replace("'", "''")
 
-            # Process JSONL files
-            for log_file in vm_dir.glob("*.jsonl"):
-                if log_file.is_symlink():
-                    continue
+            file_list_sql = ", ".join(f"'{f}'" for f in jsonl_files)
 
-                metadata = EventMetadata(
-                    experiment_name=experiment,
-                    vm_hostname=vm_dir.name,
-                    vm_ip=vm.ip if vm else "",
-                    sup_behavior=vm.sup_behavior if vm else "",
-                    sup_flavor=vm.sup_flavor if vm else "",
-                    source_file=log_file.name,
-                    collection_timestamp=collection_ts
+            query = f"""
+                INSERT INTO events
+                SELECT
+                    ROW_NUMBER() OVER () + {event_id} as id,
+                    TRY_CAST(timestamp AS TIMESTAMP) as timestamp,
+                    session_id,
+                    agent_type,
+                    event_type,
+                    workflow,
+                    details,
+                    '{exp_escaped}' as experiment_name,
+                    '{vm_hostname}' as vm_hostname,
+                    '{vm_ip}' as vm_ip,
+                    '{sup_behavior}' as sup_behavior,
+                    '{sup_flavor}' as sup_flavor,
+                    regexp_extract(filename, '[^/]+$') as source_file,
+                    '{collection_ts}'::TIMESTAMP as collection_timestamp,
+                    NULL::INTEGER as line_number,
+                    TRY_CAST(json_extract_string(details, '$.duration_ms') AS INTEGER) as duration_ms,
+                    TRY_CAST(json_extract_string(details, '$.success') AS BOOLEAN) as success,
+                    COALESCE(
+                        json_extract_string(details, '$.error'),
+                        json_extract_string(details, '$.message')
+                    ) as error_message,
+                    json_extract_string(details, '$.model') as model,
+                    json_extract_string(details, '$.action') as action,
+                    json_extract_string(details, '$.category') as category,
+                    json_extract_string(details, '$.step_name') as step_name,
+                    json_extract_string(details, '$.status') as status,
+                    TRY_CAST(json_extract_string(details, '$.tokens.input') AS INTEGER) as input_tokens,
+                    TRY_CAST(json_extract_string(details, '$.tokens.output') AS INTEGER) as output_tokens,
+                    TRY_CAST(json_extract_string(details, '$.tokens.total') AS INTEGER) as total_tokens,
+                    json_extract_string(details, '$.output') as llm_output
+                FROM read_json(
+                    [{file_list_sql}],
+                    format='newline_delimited',
+                    columns={{
+                        timestamp: 'VARCHAR',
+                        session_id: 'VARCHAR',
+                        agent_type: 'VARCHAR',
+                        event_type: 'VARCHAR',
+                        workflow: 'VARCHAR',
+                        details: 'JSON'
+                    }},
+                    filename=true,
+                    ignore_errors=true
                 )
+            """
 
-                for event in parse_jsonl_file(log_file, metadata):
-                    event_id += 1
-                    rows.append({
-                        'id': event_id,
-                        'timestamp': event.get('timestamp'),
-                        'session_id': event.get('session_id'),
-                        'agent_type': event.get('agent_type'),
-                        'event_type': event.get('event_type'),
-                        'workflow': event.get('workflow'),
-                        'details': json.dumps(event.get('details')) if event.get('details') else None,
-                        'experiment_name': event.get('experiment_name'),
-                        'vm_hostname': event.get('vm_hostname'),
-                        'vm_ip': event.get('vm_ip'),
-                        'sup_behavior': event.get('sup_behavior'),
-                        'sup_flavor': event.get('sup_flavor'),
-                        'source_file': event.get('source_file'),
-                        'collection_timestamp': event.get('collection_timestamp'),
-                        'line_number': event.get('line_number'),
-                        'duration_ms': event.get('duration_ms'),
-                        'success': event.get('success'),
-                        'error_message': event.get('error_message'),
-                        'model': event.get('model'),
-                        'action': event.get('action'),
-                        'category': event.get('category'),
-                        'step_name': event.get('step_name'),
-                        'status': event.get('status'),
-                        'input_tokens': event.get('input_tokens'),
-                        'output_tokens': event.get('output_tokens'),
-                        'total_tokens': event.get('total_tokens'),
-                        'llm_output': event.get('llm_output')
-                    })
+            before = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            conn.execute(query)
+            after = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            loaded = after - before
+            event_id += loaded
+            total_loaded += loaded
 
-                    if len(rows) >= batch_size:
-                        df = pd.DataFrame(rows)
-                        conn.execute("INSERT INTO events SELECT * FROM df")
-                        total_loaded += len(rows)
-                        print(f"  Loaded {total_loaded:,} events...")
-                        rows = []
+            if loaded > 0:
+                print(f"    {vm_dir.name}: {loaded:,} events")
 
-    # Load remaining
-    if rows:
-        df = pd.DataFrame(rows)
-        conn.execute("INSERT INTO events SELECT * FROM df")
-        total_loaded += len(rows)
-
+    print(f"  Total: {total_loaded:,} events")
     return total_loaded
 
 
@@ -728,7 +709,7 @@ Examples:
     parser.add_argument('--all', action='store_true', help='Collect from all experiments with inventory')
     parser.add_argument('--list', action='store_true', help='List configured experiments and exit')
     parser.add_argument('--dry-run', action='store_true', help='Preview without collecting')
-    parser.add_argument('--parallel', type=int, default=4, help='Parallel SSH connections')
+    parser.add_argument('--parallel', type=int, default=8, help='Parallel SSH connections')
     parser.add_argument('--skip-load', action='store_true', help='Skip DuckDB loading')
     parser.add_argument('--db-name', type=str, default=None, help='Custom database name')
     parser.add_argument('--clean', action='store_true', default=True, help='Delete and rebuild database (default)')
@@ -767,22 +748,35 @@ Examples:
         print("       python log_retrieval/collect_sup_logs.py --list")
         return 1
 
-    # Validate experiments
+    # Validate and expand experiments.
+    # Bare names like "exp-4" resolve to the most recent multi-run with an inventory
+    # (e.g., "exp-4/0216"). Only one run has an inventory at a time — teardown deletes it.
+    resolved = []
     for exp in experiments:
-        if exp not in available_experiments:
-            if exp in EXPERIMENTS:
+        if exp in available_experiments:
+            resolved.append(exp)
+        else:
+            # "exp-4" -> find "exp-4/XXXX" runs with inventory, pick latest
+            runs = sorted(a for a in available_experiments if a.startswith(f"{exp}/"))
+            if runs:
+                pick = runs[-1]
+                print(f"  Resolved {exp} -> {pick}")
+                resolved.append(pick)
+            elif exp in EXPERIMENTS:
                 print(f"\nERROR: Experiment '{exp}' is configured but has no inventory.ini.")
-                print(f"  Run provisioning first: cd deployments && bash deploy.sh")
+                print(f"  Run provisioning first: cd deployments && ./deploy spinup {exp}")
+                return 1
             else:
                 print(f"\nERROR: Unknown experiment '{exp}'.")
                 print(f"  Configured: {list(EXPERIMENTS.keys())}")
                 print(f"  With inventory: {available_experiments}")
-            return 1
+                return 1
+    experiments = resolved
 
     # Show experiment info
     print(f"\nExperiments to process:")
     for exp in experiments:
-        cfg = EXPERIMENTS.get(exp)
+        cfg = EXPERIMENTS.get(exp.split("/")[0])
         if cfg:
             print(f"  {exp}: {cfg.description} ({cfg.vm_count} VMs)")
         else:
@@ -793,14 +787,16 @@ Examples:
     raw_dir = BASE_OUTPUT_DIR / "raw" / collection_date
 
     # Database naming: CLI flag > experiment config > convention
+    # Use base experiment name (before /run_id) for config lookup and db naming
     if args.db_name:
         db_name = args.db_name if args.db_name.endswith('.duckdb') else f"{args.db_name}.duckdb"
     elif len(experiments) == 1:
-        cfg = EXPERIMENTS.get(experiments[0])
+        base_name = experiments[0].split("/")[0]
+        cfg = EXPERIMENTS.get(base_name)
         if cfg and cfg.db_name:
             db_name = cfg.db_name if cfg.db_name.endswith('.duckdb') else f"{cfg.db_name}.duckdb"
         else:
-            db_name = f"sup-logs-{experiments[0]}.duckdb"
+            db_name = f"sup-logs-{base_name}.duckdb"
     else:
         db_name = "sup_logs.duckdb"
 
@@ -841,7 +837,12 @@ Examples:
     print("=" * 60)
 
     for experiment in experiments:
-        inventory_path = DEPLOYMENTS_DIR / experiment / "inventory.ini"
+        # Resolve inventory path: "config/run_id" -> runs/run_id/inventory.ini
+        if "/" in experiment:
+            config_name, run_id = experiment.split("/", 1)
+            inventory_path = DEPLOYMENTS_DIR / config_name / "runs" / run_id / "inventory.ini"
+        else:
+            inventory_path = DEPLOYMENTS_DIR / experiment / "inventory.ini"
         vms = parse_inventory(inventory_path)
 
         print(f"\n[{experiment}] Found {len(vms)} VMs")
