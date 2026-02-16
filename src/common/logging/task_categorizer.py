@@ -1,5 +1,5 @@
 """
-Task Categorization for DOLOS-DEPLOY
+Task Categorization for RUSE
 
 Determines the appropriate StepCategory based on task content analysis.
 Used by SmolAgents and BrowserUse workflows for dynamic categorization.

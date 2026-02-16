@@ -1,0 +1,161 @@
+---
+# Ansible Playbook: distribute-feedback.yaml
+# Distribute PHASE feedback configs to deployed SUP VMs.
+#
+# Each SUP picks up configs from its feedback/ directory automatically
+# at the next cluster boundary — no restart needed.
+#
+# Usage:
+#   # Push feedback configs to all exp-3 SUPs
+#   ansible-playbook -i ../exp-3/inventory.ini distribute-feedback.yaml \
+#       -e config_source=~/PHASE/feedback_engine/configs/exp3_axes-fall24
+#
+#   # Push to a single SUP (by hostname or config key)
+#   ansible-playbook -i ../exp-3/inventory.ini distribute-feedback.yaml \
+#       -e config_source=~/PHASE/feedback_engine/configs/exp3_axes-fall24 \
+#       --limit sup-M3-0
+#
+#   # Clear all feedback configs (revert to uniform random)
+#   ansible-playbook -i ../exp-3/inventory.ini distribute-feedback.yaml \
+#       -e clear_feedback=true
+#
+#   # Dry-run (check mode)
+#   ansible-playbook -i ../exp-3/inventory.ini distribute-feedback.yaml \
+#       -e config_source=~/PHASE/feedback_engine/configs/exp3_axes-fall24 \
+#       --check --diff
+
+- name: Distribute PHASE feedback configs
+  hosts: sup_hosts
+  become: yes
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30'
+    ruse_path: "/opt/ruse"
+
+    # Required: path to PHASE config output directory (on control node)
+    # e.g. ~/PHASE/feedback_engine/configs/exp3_axes-fall24
+    config_source: ""
+
+    # Set to true to remove all feedback configs instead of deploying
+    clear_feedback: false
+
+    # Consumable config file types (exclude recommendations.json and timing_profile.json)
+    consumable_configs:
+      - workflow_weights.json
+      - behavior_modifiers.json
+      - site_config.json
+      - prompt_augmentation.json
+
+  tasks:
+    # ── Skip controls ──────────────────────────────────────────────
+    - name: Skip control configs (C0, M0)
+      meta: end_host
+      when: sup_behavior in ['C0', 'M0']
+
+    # ── Derive behavior directory from config key ──────────────────
+    # M3 → M, B3.gemma → B.gemma, S1.llama → S.llama
+    - name: Derive behavior directory from config key
+      set_fact:
+        behavior_dir: "{{ sup_behavior | regex_replace('^([A-Z])\\d+(.*)$', '\\1\\2') }}"
+
+    # ── Clear mode ─────────────────────────────────────────────────
+    - name: Clear feedback configs
+      when: clear_feedback | bool
+      block:
+        - name: Remove feedback directory contents
+          file:
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
+            state: absent
+
+        - name: Re-create empty feedback directory
+          file:
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
+            state: directory
+            mode: '0755'
+
+        - name: Report cleared
+          debug:
+            msg: "Cleared feedback for {{ sup_behavior }} on {{ inventory_hostname }}"
+
+    # ── Deploy mode ────────────────────────────────────────────────
+    - name: Deploy feedback configs
+      when: not (clear_feedback | bool)
+      block:
+        - name: Validate config_source is set
+          fail:
+            msg: "config_source must be set. Use -e config_source=/path/to/configs"
+          when: config_source == ""
+          run_once: true
+          delegate_to: localhost
+
+        - name: Resolve behavior source directory
+          set_fact:
+            behavior_source_dir: "{{ config_source }}/{{ behavior_dir }}"
+
+        - name: Check behavior source directory exists
+          stat:
+            path: "{{ behavior_source_dir }}"
+          delegate_to: localhost
+          register: source_dir
+
+        - name: Warn if behavior source not found
+          debug:
+            msg: "WARNING: Behavior source not found: {{ behavior_source_dir }} — skipping {{ sup_behavior }}"
+          when: not source_dir.stat.exists
+
+        - name: Deploy configs from behavior directory
+          when: source_dir.stat.exists
+          block:
+            - name: Ensure feedback directory exists
+              file:
+                path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
+                state: directory
+                mode: '0755'
+
+            - name: Copy consumable feedback configs to SUP
+              copy:
+                src: "{{ behavior_source_dir }}/{{ item }}"
+                dest: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/{{ item }}"
+                mode: '0644'
+              loop: "{{ consumable_configs }}"
+              loop_control:
+                label: "{{ item }}"
+              ignore_errors: yes
+
+            - name: Count deployed files
+              find:
+                paths: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
+                patterns: "*.json"
+              register: deployed_files
+
+            - name: Report deployment
+              debug:
+                msg: "{{ sup_behavior }} ← {{ behavior_dir }}/ ({{ deployed_files.files | length }} configs)"
+
+
+- name: Distribution Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display summary
+      pause:
+        seconds: 0
+        prompt: |
+
+          ┌───────────────────────────────────────────────────────────────────┐
+          │  Feedback config distribution complete.                           │
+          │                                                                   │
+          │  Configs take effect at the next cluster boundary (typically      │
+          │  within a few minutes) — no restart needed.                       │
+          │                                                                   │
+          │  To verify on a VM:                                               │
+          │    ssh sup-M3-0 'ls /opt/ruse/deployed_sups/M3/feedback/' │
+          │                                                                   │
+          │  To check logs for feedback loading:                              │
+          │    ssh sup-M3-0 'grep feedback /opt/ruse/deployed_sups/   │
+          │      M3/logs/latest.jsonl'                                        │
+          │                                                                   │
+          │  To revert (remove all feedback):                                 │
+          │    ansible-playbook ... distribute-feedback.yaml                  │
+          │      -e clear_feedback=true                                       │
+          └───────────────────────────────────────────────────────────────────┘

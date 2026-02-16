@@ -82,7 +82,7 @@ Top features distinguishing human activity (ordered by importance):
 
 ### Control Configuration
 
-> **IMPORTANT:** M0 is the upstream MITRE pyhuman (https://github.com/mitre/human) running unmodified as the control. M1-M3 are DOLOS MCHP configurations that can be improved. M0 MUST NOT be modified.
+> **IMPORTANT:** M0 is the upstream MITRE pyhuman (https://github.com/mitre/human) running unmodified as the control. M1-M3 are RUSE MCHP configurations that can be improved. M0 MUST NOT be modified.
 
 ---
 
@@ -358,7 +358,7 @@ Per the exp2-plan.md naming convention, improved configurations use incremental 
 - `S1-S3` = Baseline SmolAgents (different models)
 - `S4-S6` = Improved SmolAgents with PHASE timing and MCHP workflow integration
 - `M0` = Upstream MITRE pyhuman (control)
-- `M1` = DOLOS MCHP baseline
+- `M1` = RUSE MCHP baseline
 - `M2/M3` = MCHP with LLM augmentations
 
 ---

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# DOLOS-DEPLOY: Unified SUP Installer
+# RUSE: Unified SUP Installer
 # Architecture: Brain + Model + Calibration
 #
 # Naming Scheme (exp-3):
@@ -50,7 +50,7 @@ log_info() { echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO:${NC} $1"; }
 
 usage() {
     cat << 'EOF'
-DOLOS-DEPLOY Unified Installer (exp-3: Calibrated PHASE Timing)
+RUSE Unified Installer (exp-3: Calibrated PHASE Timing)
 
 Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 
@@ -680,7 +680,7 @@ create_run_script() {
 
     case "$BRAIN" in
         upstream)
-            # M0: Run upstream MITRE pyhuman via DOLOS wrapper
+            # M0: Run upstream MITRE pyhuman via RUSE wrapper
             runner_cmd="python3 -m runners.run_m0"
             xvfb_prefix=""  # xvfb is handled inside run_m0.py
             ;;
@@ -958,7 +958,7 @@ main() {
 
     echo ""
     echo -e "${BLUE}================================${NC}"
-    echo -e "${BLUE}  DOLOS-DEPLOY Installer${NC}"
+    echo -e "${BLUE}  RUSE Installer${NC}"
     echo -e "${BLUE}================================${NC}"
     echo ""
     log_info "Config: $CONFIG_KEY"

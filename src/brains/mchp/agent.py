@@ -6,7 +6,7 @@ providing a class-based interface for the unified SUP runner.
 
 Configurations (exp-3):
 - M0: Upstream MITRE pyhuman (control - DO NOT MODIFY)
-- M1: DOLOS MCHP baseline (no timing)
+- M1: RUSE MCHP baseline (no timing)
 - M2: MCHP + summer24 calibrated timing
 - M3: MCHP + fall24 calibrated timing
 - M4: MCHP + spring25 calibrated timing
@@ -61,6 +61,8 @@ class MCHPAgent:
         phase_config: Optional["PhaseTimingConfig"] = None,
         exclude_windows_workflows: bool = False,
         seed: int = 42,
+        feedback_dir: Optional[str] = None,
+        config_key: Optional[str] = None,
     ):
         self.seed = seed
         self.cluster_size = cluster_size
@@ -76,6 +78,9 @@ class MCHPAgent:
         self._phase_config = phase_config
         self._tasks_completed = 0
         self.exclude_windows_workflows = exclude_windows_workflows
+        self._feedback_dir = feedback_dir
+        self._config_key = config_key
+        self._workflow_weights = None
 
         if self.calibration_profile:
             self._init_calibrated_timing()
@@ -106,6 +111,54 @@ class MCHPAgent:
 
         self._phase_timing = PhaseTiming(self._phase_config)
         print(f"PHASE timing enabled - current activity level: {self._phase_timing.get_activity_level()}")
+
+    def _reload_feedback(self):
+        """Reload feedback config from disk (hot-swap support)."""
+        if not self._feedback_dir or not self._config_key:
+            self._workflow_weights = None
+            return
+
+        from pathlib import Path
+        from common.feedback_config import load_feedback_config, build_workflow_weights, build_site_weights
+
+        fc = load_feedback_config(Path(self._feedback_dir), self._config_key)
+
+        if fc.is_empty():
+            self._workflow_weights = None
+            return
+
+        # Workflow weights
+        self._workflow_weights = build_workflow_weights(self.workflows, fc)
+        if self._workflow_weights and self.logger:
+            self.logger.info(f"[feedback] Loaded workflow_weights for {self._config_key}",
+                             details={"weights": fc.workflow_weights})
+
+        # Behavior modifiers - apply to BrowseWeb workflow
+        if fc.behavior_modifiers:
+            for w in self.workflows:
+                if getattr(w, 'name', '') == 'BrowseWeb':
+                    page_dwell = fc.behavior_modifiers.get("page_dwell", {})
+                    if "max_seconds" in page_dwell:
+                        w.max_sleep_time = int(page_dwell["max_seconds"])
+                    if "min_seconds" in page_dwell:
+                        w.min_sleep_time = int(page_dwell["min_seconds"])
+                    nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
+                    if "max" in nav_clicks:
+                        w.max_navigation_clicks = int(nav_clicks["max"])
+                    if self.logger:
+                        self.logger.info(f"[feedback] Applied behavior_modifiers to BrowseWeb",
+                                         details=fc.behavior_modifiers)
+                    break
+
+        # Site config - apply site weights to BrowseWeb workflow
+        if fc.site_config:
+            for w in self.workflows:
+                if getattr(w, 'name', '') == 'BrowseWeb':
+                    site_weights = build_site_weights(w.website_list, fc.site_config)
+                    w.site_weights = site_weights
+                    if site_weights and self.logger:
+                        self.logger.info(f"[feedback] Applied site_weights to BrowseWeb")
+                    break
 
     def _get_cluster_size(self) -> int:
         """Get cluster size based on timing mode."""
@@ -166,6 +219,9 @@ class MCHPAgent:
     def _emulation_loop(self):
         """Main emulation loop - runs workflows in clusters."""
         while self._running:
+            # Hot-reload feedback config at each cluster boundary
+            self._reload_feedback()
+
             # Log activity level if using PHASE timing
             if self.use_phase_timing and self._phase_timing:
                 activity_level = self._phase_timing.get_activity_level()
@@ -196,8 +252,11 @@ class MCHPAgent:
                 sleep(task_delay)
 
                 # Select and run workflow
-                index = random.randrange(len(self.workflows))
-                workflow = self.workflows[index]
+                if self._workflow_weights:
+                    workflow = random.choices(self.workflows, weights=self._workflow_weights, k=1)[0]
+                else:
+                    index = random.randrange(len(self.workflows))
+                    workflow = self.workflows[index]
                 # Use description for consistency with S/B agents (they use task as workflow name)
                 workflow_name = workflow.description
 
@@ -209,7 +268,7 @@ class MCHPAgent:
                         options=workflow_options,
                         selected=workflow.name,
                         context=workflow_name,
-                        method="random"
+                        method="feedback_weighted" if self._workflow_weights else "random"
                     )
 
                 print(workflow.display)
@@ -251,6 +310,7 @@ class MCHPAgent:
         else:
             random.seed()
         self.workflows = self._import_workflows()
+        self._reload_feedback()
         self._running = True
 
         signal.signal(signal.SIGINT, self._signal_handler)

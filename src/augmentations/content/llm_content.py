@@ -1,5 +1,5 @@
 """
-DOLOS-DEPLOY LLM Content Generator
+RUSE LLM Content Generator
 
 LLM-powered content generation for MCHP augmentation.
 Uses LiteLLM with Ollama for text generation.

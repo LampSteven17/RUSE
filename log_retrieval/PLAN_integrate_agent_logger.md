@@ -63,7 +63,7 @@ Already has optional AgentLogger - make it required and use consistently.
 
 ## Output
 Logs will be written to:
-`/opt/dolos-deploy/deployed_sups/{config_key}/logs/session_{timestamp}_{session_id}.jsonl`
+`/opt/ruse/deployed_sups/{config_key}/logs/session_{timestamp}_{session_id}.jsonl`
 
 ## Priority
 Medium - do this before next experiment run.

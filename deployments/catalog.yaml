@@ -1,4 +1,4 @@
-# DOLOS-DEPLOY Catalog
+# RUSE Catalog
 # Reference file listing all available behaviors and OpenStack flavors
 # Used by n8n for deployment configuration validation
 
@@ -9,7 +9,7 @@ behaviors:
 
   # MCHP Series - Baseline (scripted automation)
   - M0           # Upstream MITRE pyhuman (control - DO NOT MODIFY)
-  - M1           # DOLOS MCHP baseline, no LLM
+  - M1           # RUSE MCHP baseline, no LLM
   - M2.llama     # MCHP + SmolAgents (content + mechanics)
   - M2a.llama    # MCHP + SmolAgents (content only)
   - M2b.llama    # MCHP + SmolAgents (mechanics only)

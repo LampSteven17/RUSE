@@ -1,8 +1,8 @@
 """
-M0 Runner - Wraps upstream MITRE pyhuman with DOLOS logging.
+M0 Runner - Wraps upstream MITRE pyhuman with RUSE logging.
 
 This module runs the original, unmodified MITRE pyhuman code while
-capturing stdout and parsing workflow events for DOLOS semantic analysis.
+capturing stdout and parsing workflow events for RUSE semantic analysis.
 
 The M0 configuration is the control - the pyhuman code MUST NOT be modified.
 Only this wrapper should be changed to improve logging integration.
@@ -19,7 +19,7 @@ from common.logging.agent_logger import AgentLogger
 
 
 class M0LogParser:
-    """Parse M0 stdout into DOLOS LogEvents."""
+    """Parse M0 stdout into RUSE LogEvents."""
 
     # M0 prints workflow display strings like:
     # [14:23:45] GoogleSearcher: Searching for "python tutorials"
@@ -71,7 +71,7 @@ class M0LogParser:
 
 
 def main():
-    """Run M0 (upstream MITRE pyhuman) with DOLOS logging wrapper."""
+    """Run M0 (upstream MITRE pyhuman) with RUSE logging wrapper."""
     logger = AgentLogger(agent_type="M0")
     logger.session_start(config={
         "upstream": "https://github.com/mitre/human",
@@ -84,7 +84,7 @@ def main():
 
     # Run the upstream pyhuman
     # Note: The upstream code is expected to be at /opt/human/pyhuman
-    # IMPORTANT: Must use the upstream pyhuman venv's Python, not system/DOLOS venv Python.
+    # IMPORTANT: Must use the upstream pyhuman venv's Python, not system/RUSE venv Python.
     # The upstream venv has selenium, pyautogui, requests etc. installed from requirements.txt.
     try:
         proc = subprocess.Popen(

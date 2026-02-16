@@ -2,7 +2,7 @@
 
 ## Overview
 
-All DOLOS-DEPLOY agent types (M, B, S) use the `AgentLogger` framework to emit structured JSONL events for experiment analysis. This document describes the logging integration architecture and patterns.
+All RUSE agent types (M, B, S) use the `AgentLogger` framework to emit structured JSONL events for experiment analysis. This document describes the logging integration architecture and patterns.
 
 ## Architecture
 
@@ -101,7 +101,7 @@ SmolAgents uses tools (DuckDuckGoSearchTool, etc.) which output to stdout. The l
 
 Logs are written to JSONL files at:
 ```
-/opt/dolos-deploy/deployed_sups/{config_key}/logs/session_{timestamp}_{session_id}.jsonl
+/opt/ruse/deployed_sups/{config_key}/logs/session_{timestamp}_{session_id}.jsonl
 ```
 
 A symlink `latest.jsonl` always points to the most recent session.
@@ -174,7 +174,7 @@ def action(self, extra=None, logger=None):
 If events are missing, check:
 1. Logger is passed to workflow: `workflow.action(logger=self.logger)`
 2. Workflow accepts logger: `def action(self, extra=None, logger=None)`
-3. JSONL files exist on VM: `ls /opt/dolos-deploy/deployed_sups/*/logs/*.jsonl`
+3. JSONL files exist on VM: `ls /opt/ruse/deployed_sups/*/logs/*.jsonl`
 4. Log collection includes JSONL: Check `collect_sup_logs.py` output
 
 ### TypeError: unexpected keyword argument 'logger'

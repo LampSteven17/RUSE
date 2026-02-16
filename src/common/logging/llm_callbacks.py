@@ -1,5 +1,5 @@
 """
-LLM Callback Handlers for DOLOS-DEPLOY
+LLM Callback Handlers for RUSE
 
 Provides callback handlers for LiteLLM and LangChain to log LLM interactions
 to the AgentLogger framework.

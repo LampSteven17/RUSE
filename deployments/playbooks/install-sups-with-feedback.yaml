@@ -1,0 +1,325 @@
+---
+# Ansible Playbook: install-sups-with-feedback.yaml
+# Step 2b: Install SUPs then distribute matching PHASE feedback configs.
+#
+# This is the exp-4 variant of install-sups.yaml. It runs the standard
+# install, then distributes feedback configs matched to each SUP's
+# calibration version:
+#
+#   Version 1 (baseline)  → feedback from exp3_axes-fall24 (default)
+#   Version 2 (summer24)  → feedback from exp3_axes-summer24
+#   Version 3 (fall24)    → feedback from exp3_axes-fall24
+#   Version 4 (spring25)  → feedback from exp3_axes-spring25
+#
+# Prerequisites:
+#   - PHASE feedback configs generated for all three datasets
+#   - VMs provisioned (inventory.ini exists)
+#
+# Usage:
+#   ansible-playbook -i ../exp-4/inventory.ini install-sups-with-feedback.yaml \
+#       -e deployment_dir=../exp-4
+
+# ── Phase 1: Standard SUP install (identical to install-sups.yaml) ──────────
+- name: Install SUPs
+  hosts: sup_hosts
+  become: yes
+  serial: 10
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -o ConnectTimeout=30'
+    ansible_ssh_retries: 5
+    deployment_dir: "{{ playbook_dir }}"
+    config_file: "{{ deployment_dir }}/config.yaml"
+    ruse_repo: "https://github.com/LampSteven17/RUSE.git"
+    ruse_branch: "main"
+    ruse_path: "/opt/ruse"
+
+  pre_tasks:
+    - name: Wait for SSH to become available
+      wait_for_connection:
+        delay: 5
+        timeout: 300
+      retries: 3
+      delay: 10
+
+    - name: Load deployment configuration
+      include_vars:
+        file: "{{ config_file }}"
+      delegate_to: localhost
+      run_once: true
+
+  tasks:
+    - name: Display target configuration
+      debug:
+        msg: "Installing {{ sup_behavior }} on {{ inventory_hostname }} ({{ ansible_host }})"
+
+    - name: Wait for cloud-init to complete
+      command: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - git
+          - curl
+          - wget
+        state: present
+
+    - name: Clone RUSE repo
+      git:
+        repo: "{{ ruse_repo }}"
+        dest: "{{ ruse_path }}"
+        version: "{{ ruse_branch }}"
+        force: yes
+
+    - name: Make INSTALL_SUP.sh executable
+      file:
+        path: "{{ ruse_path }}/INSTALL_SUP.sh"
+        mode: '0755'
+
+    - name: Run INSTALL_SUP.sh Stage 1 (system deps, drivers)
+      shell: |
+        cd {{ ruse_path }}
+        ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=1
+      args:
+        executable: /bin/bash
+      async: 1800
+      poll: 30
+      register: stage1_result
+      failed_when: stage1_result.rc not in [0, 100]
+
+    - name: Reboot if NVIDIA drivers were installed (exit code 100)
+      reboot:
+        reboot_timeout: 600
+        msg: "Rebooting for NVIDIA driver to load"
+      when: stage1_result.rc == 100
+
+    - name: Track Stage 1 outcome
+      set_fact:
+        install_stage1: "OK"
+        install_reboot: "{{ 'YES' if stage1_result.rc == 100 else 'skip' }}"
+
+    - name: Run INSTALL_SUP.sh Stage 2 (ollama, python, services)
+      shell: |
+        cd {{ ruse_path }}
+        ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
+      args:
+        executable: /bin/bash
+      async: 1800
+      poll: 30
+      register: stage2_result
+
+    - name: Track Stage 2 outcome
+      set_fact:
+        install_stage2: "OK"
+
+    - name: Display install result
+      debug:
+        msg: "SUP {{ sup_behavior }} installed successfully on {{ inventory_hostname }}"
+      when: stage2_result.rc == 0
+
+    - name: Check SUP service status
+      shell: systemctl is-active $(systemctl list-units --type=service | grep -E '(mchp|smol|bu)' | awk '{print $1}' | head -1) || true
+      register: service_status
+      changed_when: false
+
+    - name: Track service status
+      set_fact:
+        install_service: "{{ service_status.stdout | default('none') | trim }}"
+
+
+# ── Phase 2: Distribute feedback configs matched to calibration ─────────────
+- name: Distribute PHASE feedback configs (version-matched)
+  hosts: sup_hosts
+  become: yes
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30'
+    deployment_dir: "{{ playbook_dir }}"
+    config_file: "{{ deployment_dir }}/config.yaml"
+    ruse_path: "/opt/ruse"
+
+    # Consumable config file types (exclude recommendations.json, timing_profile.json)
+    consumable_configs:
+      - workflow_weights.json
+      - behavior_modifiers.json
+      - site_config.json
+      - prompt_augmentation.json
+
+  pre_tasks:
+    - name: Load deployment configuration (for feedback_sources and feedback_map)
+      include_vars:
+        file: "{{ config_file }}"
+      delegate_to: localhost
+      run_once: true
+
+  tasks:
+    # Skip controls — they don't get feedback
+    - name: Skip control configs (C0, M0)
+      meta: end_host
+      when: sup_behavior in ['C0', 'M0']
+
+    # Derive behavior directory from config key: M3 → M, B3.gemma → B.gemma
+    - name: Derive behavior directory from config key
+      set_fact:
+        behavior_dir: "{{ sup_behavior | regex_replace('^([A-Z])\\d+(.*)$', '\\1\\2') }}"
+
+    # Extract the version number from sup_behavior (e.g., "B3.gemma" → "3", "M1" → "1")
+    - name: Extract version number from behavior
+      set_fact:
+        sup_version: "{{ sup_behavior | regex_replace('^[A-Z]+([0-9]+).*$', '\\1') }}"
+
+    # Look up which feedback dataset this version maps to
+    - name: Resolve feedback dataset for this version
+      set_fact:
+        feedback_dataset: "{{ feedback_map[sup_version | int] | default(feedback_default) }}"
+
+    # Resolve the source directory path (expand ~ on control node)
+    - name: Resolve feedback source directory
+      set_fact:
+        feedback_source_dir: "{{ feedback_sources[feedback_dataset] | replace('~', lookup('env', 'HOME')) }}"
+
+    # Resolve to behavior subdirectory
+    - name: Resolve behavior source path
+      set_fact:
+        behavior_source_dir: "{{ feedback_source_dir }}/{{ behavior_dir }}"
+
+    - name: Display feedback mapping
+      debug:
+        msg: "{{ sup_behavior }} (v{{ sup_version }}) → {{ feedback_dataset }} → {{ behavior_source_dir }}"
+
+    # Verify the behavior source directory exists
+    - name: Check behavior source directory exists
+      stat:
+        path: "{{ behavior_source_dir }}"
+      delegate_to: localhost
+      register: fb_source_dir
+
+    - name: Warn if behavior source not found
+      debug:
+        msg: "WARNING: Behavior source not found: {{ behavior_source_dir }} — skipping feedback for {{ sup_behavior }}"
+      when: not fb_source_dir.stat.exists
+
+    - name: Track feedback skipped
+      set_fact:
+        install_feedback: "SKIP"
+      when: not fb_source_dir.stat.exists
+
+    # Deploy feedback configs from behavior directory
+    - name: Deploy feedback configs
+      when: fb_source_dir.stat.exists
+      block:
+        - name: Ensure feedback directory exists on VM
+          file:
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
+            state: directory
+            mode: '0755'
+
+        - name: Copy consumable feedback configs to SUP
+          copy:
+            src: "{{ behavior_source_dir }}/{{ item }}"
+            dest: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/{{ item }}"
+            mode: '0644'
+          loop: "{{ consumable_configs }}"
+          loop_control:
+            label: "{{ item }}"
+          ignore_errors: yes
+
+        - name: Count deployed files
+          find:
+            paths: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
+            patterns: "*.json"
+          register: deployed_files
+
+        - name: Report deployment
+          debug:
+            msg: "{{ sup_behavior }} ← {{ behavior_dir }}/ from {{ feedback_dataset }} ({{ deployed_files.files | length }} configs)"
+
+        - name: Track feedback deployment
+          set_fact:
+            install_feedback: "{{ deployed_files.files | length }} files"
+
+
+# ── Summary ─────────────────────────────────────────────────────────────────
+- name: Deployment Summary
+  hosts: localhost
+  gather_facts: false
+  vars:
+    deployment_dir: "{{ playbook_dir }}"
+    _output_dir: "{{ run_dir | default(deployment_dir) }}"
+  tasks:
+    - name: Load deployment configuration
+      include_vars:
+        file: "{{ deployment_dir }}/config.yaml"
+
+    - name: Display deployment matrix
+      vars:
+        matrix_hosts: "{{ groups['sup_hosts'] | sort }}"
+      pause:
+        seconds: 0
+        prompt: |
+
+          ═══════════════════════════════════════════════════════════════════════════════════════
+            DEPLOYMENT MATRIX  ({{ matrix_hosts | length }} hosts)
+          ═══════════════════════════════════════════════════════════════════════════════════════
+            {{ "%-24s %-14s %-8s %-8s %-8s %-10s %s" | format("HOST", "CONFIG", "STAGE1", "REBOOT", "STAGE2", "SERVICE", "FEEDBACK") }}
+            {{ "─" * 84 }}
+          {% for host in matrix_hosts %}
+          {% set hv = hostvars[host] %}
+          {% set config = hv.sup_behavior | default('?') %}
+          {% set is_ctl = config in ['C0', 'M0'] %}
+          {% set s1 = hv.install_stage1 | default('FAIL') %}
+          {% set rb = hv.install_reboot | default('--') %}
+          {% set s2 = hv.install_stage2 | default('FAIL') %}
+          {% set svc = 'n/a' if is_ctl else (hv.install_service | default('FAIL')) %}
+          {% set fb = 'n/a' if is_ctl else (hv.install_feedback | default('FAIL')) %}
+            {{ "%-24s %-14s %-8s %-8s %-8s %-10s %s" | format(host, config, s1, rb, s2, svc, fb) }}
+          {% endfor %}
+            {{ "─" * 84 }}
+          {% set ns = namespace(ok=0, fail=0) %}
+          {% for host in matrix_hosts %}
+          {% if hostvars[host].install_stage2 | default('') == 'OK' %}
+          {% set ns.ok = ns.ok + 1 %}
+          {% else %}
+          {% set ns.fail = ns.fail + 1 %}
+          {% endif %}
+          {% endfor %}
+            RESULT: {{ ns.ok }} installed / {{ ns.fail }} failed
+          ═══════════════════════════════════════════════════════════════════════════════════════
+
+          STAGE1  = System deps + GPU drivers (INSTALL_SUP.sh --stage=1)
+          REBOOT  = NVIDIA driver reload (YES = rebooted, skip = not needed)
+          STAGE2  = Ollama + Python + services (INSTALL_SUP.sh --stage=2)
+          SERVICE = systemd service status after install
+          FEEDBACK = PHASE feedback configs deployed (file count)
+
+    - name: Check for SSH config file
+      stat:
+        path: "{{ _output_dir }}/ssh_config_snippet.txt"
+      register: ssh_config_file
+
+    - name: Read SSH config
+      command: cat "{{ _output_dir }}/ssh_config_snippet.txt"
+      register: ssh_config_content
+      when: ssh_config_file.stat.exists
+      changed_when: false
+
+    - name: Display SSH Config
+      pause:
+        seconds: 0
+        prompt: |
+
+          ═══════════════════════════════════════════════════════════════
+            SSH CONFIG - Copy and paste into ~/.ssh/config
+          ═══════════════════════════════════════════════════════════════
+          {{ ssh_config_content.stdout }}
+          ═══════════════════════════════════════════════════════════════
+            Saved to: {{ _output_dir }}/ssh_config_snippet.txt
+          ═══════════════════════════════════════════════════════════════
+      when: ssh_config_file.stat.exists

@@ -1,8 +1,8 @@
 """
-DOLOS Events Callback Plugin
+RUSE Events Callback Plugin
 
 Ansible callback plugin that emits structured JSON events for deployment monitoring.
-Events are written to the file specified by DOLOS_EVENT_FILE environment variable.
+Events are written to the file specified by RUSE_EVENT_FILE environment variable.
 
 Event Types:
     - playbook_start/end: Lifecycle boundaries
@@ -13,7 +13,7 @@ Event Types:
     - recap: Final per-host statistics
 
 Usage:
-    DOLOS_EVENT_FILE=/tmp/events.jsonl ansible-playbook playbook.yaml
+    RUSE_EVENT_FILE=/tmp/events.jsonl ansible-playbook playbook.yaml
 """
 
 from __future__ import annotations
@@ -28,28 +28,28 @@ from typing import Any
 from ansible.plugins.callback import CallbackBase
 
 DOCUMENTATION = """
-    name: dolos_events
+    name: ruse_events
     type: notification
-    short_description: Emit JSON events for DOLOS deployment monitoring
+    short_description: Emit JSON events for RUSE deployment monitoring
     description:
         - Writes structured JSON events to a file for TUI consumption
-        - Enable with callbacks_enabled = dolos_events in ansible.cfg
+        - Enable with callbacks_enabled = ruse_events in ansible.cfg
     requirements:
-        - Set DOLOS_EVENT_FILE environment variable to output path
+        - Set RUSE_EVENT_FILE environment variable to output path
 """
 
 
 class CallbackModule(CallbackBase):
-    """Ansible callback plugin for DOLOS deployment events."""
+    """Ansible callback plugin for RUSE deployment events."""
 
     CALLBACK_VERSION = 2.0
     CALLBACK_TYPE = "notification"
-    CALLBACK_NAME = "dolos_events"
+    CALLBACK_NAME = "ruse_events"
     CALLBACK_NEEDS_WHITELIST = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.event_file = os.environ.get("DOLOS_EVENT_FILE")
+        self.event_file = os.environ.get("RUSE_EVENT_FILE")
         self._file_handle = None
         self._current_task = ""
         self._current_play = ""
@@ -71,7 +71,7 @@ class CallbackModule(CallbackBase):
             try:
                 self._file_handle = open(self.event_file, "a", buffering=1)  # Line buffered
             except Exception as e:
-                self._display.warning(f"DOLOS: Cannot open event file {self.event_file}: {e}")
+                self._display.warning(f"RUSE: Cannot open event file {self.event_file}: {e}")
 
     def _emit(self, event_type: str, data: dict[str, Any] | None = None):
         """Emit a JSON event to the event file."""
@@ -110,6 +110,10 @@ class CallbackModule(CallbackBase):
             "name": self._current_play,
         })
 
+        # Detect feedback distribution play
+        if "feedback" in self._current_play.lower():
+            self._emit("install_feedback")
+
     def v2_playbook_on_task_start(self, task, is_conditional):
         """Called when a task starts."""
         self._current_task = task.get_name()
@@ -117,9 +121,12 @@ class CallbackModule(CallbackBase):
             "name": self._current_task,
         })
 
-        # Detect install phases from task names
+        # Detect install phases from task names (global — fallback for
+        # v2_runner_on_start which provides per-host granularity)
         task_name = self._current_task.lower()
-        if "install_sup.sh stage 1" in task_name:
+        if "cloud-init" in task_name:
+            self._emit("install_preparing")
+        elif "install_sup.sh stage 1" in task_name:
             self._emit("install_stage1")
         elif "install_sup.sh stage 2" in task_name:
             self._emit("install_stage2")
@@ -189,6 +196,59 @@ class CallbackModule(CallbackBase):
             "host": host,
             "error": msg,
         })
+
+    def v2_runner_retry(self, result):
+        """Called when a task is retried (e.g., polling for VM ACTIVE status)."""
+        task = result._task.get_name()
+        retries = result._result.get("retries", 0)
+        attempts = result._result.get("attempts", 0)
+        remaining = retries - attempts if retries else 0
+
+        vm_name = self._get_loop_item_vm(result)
+
+        # Fallback: extract VM name from the shell command or stdout
+        if not vm_name:
+            for field in ("cmd", "stdout"):
+                text = result._result.get(field, "")
+                if isinstance(text, str):
+                    m = re.search(r"(sup-\S+)", text)
+                    if m:
+                        vm_name = m.group(1).rstrip('"\'')
+                        break
+
+        target = vm_name or result._host.get_name()
+
+        self._emit("retry", {
+            "host": result._host.get_name(),
+            "task": task,
+            "vm_name": vm_name or "",
+            "retries_remaining": remaining,
+        })
+
+        # Write a marker line to stdout for the log tail renderer.
+        # The default callback also prints "FAILED - RETRYING:" but with the
+        # ansible host (e.g., axes) instead of the target VM name.
+        self._display.display(
+            f"RUSE_RETRY: {target}: {task} ({remaining} retries left)"
+        )
+
+    def v2_runner_on_start(self, host, task):
+        """Called when a task starts executing for a specific host.
+
+        Provides per-host install phase tracking (more accurate than
+        v2_playbook_on_task_start which fires globally).
+        """
+        task_name = task.get_name().lower()
+        host_name = host.get_name()
+
+        if "cloud-init" in task_name:
+            self._emit("install_preparing", {"host": host_name})
+        elif "install_sup.sh stage 1" in task_name:
+            self._emit("install_stage1", {"host": host_name})
+        elif "install_sup.sh stage 2" in task_name:
+            self._emit("install_stage2", {"host": host_name})
+        elif "reboot" in task_name and "nvidia" in task_name:
+            self._emit("reboot_start", {"host": host_name})
 
     def v2_runner_on_skipped(self, result):
         """Called when a task is skipped."""
@@ -307,7 +367,9 @@ class CallbackModule(CallbackBase):
             behavior = item.get("behavior", "")
             index = item.get("index", 0)
             if behavior:
-                return f"sup-{behavior.replace('.', '-')}-{index}"
+                dep_id = os.environ.get("RUSE_DEPLOYMENT_ID", "")
+                prefix = f"sup-{dep_id}-" if dep_id else "sup-"
+                return f"{prefix}{behavior.replace('.', '-')}-{index}"
         elif isinstance(item, str):
             # Might be a server list line like "uuid sup-name"
             if "sup-" in item:
@@ -349,12 +411,18 @@ class CallbackModule(CallbackBase):
 
         # Handle deletion confirmations
         if "delete" in task_lower or "wait for" in task_lower:
-            if "DELETED:" in stdout:
+            stdout_stripped = stdout.strip()
+            if "DELETED" in stdout_stripped:
+                # Try regex first (DELETED: sup-name)
                 if m := self._vm_deleted_re.search(stdout):
-                    name = m.group(1)
-                    self._emit("resource_deleted", {"name": name, "type": "server"})
+                    self._emit("resource_deleted", {"name": m.group(1), "type": "server"})
                 elif m := self._volume_id_re.search(stdout):
                     self._emit("resource_deleted", {"name": m.group(1)[:8], "type": "volume"})
+                elif stdout_stripped == "DELETED":
+                    # Bare "DELETED" — extract server name from loop item
+                    vm_name = self._get_loop_item_vm(result)
+                    if vm_name:
+                        self._emit("resource_deleted", {"name": vm_name, "type": "server"})
 
     def v2_runner_item_on_failed(self, result):
         """Called when a loop item fails."""

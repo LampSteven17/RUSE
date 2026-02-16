@@ -1,5 +1,5 @@
 """
-DOLOS-DEPLOY PHASE Timing Module
+RUSE PHASE Timing Module
 
 Provides realistic timing patterns for agent behavior that mimic human activity.
 Includes time-of-day awareness, activity clustering, and configurable profiles.
@@ -385,7 +385,7 @@ class CalibratedTiming:
             return values[0]
         if u >= points[-1]:
             overshoot = (u - points[-1]) / (1.0 - points[-1])
-            return values[-1] * (1.0 + 0.5 * overshoot)
+            return values[-1] * (1.0 + 2.0 * overshoot)
 
         for i in range(len(points) - 1):
             if points[i] <= u <= points[i + 1]:
@@ -402,7 +402,7 @@ class CalibratedTiming:
         """Sample connections_per_burst from the profile."""
         raw = self._sample_percentile(self.config.connections_per_burst)
         scaled = raw * self._get_hourly_scale()
-        return max(1, min(int(scaled), 15))
+        return max(1, min(int(scaled), 50))
 
     def get_task_delay(self) -> float:
         """Intra-burst pacing derived from burst_duration / connections_per_burst."""

@@ -1,0 +1,1210 @@
+#!/bin/bash
+#
+# RUSE - Realistic User Simulation Engine
+# Deployment orchestrator using gum for interactive TUI.
+#
+# Usage:
+#   ./deploy                              # Interactive menu
+#   ./deploy spinup <deployment>          # Provision + install (auto run ID)
+#   ./deploy spinup <deployment> --run ID # Provision with explicit run ID
+#   ./deploy install <deployment>/<run>   # Install SUPs on run's VMs
+#   ./deploy teardown <deployment>/<run>  # Delete run's VMs
+#   ./deploy teardown-all                 # Delete ALL sup-* VMs
+#   ./deploy list                         # List deployed RUSEs (active runs)
+#   ./deploy preview <deployment>         # Preview deployment configs
+#   ./deploy --help                       # Show help
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAYBOOKS_DIR="$SCRIPT_DIR/playbooks"
+LOGS_DIR="$SCRIPT_DIR/logs"
+LIB_DIR="$SCRIPT_DIR/lib"
+SSH_CONFIG="${SSH_CONFIG:-$HOME/.ssh/config}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RUSE header (plain ANSI — gum style corrupts terminal onlcr)
+# ─────────────────────────────────────────────────────────────────────────────
+
+RUSE_LOGO='RRRRRRRRRRRRRRRRR    UUUUUUUU     UUUUUUUU    SSSSSSSSSSSSSSS  EEEEEEEEEEEEEEEEEEEEEE
+R::::::::::::::::R   U::::::U     U::::::U  SS:::::::::::::::S E::::::::::::::::::::E
+R::::::RRRRRR:::::R  U::::::U     U::::::U S:::::SSSSSS::::::S E::::::::::::::::::::E
+RR:::::R     R:::::R UU:::::U     U:::::UU S:::::S     SSSSSSS EE::::::EEEEEEEEE::::E
+  R::::R     R:::::R  U:::::U     U:::::U  S:::::S               E:::::E       EEEEEE
+  R::::R     R:::::R  U:::::D     D:::::U  S:::::S               E:::::E
+  R::::RRRRRR:::::R   U:::::D     D:::::U   S::::SSSS            E::::::EEEEEEEEEE
+  R:::::::::::::RR    U:::::D     D:::::U    SS::::::SSSSS       E:::::::::::::::E
+  R::::RRRRRR:::::R   U:::::D     D:::::U      SSS::::::::SS     E:::::::::::::::E
+  R::::R     R:::::R  U:::::D     D:::::U         SSSSSS::::S    E::::::EEEEEEEEEE
+  R::::R     R:::::R  U:::::D     D:::::U              S:::::S   E:::::E
+  R::::R     R:::::R  U::::::U   U::::::U              S:::::S   E:::::E       EEEEEE
+RR:::::R     R:::::R  U:::::::UUU:::::::U  SSSSSSS     S:::::S EE::::::EEEEEEEE:::::E
+R::::::R     R:::::R   UU:::::::::::::UU   S::::::SSSSSS:::::S E::::::::::::::::::::E
+R::::::R     R:::::R     UU:::::::::UU     S:::::::::::::::SS  E::::::::::::::::::::E
+RRRRRRRR     RRRRRRR       UUUUUUUUU       SSSSSSSSSSSSSSS    EEEEEEEEEEEEEEEEEEEEEE'
+
+print_ruse_header() {
+    printf '\033[38;5;39m%s\033[0m\n' "$RUSE_LOGO"
+    echo ""
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Prerequisites
+# ─────────────────────────────────────────────────────────────────────────────
+
+ensure_gum() {
+    command -v gum &>/dev/null && return 0
+
+    echo "gum not found. Installing from Charm apt repository..."
+
+    if command -v apt-get &>/dev/null; then
+        if [[ ! -f /etc/apt/keyrings/charm.gpg ]]; then
+            sudo mkdir -p /etc/apt/keyrings
+            curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg 2>/dev/null
+            echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list >/dev/null
+        fi
+        sudo apt-get update -qq && sudo apt-get install -y -qq gum && return 0
+    fi
+
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+    esac
+
+    local version="0.14.4"
+    local url="https://github.com/charmbracelet/gum/releases/download/v${version}/gum_${version}_linux_${arch}.tar.gz"
+    echo "Downloading gum v${version} from GitHub..."
+    curl -fsSL "$url" | sudo tar xz -C /usr/local/bin gum && return 0
+
+    echo "ERROR: Failed to install gum. Install manually: https://github.com/charmbracelet/gum"
+    exit 1
+}
+
+_gum() {
+    # Wrapper: every gum subcommand corrupts terminal onlcr. Run gum, then restore.
+    command gum "$@"
+    local rc=$?
+    stty opost onlcr 2>/dev/null || true
+    return $rc
+}
+
+check_prereqs() {
+    if ! command -v ansible-playbook &>/dev/null; then
+        echo "ERROR: ansible-playbook not found. Please install Ansible."
+        exit 1
+    fi
+
+    if [[ ! -d "$PLAYBOOKS_DIR" ]]; then
+        echo "ERROR: Playbooks directory not found at $PLAYBOOKS_DIR"
+        exit 1
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        echo "ERROR: jq not found. Install: sudo apt-get install jq"
+        exit 1
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        echo "ERROR: python3 not found."
+        exit 1
+    fi
+
+    ensure_gum
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────────────────────────
+
+mkdir -p "$LOGS_DIR"
+
+ANSIBLE_LOG=""
+
+setup_ansible_log() {
+    local deployment="$1"
+    ANSIBLE_LOG="$LOGS_DIR/ansible-${deployment}-$(date +%Y%m%d-%H%M%S).log"
+}
+
+cleanup_old_logs() {
+    find "$LOGS_DIR" -name "ansible-*.log" -mtime +30 -delete 2>/dev/null || true
+    find "$LOGS_DIR" -name "deploy-*.log" -mtime +30 -delete 2>/dev/null || true
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal handling / crash safety
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ANSIBLE_PID=""
+_EVENT_FILE=""
+
+cleanup() {
+    if [[ -n "$_ANSIBLE_PID" ]]; then
+        kill "$_ANSIBLE_PID" 2>/dev/null || true
+        wait "$_ANSIBLE_PID" 2>/dev/null || true
+    fi
+    [[ -n "$_EVENT_FILE" && -f "$_EVENT_FILE" ]] && rm -f "$_EVENT_FILE"
+    printf '\033[?25h' 2>/dev/null    # show cursor
+    stty sane 2>/dev/null || true
+    # Move to bottom of screen so shell prompt appears cleanly
+    local _rows
+    _rows=$(tput lines 2>/dev/null) || _rows=50
+    printf '\033[%d;1H\033[J\n' "$_rows" 2>/dev/null
+}
+
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deployment discovery
+# ─────────────────────────────────────────────────────────────────────────────
+
+get_deployments() {
+    # List deployments: exp-N sorted numerically, then test at the end.
+    # Skip babys-first-sups (deprecated).
+    local -a exps=() others=()
+    local dir name
+    for dir in "$SCRIPT_DIR"/*/; do
+        [[ -f "${dir}config.yaml" ]] || continue
+        name=$(basename "$dir")
+        case "$name" in
+            babys-first-sups) continue ;;  # deprecated
+            exp-*)  exps+=("$name") ;;
+            test)   others+=("$name") ;;   # test goes last
+            *)      others+=("$name") ;;
+        esac
+    done
+    # Sort exp-N numerically
+    printf '%s\n' "${exps[@]}" | sort -t- -k2 -n
+    # Then non-exp deployments (test etc.)
+    printf '%s\n' "${others[@]}"
+}
+
+get_dep_id() {
+    # Strip hyphens from deployment directory name for VM prefix.
+    # e.g. "exp-3" -> "exp3", "test" -> "test"
+    local name="$1"
+    echo "${name//-/}"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-run support
+# ─────────────────────────────────────────────────────────────────────────────
+
+generate_run_id() {
+    # Generate a run ID: MMDD date stamp, with letter suffix on collision.
+    local config_dir="$1"
+    local base
+    base=$(date +%m%d)
+    local runs_dir="$config_dir/runs"
+
+    if [[ ! -d "$runs_dir/$base" ]]; then
+        echo "$base"
+        return
+    fi
+
+    # Collision: append letter suffix a, b, c, ...
+    local suffix
+    for suffix in {a..z}; do
+        if [[ ! -d "$runs_dir/${base}${suffix}" ]]; then
+            echo "${base}${suffix}"
+            return
+        fi
+    done
+
+    # Extreme edge case: fall back to timestamp
+    echo "${base}_$(date +%H%M%S)"
+}
+
+get_active_runs() {
+    # List active run IDs for a config directory.
+    # An active run has runs/<id>/inventory.ini present.
+    # Also detects legacy root inventory.ini as run_id "legacy".
+    local config_dir="$1"
+    local -a runs=()
+
+    # Check for legacy root inventory
+    if [[ -f "$config_dir/inventory.ini" && ! -d "$config_dir/runs" ]]; then
+        runs+=("legacy")
+    elif [[ -f "$config_dir/inventory.ini" ]]; then
+        # Root inventory exists alongside runs/ — treat as legacy
+        runs+=("legacy")
+    fi
+
+    # Check runs/ subdirectories
+    if [[ -d "$config_dir/runs" ]]; then
+        local dir
+        for dir in "$config_dir/runs"/*/; do
+            [[ -f "${dir}inventory.ini" ]] && runs+=("$(basename "$dir")")
+        done
+    fi
+
+    printf '%s\n' "${runs[@]}"
+}
+
+get_run_dir() {
+    # Return the directory for a specific run.
+    local config_dir="$1"
+    local run_id="$2"
+
+    if [[ "$run_id" == "legacy" ]]; then
+        echo "$config_dir"
+    else
+        echo "$config_dir/runs/$run_id"
+    fi
+}
+
+get_run_dep_id() {
+    # Return the deployment ID for a run: {config_id}{run_id}
+    # e.g. config_name="exp-3", run_id="0212" -> "exp30212"
+    local config_name="$1"
+    local run_id="$2"
+    local config_id
+    config_id=$(get_dep_id "$config_name")
+
+    if [[ "$run_id" == "legacy" ]]; then
+        echo "$config_id"
+    else
+        echo "${config_id}${run_id}"
+    fi
+}
+
+_parse_target() {
+    # Parse a target string into config_name, run_id, deploy_dir, run_dir, dep_id.
+    # Accepts: "deployment/run_id" or bare "deployment"
+    # Sets global variables: _PT_CONFIG _PT_RUN_ID _PT_DEPLOY_DIR _PT_RUN_DIR _PT_DEP_ID
+    local target="$1"
+
+    if [[ "$target" == */* ]]; then
+        # Explicit: deployment/run_id
+        _PT_CONFIG="${target%%/*}"
+        _PT_RUN_ID="${target#*/}"
+    else
+        _PT_CONFIG="$target"
+        _PT_RUN_ID=""
+    fi
+
+    _PT_DEPLOY_DIR="$SCRIPT_DIR/$_PT_CONFIG"
+
+    if [[ -n "$_PT_RUN_ID" ]]; then
+        _PT_RUN_DIR=$(get_run_dir "$_PT_DEPLOY_DIR" "$_PT_RUN_ID")
+        _PT_DEP_ID=$(get_run_dep_id "$_PT_CONFIG" "$_PT_RUN_ID")
+    else
+        # No run_id specified — check for legacy (root inventory, no runs/)
+        if [[ -f "$_PT_DEPLOY_DIR/inventory.ini" && ! -d "$_PT_DEPLOY_DIR/runs" ]]; then
+            _PT_RUN_ID="legacy"
+            _PT_RUN_DIR="$_PT_DEPLOY_DIR"
+            _PT_DEP_ID=$(get_dep_id "$_PT_CONFIG")
+        elif [[ -f "$_PT_DEPLOY_DIR/inventory.ini" ]]; then
+            # Root inventory exists alongside runs/ — treat as legacy
+            _PT_RUN_ID="legacy"
+            _PT_RUN_DIR="$_PT_DEPLOY_DIR"
+            _PT_DEP_ID=$(get_dep_id "$_PT_CONFIG")
+        else
+            # No inventory found, cannot auto-detect
+            _PT_RUN_ID=""
+            _PT_RUN_DIR=""
+            _PT_DEP_ID=$(get_dep_id "$_PT_CONFIG")
+        fi
+    fi
+}
+
+has_feedback() {
+    local deploy_dir="$1"
+    grep -q "feedback_sources:" "$deploy_dir/config.yaml" 2>/dev/null
+}
+
+get_vm_count() {
+    local config="$1"
+    python3 -c "
+import yaml
+with open('$config') as f:
+    cfg = yaml.safe_load(f)
+total = sum(d.get('count', 1) for d in cfg.get('deployments', []))
+print(total)
+" 2>/dev/null || echo "?"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Playbook runner
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Source the monitoring library
+source "$LIB_DIR/monitor.sh"
+
+run_playbook() {
+    local playbook="$1"
+    local inventory="$2"
+    local deploy_dir="$3"
+    local render_fn="${4:-render_status_table}"
+    local override_dep_id="${5:-}"
+    local override_run_dir="${6:-}"
+
+    _EVENT_FILE=$(mktemp /tmp/ruse_events_XXXXX.jsonl)
+
+    local dep_id
+    if [[ -n "$override_dep_id" ]]; then
+        dep_id="$override_dep_id"
+    else
+        dep_id=$(get_dep_id "$(basename "$deploy_dir")")
+    fi
+
+    local env_args=(
+        "RUSE_EVENT_FILE=$_EVENT_FILE"
+        "RUSE_DEPLOYMENT_ID=$dep_id"
+        "ANSIBLE_CALLBACKS_ENABLED=ruse_events"
+        "ANSIBLE_CALLBACK_PLUGINS=$PLAYBOOKS_DIR/callback_plugins"
+        "ANSIBLE_FORCE_COLOR=0"
+        "ANSIBLE_NOCOLOR=1"
+        "ANSIBLE_STDOUT_CALLBACK=default"
+    )
+
+    local ssh_args=()
+    [[ -f "$SSH_CONFIG" ]] && ssh_args=("ANSIBLE_SSH_ARGS=-F $SSH_CONFIG")
+
+    local extra_vars=(-e "deployment_dir=$deploy_dir" -e "deployment_id=$dep_id")
+    if [[ -n "$override_run_dir" ]]; then
+        extra_vars+=(-e "run_dir=$override_run_dir")
+    fi
+
+    # Redirect stdin from /dev/null to prevent ansible's pause module from
+    # calling setraw() on the terminal (which clears OPOST/ONLCR and causes
+    # garbled rendering). See ansible/ansible#32142, #41717.
+    env "${env_args[@]}" "${ssh_args[@]}" \
+        ansible-playbook \
+        -i "$inventory" \
+        "${extra_vars[@]}" \
+        "$PLAYBOOKS_DIR/$playbook" \
+        < /dev/null >> "$ANSIBLE_LOG" 2>&1 &
+    _ANSIBLE_PID=$!
+
+    # Set deployment phase from playbook name (deterministic — don't rely
+    # solely on callback events which may arrive late or fail to parse).
+    case "$playbook" in
+        *provision*)
+            MONITOR_PHASE="provisioning"
+            local _vm _now_ts; _now_ts=$(date +%s)
+            for _vm in "${VM_ORDER[@]}"; do
+                [[ "${VM_STATUS[$_vm]}" == "pending" ]] && VM_STATUS["$_vm"]="creating"
+                [[ -z "${VM_PROVISION_START[$_vm]:-}" ]] && VM_PROVISION_START["$_vm"]="$_now_ts"
+            done
+            ;;
+        *install*)
+            MONITOR_PHASE="installing"
+            local _vm _now_ts; _now_ts=$(date +%s)
+            for _vm in "${VM_ORDER[@]}"; do
+                case "${VM_STATUS[$_vm]}" in
+                    provisioned|pending) VM_STATUS["$_vm"]="installing"; VM_INSTALL_START["$_vm"]="$_now_ts" ;;
+                esac
+            done
+            ;;
+        *teardown*)
+            MONITOR_PHASE="teardown"
+            ;;
+    esac
+
+    monitoring_loop "$_ANSIBLE_PID" "$_EVENT_FILE" "$render_fn" "$ANSIBLE_LOG"
+
+    wait "$_ANSIBLE_PID" 2>/dev/null || true
+    local rc=$?
+    _ANSIBLE_PID=""
+
+    rm -f "$_EVENT_FILE"
+    _EVENT_FILE=""
+
+    return $rc
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Operations
+# ─────────────────────────────────────────────────────────────────────────────
+
+do_list() {
+    # Show deployed RUSEs as a category table, then offer interactive selection.
+    local deployments
+    deployments=$(get_deployments)
+
+    if [[ -z "$deployments" ]]; then
+        echo "No deployments found in $SCRIPT_DIR"
+        return 1
+    fi
+
+    local rows=("Deployment,Controls,MCHP,BU,Smol,VMs")
+    local -a targets=()       # parallel array: target string per row
+    local -a target_labels=() # display labels for _menu_choose
+    local found=false
+
+    while IFS= read -r dep; do
+        local deploy_dir="$SCRIPT_DIR/$dep"
+        local dep_id
+        dep_id=$(get_dep_id "$dep")
+
+        local active_runs
+        active_runs=$(get_active_runs "$deploy_dir")
+        [[ -z "$active_runs" ]] && continue
+
+        while IFS= read -r rid; do
+            [[ -z "$rid" ]] && continue
+            found=true
+
+            local rdir
+            rdir=$(get_run_dir "$deploy_dir" "$rid")
+
+            # Format display name
+            local display_name
+            if [[ "$rid" == "legacy" ]]; then
+                display_name="$dep_id"
+            else
+                local formatted_rid
+                formatted_rid="${rid:0:2}-${rid:2}"
+                display_name="${dep_id}-${formatted_rid}"
+            fi
+
+            # Categorize behaviors into buckets
+            local n_controls=0 n_mchp=0 n_bu=0 n_smol=0 n_total=0
+            while IFS= read -r behavior; do
+                [[ -z "$behavior" ]] && continue
+                n_total=$((n_total + 1))
+                case "$behavior" in
+                    C*|M0) n_controls=$((n_controls + 1)) ;;
+                    M*)    n_mchp=$((n_mchp + 1)) ;;
+                    B*)    n_bu=$((n_bu + 1)) ;;
+                    S*)    n_smol=$((n_smol + 1)) ;;
+                esac
+            done < <(grep -oP 'sup_behavior=\K\S+' "$rdir/inventory.ini" 2>/dev/null)
+
+            # Format counts: dash for zero
+            local c_ctl="${n_controls:-0}" c_mchp="${n_mchp:-0}" c_bu="${n_bu:-0}" c_smol="${n_smol:-0}"
+            [[ "$c_ctl"  -eq 0 ]] && c_ctl="-"
+            [[ "$c_mchp" -eq 0 ]] && c_mchp="-"
+            [[ "$c_bu"   -eq 0 ]] && c_bu="-"
+            [[ "$c_smol" -eq 0 ]] && c_smol="-"
+
+            rows+=("$display_name,$c_ctl,$c_mchp,$c_bu,$c_smol,$n_total")
+
+            # Track target for interactive selection
+            if [[ "$rid" == "legacy" ]]; then
+                targets+=("$dep")
+            else
+                targets+=("$dep/$rid")
+            fi
+            target_labels+=("$display_name  ($n_total VMs)")
+        done <<< "$active_runs"
+    done <<< "$deployments"
+
+    if ! $found; then
+        _faint "No active deployments."
+        return 0
+    fi
+
+    _bold 39 "Deployed RUSEs"
+    _print_table "18,10,6,4,6,4" "${rows[@]}"
+
+    echo ""
+
+    # Interactive selection
+    local selection rc
+    selection=$(_menu_choose "Select deployment" "${target_labels[@]}"); rc=$?
+    (( rc == 2 )) && exit 0
+    (( rc != 0 )) && return 0
+
+    # Find which target was selected
+    local idx
+    for ((idx=0; idx<${#target_labels[@]}; idx++)); do
+        [[ "${target_labels[$idx]}" == "$selection" ]] && break
+    done
+    local target="${targets[$idx]}"
+
+    # Action submenu
+    local action
+    action=$(_menu_choose "Action: $selection" \
+        "1) Teardown    delete VMs and volumes"); rc=$?
+    (( rc == 2 )) && exit 0
+    (( rc != 0 )) && return 0
+
+    case "${action%%)*}" in
+        1)
+            clear_content_area
+            do_teardown "$target"
+            ;;
+    esac
+}
+
+do_preview() {
+    local deployment="$1"
+    local deploy_dir="$SCRIPT_DIR/$deployment"
+
+    if [[ ! -f "$deploy_dir/config.yaml" ]]; then
+        _gum log --level error "No config.yaml found for: $deployment"
+        return 1
+    fi
+
+    local label
+    label=$(_dep_label "$deployment")
+    _bold 39 "Preview: $label"
+    local rows=("Behavior,Count,Flavor")
+    while IFS=$'\t' read -r behavior count flavor; do
+        rows+=("$behavior,$count,$flavor")
+    done < <(python3 -c "
+import yaml
+with open('$deploy_dir/config.yaml') as f:
+    cfg = yaml.safe_load(f)
+for dep in cfg.get('deployments', []):
+    print(f'{dep[\"behavior\"]}\t{dep.get(\"count\", 1)}\t{dep[\"flavor\"]}')
+")
+
+    _print_table "16,8,30" "${rows[@]}"
+
+    if has_feedback "$deploy_dir"; then
+        echo ""
+        _color 46 "Feedback: enabled"
+    fi
+
+    local vm_count
+    vm_count=$(get_vm_count "$deploy_dir/config.yaml")
+    echo ""
+    _faint "Total VMs: $vm_count"
+}
+
+do_spinup() {
+    local deployment="$1"
+    local explicit_run_id="${2:-}"
+    local deploy_dir="$SCRIPT_DIR/$deployment"
+
+    if [[ ! -f "$deploy_dir/config.yaml" ]]; then
+        _gum log --level error "No config.yaml found for: $deployment"
+        return 1
+    fi
+
+    if [[ ! -f "$deploy_dir/hosts.ini" ]]; then
+        _gum log --level error "No hosts.ini found for: $deployment"
+        return 1
+    fi
+
+    # Generate or use explicit run ID
+    local run_id
+    if [[ -n "$explicit_run_id" ]]; then
+        run_id="$explicit_run_id"
+    else
+        run_id=$(generate_run_id "$deploy_dir")
+    fi
+
+    local run_dir
+    run_dir=$(get_run_dir "$deploy_dir" "$run_id")
+    local dep_id
+    dep_id=$(get_run_dep_id "$deployment" "$run_id")
+
+    # Show existing active runs
+    local active_runs
+    active_runs=$(get_active_runs "$deploy_dir")
+    if [[ -n "$active_runs" ]]; then
+        echo ""
+        _color 214 "Active runs for $deployment:"
+        while IFS= read -r rid; do
+            [[ -z "$rid" ]] && continue
+            local rdir
+            rdir=$(get_run_dir "$deploy_dir" "$rid")
+            local vm_count_inv
+            vm_count_inv=$(grep -c 'ansible_host=' "$rdir/inventory.ini" 2>/dev/null || echo "0")
+            _faint "  $rid ($vm_count_inv VMs)"
+        done <<< "$active_runs"
+        echo ""
+    fi
+
+    echo ""
+    _bold 39 "Spinup: $deployment/$run_id"
+    _faint "  VM prefix: sup-${dep_id}-*"
+    _faint "  Run dir: $run_dir"
+    echo ""
+
+    # Warn if legacy root inventory exists
+    if [[ -f "$deploy_dir/inventory.ini" && ! -d "$deploy_dir/runs" ]]; then
+        _color 214 "WARNING: Legacy inventory.ini exists in $deployment root."
+        _color 214 "Consider tearing down the legacy deployment first."
+        echo ""
+    fi
+
+    # Create run directory
+    mkdir -p "$run_dir"
+
+    setup_ansible_log "${deployment}-${run_id}"
+    cleanup_old_logs
+
+    local _SPINUP_START
+    _SPINUP_START=$(date +%s)
+
+    # Initialize VM state from config
+    init_vm_state "$deploy_dir/config.yaml" "$dep_id"
+
+    # Phase 1: Provision
+    local provision_rc=0
+    run_playbook "provision-vms.yaml" "$deploy_dir/hosts.ini" "$deploy_dir" "" "$dep_id" "$run_dir" || provision_rc=$?
+
+    if [[ $provision_rc -ne 0 ]]; then
+        echo ""
+        _gum log --level error "Provisioning failed (rc=$provision_rc)"
+        _faint "See: $ANSIBLE_LOG"
+        render_summary "$deployment/$run_id" "0"
+        return 1
+    fi
+
+    if [[ ! -f "$run_dir/inventory.ini" ]]; then
+        echo ""
+        _gum log --level error "No inventory.ini created. Provisioning may have failed."
+        render_summary "$deployment/$run_id" "0"
+        return 1
+    fi
+
+    # Phase 2: Install (auto-select feedback-aware playbook)
+    SHOW_FEEDBACK=false
+    local playbook="install-sups.yaml"
+    if has_feedback "$deploy_dir"; then
+        playbook="install-sups-with-feedback.yaml"
+        SHOW_FEEDBACK=true
+    fi
+
+    local install_rc=0
+    run_playbook "$playbook" "$run_dir/inventory.ini" "$deploy_dir" "" "$dep_id" "$run_dir" || install_rc=$?
+
+    local elapsed=$(( $(date +%s) - _SPINUP_START ))
+
+    # Summary
+    echo ""
+    render_summary "$deployment/$run_id" "$elapsed"
+
+    install_ssh_config "$run_dir/ssh_config_snippet.txt" "$deployment/$run_id"
+    generate_phase_config "$run_dir/ssh_config_snippet.txt" "$deployment"
+
+    echo ""
+    _faint "Ansible log: $ANSIBLE_LOG"
+
+    return $install_rc
+}
+
+do_install() {
+    local target="$1"
+    _parse_target "$target"
+
+    if [[ ! -f "$_PT_DEPLOY_DIR/config.yaml" ]]; then
+        _gum log --level error "No config.yaml found for: $_PT_CONFIG"
+        return 1
+    fi
+
+    if [[ -z "$_PT_RUN_DIR" || ! -f "$_PT_RUN_DIR/inventory.ini" ]]; then
+        _gum log --level error "No inventory.ini found. Run 'spinup' or provision first."
+        if [[ -z "$_PT_RUN_ID" ]]; then
+            local active
+            active=$(get_active_runs "$_PT_DEPLOY_DIR")
+            if [[ -n "$active" ]]; then
+                _faint "Active runs: $(echo "$active" | tr '\n' ' ')"
+                _faint "Usage: ./deploy install $_PT_CONFIG/<run_id>"
+            fi
+        fi
+        return 1
+    fi
+
+    local display_name="$_PT_CONFIG"
+    [[ "$_PT_RUN_ID" != "legacy" ]] && display_name="$_PT_CONFIG/$_PT_RUN_ID"
+
+    setup_ansible_log "${_PT_CONFIG}-${_PT_RUN_ID}"
+    init_vm_state "$_PT_DEPLOY_DIR/config.yaml" "$_PT_DEP_ID"
+
+    # Mark all VMs as provisioned
+    local vm
+    for vm in "${VM_ORDER[@]}"; do
+        VM_STATUS["$vm"]="provisioned"
+    done
+
+    SHOW_FEEDBACK=false
+    local playbook="install-sups.yaml"
+    if has_feedback "$_PT_DEPLOY_DIR"; then
+        playbook="install-sups-with-feedback.yaml"
+        SHOW_FEEDBACK=true
+    fi
+
+    local start_time
+    start_time=$(date +%s)
+
+    local rc=0
+    run_playbook "$playbook" "$_PT_RUN_DIR/inventory.ini" "$_PT_DEPLOY_DIR" "" "$_PT_DEP_ID" "$_PT_RUN_DIR" || rc=$?
+
+    local elapsed=$(( $(date +%s) - start_time ))
+    echo ""
+    render_summary "$display_name" "$elapsed"
+
+    install_ssh_config "$_PT_RUN_DIR/ssh_config_snippet.txt" "$display_name"
+    generate_phase_config "$_PT_RUN_DIR/ssh_config_snippet.txt" "$_PT_CONFIG"
+
+    echo ""
+    _faint "Ansible log: $ANSIBLE_LOG"
+
+    return $rc
+}
+
+do_teardown() {
+    local target="$1"
+    _parse_target "$target"
+
+    if [[ ! -f "$_PT_DEPLOY_DIR/config.yaml" ]]; then
+        _gum log --level error "No config.yaml found for: $_PT_CONFIG"
+        return 1
+    fi
+
+    if [[ -z "$_PT_RUN_DIR" || ! -f "$_PT_RUN_DIR/inventory.ini" ]]; then
+        _gum log --level error "No inventory.ini found for target: $target"
+        if [[ -z "$_PT_RUN_ID" ]]; then
+            local active
+            active=$(get_active_runs "$_PT_DEPLOY_DIR")
+            if [[ -n "$active" ]]; then
+                _faint "Active runs: $(echo "$active" | tr '\n' ' ')"
+                _faint "Usage: ./deploy teardown $_PT_CONFIG/<run_id>"
+            fi
+        fi
+        return 1
+    fi
+
+    local display_name="$_PT_CONFIG"
+    [[ "$_PT_RUN_ID" != "legacy" ]] && display_name="$_PT_CONFIG/$_PT_RUN_ID"
+
+    _bold 196 "Teardown: $display_name"
+    echo ""
+
+    if ! _gum confirm "Delete all VMs and volumes for $display_name?"; then
+        echo "Teardown cancelled."
+        return 0
+    fi
+
+    setup_ansible_log "${_PT_CONFIG}-${_PT_RUN_ID}"
+    init_vm_state "$_PT_DEPLOY_DIR/config.yaml" "$_PT_DEP_ID"
+
+    local start_time
+    start_time=$(date +%s)
+
+    local rc=0
+    run_playbook "teardown.yaml" "$_PT_DEPLOY_DIR/hosts.ini" "$_PT_DEPLOY_DIR" "render_teardown_table" "$_PT_DEP_ID" "$_PT_RUN_DIR" || rc=$?
+
+    # Remove SSH config block (before summary so final render shows it)
+    remove_ssh_config "$display_name"
+
+    local elapsed=$(( $(date +%s) - start_time ))
+    echo ""
+    render_teardown_summary "$elapsed"
+    _faint "Ansible log: $ANSIBLE_LOG"
+
+    # Clean up run directory after teardown
+    if [[ "$_PT_RUN_ID" != "legacy" && -d "$_PT_RUN_DIR" ]]; then
+        rm -f "$_PT_RUN_DIR/inventory.ini" "$_PT_RUN_DIR/ssh_config_snippet.txt"
+        rmdir "$_PT_RUN_DIR" 2>/dev/null || true
+    fi
+
+    return $rc
+}
+
+do_teardown_all() {
+    local hosts_ini=""
+    local dir
+    for dir in "$SCRIPT_DIR"/*/; do
+        if [[ -f "${dir}hosts.ini" ]]; then
+            hosts_ini="${dir}hosts.ini"
+            break
+        fi
+    done
+
+    if [[ -z "$hosts_ini" ]]; then
+        _gum log --level error "No hosts.ini found in any deployment."
+        return 1
+    fi
+
+    _bold 196 "TEARDOWN ALL"
+    echo ""
+    _color 196 "This will DELETE ALL sup-* servers and volumes!"
+    _color 196 "This is NOT deployment-specific."
+    echo ""
+
+    if ! _gum confirm --default=false "Delete ALL sup-* servers and volumes?"; then
+        echo "Teardown cancelled."
+        return 0
+    fi
+
+    local confirm
+    confirm=$(_gum input --header "Type DELETE ALL to confirm:" --placeholder "DELETE ALL")
+    stty opost onlcr 2>/dev/null || true  # extra restore: _gum ran in subshell
+    if [[ "$confirm" != "DELETE ALL" ]]; then
+        echo "Teardown cancelled."
+        return 0
+    fi
+
+    setup_ansible_log "teardown-all"
+
+    # Initialize empty state (teardown discovers resources dynamically)
+    VM_ORDER=()
+    VM_STATUS=(); VM_BEHAVIOR=(); VM_FLAVOR=(); VM_HW=()
+    VM_IP=(); VM_ERROR=()
+    VM_PROVISION_START=(); VM_PROVISION_END=()
+    VM_INSTALL_START=(); VM_INSTALL_END=()
+    RESOURCE_NAME=(); RESOURCE_TYPE=(); RESOURCE_STATUS=()
+    _EVENT_FILE_POS=0
+    MONITOR_PHASE="teardown"
+
+    local start_time
+    start_time=$(date +%s)
+
+    local rc=0
+    run_playbook "teardown-all.yaml" "$hosts_ini" "$(dirname "$hosts_ini")" "render_teardown_table" || rc=$?
+
+    local elapsed=$(( $(date +%s) - start_time ))
+    echo ""
+    render_teardown_summary "$elapsed"
+    _faint "Ansible log: $ANSIBLE_LOG"
+
+    # Remove all RUSE SSH config blocks
+    local ssh_config="${SSH_CONFIG:-$HOME/.ssh/config}"
+    if [[ -f "$ssh_config" ]]; then
+        local ruse_name
+        while IFS= read -r ruse_name; do
+            remove_ssh_config "$ruse_name"
+        done < <(grep -oP '(?<=^# BEGIN RUSE: ).*' "$ssh_config")
+    fi
+
+    # Clean up all inventory files (root + runs/)
+    for dir in "$SCRIPT_DIR"/*/; do
+        rm -f "${dir}inventory.ini" 2>/dev/null || true
+        if [[ -d "${dir}runs" ]]; then
+            find "${dir}runs" -name "inventory.ini" -type f -delete 2>/dev/null || true
+            find "${dir}runs" -name "ssh_config_snippet.txt" -type f -delete 2>/dev/null || true
+        fi
+    done
+
+    return $rc
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Interactive menu
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Custom menu: arrow keys to scroll, number keys to instant-select, q to cancel
+# Display goes to stderr (safe in subshells), result to stdout.
+# Returns 1 on q/Esc.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_menu_choose() {
+    local header="$1"; shift
+    local -a items=("$@")
+    local selected=0
+    local count=${#items[@]}
+
+    printf '\033[?25l' >&2  # hide cursor
+
+    while true; do
+        clear_content_area >&2
+        _bold 39 "$header" >&2
+        echo "" >&2
+
+        local i
+        for ((i=0; i<count; i++)); do
+            if [[ $i -eq $selected ]]; then
+                printf '  \033[7m > %s \033[0m\n' "${items[$i]}" >&2
+            else
+                printf '    %s\n' "${items[$i]}" >&2
+            fi
+        done
+
+        echo "" >&2
+        _faint "  ↑↓ navigate • enter select • # number • b back • q quit" >&2
+
+        local key=""
+        read -rsn1 key
+
+        case "$key" in
+            $'\033')  # escape sequence (arrows) or bare Esc
+                local seq=""
+                read -rsn2 -t 0.1 seq 2>/dev/null || true
+                if [[ -z "$seq" ]]; then
+                    # bare Esc = cancel
+                    printf '\033[?25h' >&2
+                    return 1
+                fi
+                case "$seq" in
+                    '[A') [[ $selected -gt 0 ]] && selected=$((selected - 1)) ;;
+                    '[B') [[ $selected -lt $((count - 1)) ]] && selected=$((selected + 1)) ;;
+                esac
+                ;;
+            '')  # Enter
+                printf '\033[?25h' >&2
+                echo "${items[$selected]}"
+                return 0
+                ;;
+            [1-9])  # instant number select
+                local idx=$((key - 1))
+                if [[ $idx -lt $count ]]; then
+                    printf '\033[?25h' >&2
+                    echo "${items[$idx]}"
+                    return 0
+                fi
+                ;;
+            b|B)
+                printf '\033[?25h' >&2
+                return 1
+                ;;
+            q|Q)
+                printf '\033[?25h' >&2
+                return 2
+                ;;
+        esac
+    done
+}
+
+interactive_menu() {
+    local deployments
+    deployments=$(get_deployments)
+
+    if [[ -z "$deployments" ]]; then
+        _gum log --level error "No deployments found in $SCRIPT_DIR"
+        exit 1
+    fi
+
+    while true; do
+        # Full redraw: deployment output may have scrolled past the header
+        printf '\033[2J\033[H'
+        print_ruse_header
+
+        local action rc
+        action=$(_menu_choose "Realistic User Simulation Engine" \
+            "1) Deploy     provision VMs + install SUPs" \
+            "2) Teardown   delete VMs and volumes" \
+            "3) List       show deployed RUSEs"); rc=$?
+        (( rc == 2 )) && exit 0   # q = quit
+        (( rc != 0 )) && continue # b/Esc = back (re-render)
+
+        case "${action%%)*}" in
+            1)
+                clear_content_area
+                local dep
+                dep=$(select_deployment "$deployments"); rc=$?
+                (( rc == 2 )) && exit 0
+                (( rc != 0 )) && continue
+                do_spinup "$dep" || true
+                _wait_for_key
+                ;;
+            2)
+                clear_content_area
+                local dep
+                dep=$(select_teardown_target "$deployments"); rc=$?
+                (( rc == 2 )) && exit 0
+                (( rc != 0 )) && continue
+                if [[ "$dep" == "__ALL__" ]]; then
+                    do_teardown_all || true
+                else
+                    do_teardown "$dep" || true
+                fi
+                _wait_for_key
+                ;;
+            3)
+                clear_content_area
+                do_list
+                _wait_for_key
+                ;;
+        esac
+    done
+}
+
+_wait_for_key() {
+    echo ""
+    _faint "Press any key to continue..."
+    read -rsn1 2>/dev/null || true
+}
+
+_dep_label() {
+    # Convert directory name to display label: exp-3 -> "Experiment 3", test -> "test"
+    local name="$1"
+    case "$name" in
+        exp-*) echo "Experiment ${name#exp-}" ;;
+        *)     echo "$name" ;;
+    esac
+}
+
+select_deployment() {
+    local deployments="$1"
+
+    local -a choices=() dep_dirs=()
+    local i=1
+    while IFS= read -r dep; do
+        [[ -z "$dep" ]] && continue
+        local deploy_dir="$SCRIPT_DIR/$dep"
+        local vm_count label tag=""
+        vm_count=$(get_vm_count "$deploy_dir/config.yaml")
+        label=$(_dep_label "$dep")
+        has_feedback "$deploy_dir" && tag=" [feedback]"
+        choices+=("$i) $label  ($vm_count VMs)$tag")
+        dep_dirs+=("$dep")
+        i=$((i + 1))
+    done <<< "$deployments"
+
+    local selection rc
+    selection=$(_menu_choose "Select deployment" "${choices[@]}"); rc=$?
+    (( rc != 0 )) && return $rc
+
+    # Extract index from "N) ..." prefix
+    local num="${selection%%)*}"
+    echo "${dep_dirs[$((num - 1))]}"
+}
+
+select_teardown_target() {
+    local deployments="$1"
+
+    # Build list of active runs across all configs
+    local -a choices=() targets=()
+    local i=1
+    while IFS= read -r dep; do
+        [[ -z "$dep" ]] && continue
+        local deploy_dir="$SCRIPT_DIR/$dep"
+        local label
+        label=$(_dep_label "$dep")
+
+        local active_runs
+        active_runs=$(get_active_runs "$deploy_dir")
+        if [[ -n "$active_runs" ]]; then
+            while IFS= read -r rid; do
+                [[ -z "$rid" ]] && continue
+                local rdir
+                rdir=$(get_run_dir "$deploy_dir" "$rid")
+                local vm_count_inv
+                vm_count_inv=$(grep -c 'ansible_host=' "$rdir/inventory.ini" 2>/dev/null || echo "0")
+                local run_label
+                if [[ "$rid" == "legacy" ]]; then
+                    run_label="$i) $label / (legacy)  ($vm_count_inv VMs)"
+                else
+                    run_label="$i) $label / $rid  ($vm_count_inv VMs)"
+                fi
+                choices+=("$run_label")
+                if [[ "$rid" == "legacy" ]]; then
+                    targets+=("$dep")
+                else
+                    targets+=("$dep/$rid")
+                fi
+                i=$((i + 1))
+            done <<< "$active_runs"
+        fi
+    done <<< "$deployments"
+
+    if [[ ${#choices[@]} -eq 0 ]]; then
+        _faint "No active runs found." >&2
+        echo "" >&2
+    fi
+
+    choices+=("$i) ALL  (delete every sup-* server and volume)")
+    targets+=("__ALL__")
+
+    local selection rc
+    selection=$(_menu_choose "Select teardown target" "${choices[@]}"); rc=$?
+    (( rc != 0 )) && return $rc
+
+    local num="${selection%%)*}"
+    echo "${targets[$((num - 1))]}"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI help
+# ─────────────────────────────────────────────────────────────────────────────
+
+show_help() {
+    cat <<'HELP'
+RUSE - Realistic User Simulation Engine
+
+Usage:
+  ./deploy                              Interactive menu (gum TUI)
+  ./deploy list                         List deployed RUSEs (active runs)
+  ./deploy preview <deployment>         Preview deployment configs (behaviors)
+  ./deploy spinup <deployment>          Provision VMs + install SUPs (auto run ID)
+  ./deploy spinup <deployment> --run ID Provision with explicit run ID
+  ./deploy install <deployment>/<run>   Install SUPs on existing VMs
+  ./deploy teardown <deployment>/<run>  Delete run's VMs and volumes
+  ./deploy teardown-all                 Delete ALL sup-* VMs and volumes
+
+Multi-Run:
+  Each spinup creates an independent run with its own inventory and SSH config.
+  Run IDs are auto-generated as MMDD date stamps (e.g., 0212, 0213).
+  Same-day collisions get letter suffixes: 0212a, 0212b, etc.
+
+  Files are stored under: deployments/<config>/runs/<run_id>/
+    - inventory.ini
+    - ssh_config_snippet.txt
+
+  Legacy deployments (root inventory.ini, no runs/) are supported as-is.
+
+Options:
+  --help, -h    Show this help
+
+Environment:
+  SSH_CONFIG    Path to SSH config (default: ~/.ssh/config)
+
+Examples:
+  ./deploy spinup test              Spinup test with auto run ID (e.g., 0212)
+  ./deploy spinup test --run 0212   Spinup test with explicit run ID
+  ./deploy install test/0212        Install on specific run
+  ./deploy teardown test/0212       Tear down specific run
+  ./deploy teardown exp-3           Tear down legacy exp-3 deployment
+  ./deploy list                     Show configs and active runs
+HELP
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+main() {
+    check_prereqs
+
+    # Reset terminal state (gum may have corrupted onlcr in prior runs)
+    stty sane 2>/dev/null || true
+
+    # Clear screen and print persistent header
+    printf '\033[2J\033[H'
+    print_ruse_header
+
+    case "${1:-}" in
+        --help|-h)
+            show_help
+            ;;
+        list)
+            do_list
+            ;;
+        preview)
+            [[ -z "${2:-}" ]] && { echo "Usage: $0 preview <deployment>"; exit 1; }
+            do_preview "$2"
+            ;;
+        spinup)
+            [[ -z "${2:-}" ]] && { echo "Usage: $0 spinup <deployment> [--run <id>]"; exit 1; }
+            local spinup_dep="$2"
+            local spinup_run=""
+            if [[ "${3:-}" == "--run" ]]; then
+                [[ -z "${4:-}" ]] && { echo "Usage: $0 spinup <deployment> --run <id>"; exit 1; }
+                spinup_run="$4"
+            fi
+            do_spinup "$spinup_dep" "$spinup_run"
+            ;;
+        install)
+            [[ -z "${2:-}" ]] && { echo "Usage: $0 install <deployment>[/<run_id>]"; exit 1; }
+            do_install "$2"
+            ;;
+        teardown)
+            [[ -z "${2:-}" ]] && { echo "Usage: $0 teardown <deployment>[/<run_id>]"; exit 1; }
+            do_teardown "$2"
+            ;;
+        teardown-all)
+            do_teardown_all
+            ;;
+        "")
+            interactive_menu
+            ;;
+        *)
+            echo "Unknown command: $1"
+            echo "Run '$0 --help' for usage."
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
