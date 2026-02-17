@@ -17,21 +17,33 @@ def log(msg: str):
     print(f"[{ts}] {msg}")
 
 
-def run_browseruse(config: SUPConfig, task: str = None):
+def run_browseruse(config: SUPConfig, task: str = None, feedback_dir: str = None):
     """Run BrowserUse brain in single-task mode."""
+    # Resolve feedback directory
+    from common.feedback_config import resolve_feedback_dir, load_feedback_config
+    resolved_feedback_dir = resolve_feedback_dir(config.config_key, override_dir=feedback_dir)
+
     logger = AgentLogger(agent_type=config.config_key)
     logger.session_start(config={
         "brain": config.brain,
         "model": config.model,
         "calibration": config.calibration,
         "config_key": config.config_key,
-        "seed": config.seed
+        "seed": config.seed,
+        "feedback_dir": str(resolved_feedback_dir),
     })
 
     from brains.browseruse import BrowserUseAgent, DEFAULT_PROMPTS, PHASE_PROMPTS
     from brains.browseruse.tasks import get_random_task
 
     prompts = PHASE_PROMPTS if config.phase else DEFAULT_PROMPTS
+
+    # Apply prompt augmentation from feedback
+    fc = load_feedback_config(resolved_feedback_dir, config.config_key)
+    if fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"):
+        from brains.browseruse.prompts import BUPrompts
+        prompts = BUPrompts(task=prompts.task, content=fc.prompt_augmentation["prompt_content"])
+        log(f"[feedback] Applied prompt augmentation for {config.config_key}")
     if task is None:
         task = get_random_task()
 
@@ -58,9 +70,13 @@ def run_browseruse(config: SUPConfig, task: str = None):
         logger.session_end()
 
 
-def run_browseruse_loop(config: SUPConfig, use_phase_timing: bool = True):
+def run_browseruse_loop(config: SUPConfig, use_phase_timing: bool = True, feedback_dir: str = None):
     """Run BrowserUse in loop mode (continuous execution)."""
     calibration_profile = config.calibration
+
+    # Resolve feedback directory
+    from common.feedback_config import resolve_feedback_dir, load_feedback_config
+    resolved_feedback_dir = resolve_feedback_dir(config.config_key, override_dir=feedback_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
     logger.session_start(config={
@@ -69,12 +85,20 @@ def run_browseruse_loop(config: SUPConfig, use_phase_timing: bool = True):
         "calibration": calibration_profile,
         "loop_mode": True,
         "config_key": config.config_key,
-        "seed": config.seed
+        "seed": config.seed,
+        "feedback_dir": str(resolved_feedback_dir),
     })
 
     from brains.browseruse import BrowserUseLoop, DEFAULT_PROMPTS, PHASE_PROMPTS
 
     prompts = PHASE_PROMPTS if config.phase else DEFAULT_PROMPTS
+
+    # Apply prompt augmentation from feedback
+    fc = load_feedback_config(resolved_feedback_dir, config.config_key)
+    if fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"):
+        from brains.browseruse.prompts import BUPrompts
+        prompts = BUPrompts(task=prompts.task, content=fc.prompt_augmentation["prompt_content"])
+        log(f"[feedback] Applied prompt augmentation for {config.config_key}")
 
     log(f"Running BrowserUse loop (config: {config.config_key})")
     log(f"Calibration: {calibration_profile or 'none'}")
@@ -92,6 +116,8 @@ def run_browseruse_loop(config: SUPConfig, use_phase_timing: bool = True):
             # Legacy compat: fall back to use_phase_timing if no calibration
             use_phase_timing=use_phase_timing if not calibration_profile else False,
             seed=config.seed,
+            feedback_dir=str(resolved_feedback_dir),
+            config_key=config.config_key,
         )
         agent.run()
         logger.session_success(message="BrowserUse loop completed successfully")
@@ -116,6 +142,8 @@ if __name__ == "__main__":
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--no-phase-timing", action="store_true")
+    parser.add_argument("--feedback-dir", type=str, default=None,
+                        help="Override feedback config directory")
     args = parser.parse_args()
 
     calibration = args.calibration
@@ -126,6 +154,7 @@ if __name__ == "__main__":
                           calibration=calibration, cpu_only=args.cpu)
 
     if args.loop:
-        run_browseruse_loop(config, use_phase_timing=not args.no_phase_timing)
+        run_browseruse_loop(config, use_phase_timing=not args.no_phase_timing,
+                            feedback_dir=args.feedback_dir)
     else:
-        run_browseruse(config, task=args.task)
+        run_browseruse(config, task=args.task, feedback_dir=args.feedback_dir)

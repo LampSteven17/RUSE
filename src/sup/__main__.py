@@ -9,6 +9,7 @@ Usage:
 Examples:
     python -m sup M1                                    # MCHP baseline (no timing)
     python -m sup M3                                    # MCHP + fall24 timing
+    python -m sup B0.llama                              # BrowserUse + llama baseline
     python -m sup B2.gemma                              # BrowserUse + gemma + summer24
     python -m sup S4.llama                              # SmolAgents + llama + spring25
     python -m sup --brain browseruse --model gemma --calibration fall24
@@ -25,15 +26,15 @@ def main():
         description="SUP - Synthetic User Persona Agent Runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Configuration Keys (exp-3):
+Configuration Keys:
   C0/M0       Controls (bare Ubuntu / upstream MITRE pyhuman)
   M1-M4       MCHP (no LLM): baseline / summer24 / fall24 / spring25
-  B1-B4.llama BrowserUse + llama: baseline / summer24 / fall24 / spring25
-  B1-B4.gemma BrowserUse + gemma: baseline / summer24 / fall24 / spring25
-  S1-S4.llama SmolAgents + llama: baseline / summer24 / fall24 / spring25
-  S1-S4.gemma SmolAgents + gemma: baseline / summer24 / fall24 / spring25
+  B0.llama/gemma  BrowserUse baseline (no timing)
+  B2-B4.llama/gemma  BrowserUse + calibrated timing
+  S0.llama/gemma  SmolAgents baseline (no timing)
+  S2-S4.llama/gemma  SmolAgents + calibrated timing
 
-  Deprecated exp-2 keys (M1a.llama, B2c.deepseek, etc.) are still accepted.
+  Deprecated keys (B1.llama, M1a.llama, B2c.deepseek, etc.) are still accepted.
         """
     )
 
@@ -49,13 +50,15 @@ Configuration Keys (exp-3):
     parser.add_argument("--seed", type=int, default=42,
         help="Random seed for deterministic behavior (default: 42, 0 = non-deterministic)")
     parser.add_argument("--task", type=str, default=None)
+    parser.add_argument("--feedback-dir", type=str, default=None,
+        help="Override feedback config directory (default: auto-discover from deployed_sups)")
     parser.add_argument("--list", action="store_true")
 
     args = parser.parse_args()
 
     if args.list:
         from runners import list_configs, list_aliases
-        print("Available configuration keys (exp-3):")
+        print("Available configuration keys:")
         print("-" * 50)
         for key in list_configs():
             print(f"  {key}")
@@ -114,13 +117,13 @@ Configuration Keys (exp-3):
 
     if config.brain == "mchp":
         from runners.run_mchp import run_mchp
-        run_mchp(config)
+        run_mchp(config, feedback_dir=args.feedback_dir)
     elif config.brain == "browseruse":
         from runners.run_browseruse import run_browseruse
-        run_browseruse(config, task=args.task)
+        run_browseruse(config, task=args.task, feedback_dir=args.feedback_dir)
     elif config.brain == "smolagents":
         from runners.run_smolagents import run_smolagents
-        run_smolagents(config, task=args.task)
+        run_smolagents(config, task=args.task, feedback_dir=args.feedback_dir)
     else:
         print(f"Error: Unknown brain type '{config.brain}'")
         sys.exit(1)

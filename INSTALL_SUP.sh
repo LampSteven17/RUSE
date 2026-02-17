@@ -3,10 +3,11 @@
 # RUSE: Unified SUP Installer
 # Architecture: Brain + Model + Calibration
 #
-# Naming Scheme (exp-3):
+# Naming Scheme:
 #   [Brain][Version].[Model]
 #   Brain:    M = MCHP, B = BrowserUse, S = SmolAgents
-#   Version:  1 = baseline (no timing)
+#   Version:  0 = baseline (B/S only, no timing)
+#             1 = baseline (MCHP only, no timing)
 #             2 = calibrated to summer24
 #             3 = calibrated to fall24
 #             4 = calibrated to spring25
@@ -50,11 +51,11 @@ log_info() { echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] INFO:${NC} $1"; }
 
 usage() {
     cat << 'EOF'
-RUSE Unified Installer (exp-3: Calibrated PHASE Timing)
+RUSE Unified Installer
 
 Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
 
-=== Configuration Keys (exp-3) ===
+=== Configuration Keys ===
 
   Control Series:
     --C0                Bare Ubuntu VM (no software - pure control)
@@ -67,8 +68,8 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --M4                MCHP + spring25 calibrated timing
 
   B Series - BrowserUse Brain (GPU):
-    --B1.llama          BrowserUse + llama (no timing)
-    --B1.gemma          BrowserUse + gemma (no timing)
+    --B0.llama          BrowserUse + llama (no timing)
+    --B0.gemma          BrowserUse + gemma (no timing)
     --B2.llama          BrowserUse + llama + summer24 timing
     --B2.gemma          BrowserUse + gemma + summer24 timing
     --B3.llama          BrowserUse + llama + fall24 timing
@@ -77,8 +78,8 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --B4.gemma          BrowserUse + gemma + spring25 timing
 
   S Series - SmolAgents Brain (GPU):
-    --S1.llama          SmolAgents + llama (no timing)
-    --S1.gemma          SmolAgents + gemma (no timing)
+    --S0.llama          SmolAgents + llama (no timing)
+    --S0.gemma          SmolAgents + gemma (no timing)
     --S2.llama          SmolAgents + llama + summer24 timing
     --S2.gemma          SmolAgents + gemma + summer24 timing
     --S3.llama          SmolAgents + llama + fall24 timing
@@ -144,8 +145,8 @@ CONFIGS=(
     ["M4"]="mchp:none:none:spring25"
 
     # B Series - BrowserUse brain (GPU)
-    ["B1.llama"]="browseruse:none:llama:none"
-    ["B1.gemma"]="browseruse:none:gemma:none"
+    ["B0.llama"]="browseruse:none:llama:none"
+    ["B0.gemma"]="browseruse:none:gemma:none"
     ["B2.llama"]="browseruse:none:llama:summer24"
     ["B2.gemma"]="browseruse:none:gemma:summer24"
     ["B3.llama"]="browseruse:none:llama:fall24"
@@ -154,8 +155,8 @@ CONFIGS=(
     ["B4.gemma"]="browseruse:none:gemma:spring25"
 
     # S Series - SmolAgents brain (GPU)
-    ["S1.llama"]="smolagents:none:llama:none"
-    ["S1.gemma"]="smolagents:none:gemma:none"
+    ["S0.llama"]="smolagents:none:llama:none"
+    ["S0.gemma"]="smolagents:none:gemma:none"
     ["S2.llama"]="smolagents:none:llama:summer24"
     ["S2.gemma"]="smolagents:none:gemma:summer24"
     ["S3.llama"]="smolagents:none:llama:fall24"
@@ -163,8 +164,14 @@ CONFIGS=(
     ["S4.llama"]="smolagents:none:llama:spring25"
     ["S4.gemma"]="smolagents:none:gemma:spring25"
 
-    # === Deprecated aliases (exp-2 backward compat) ===
-    # MCHP + LLM keys -> plain MCHP (no LLM in exp-3)
+    # === Deprecated aliases ===
+    # Old B1/S1 baseline keys -> B0/S0
+    ["B1.llama"]="browseruse:none:llama:none"
+    ["B1.gemma"]="browseruse:none:gemma:none"
+    ["S1.llama"]="smolagents:none:llama:none"
+    ["S1.gemma"]="smolagents:none:gemma:none"
+
+    # MCHP + LLM keys -> plain MCHP (no LLM)
     ["M1a.llama"]="mchp:llm:llama:none"
     ["M1b.gemma"]="mchp:llm:gemma:none"
     ["M1c.deepseek"]="mchp:llm:deepseek:none"
@@ -230,7 +237,7 @@ MODEL_NAMES=(
 )
 
 list_configs() {
-    echo "Available configurations (exp-3):"
+    echo "Available configurations:"
     echo ""
     echo "Control:"
     printf "  %-16s Bare Ubuntu VM (no software)\n" "--C0"
@@ -243,20 +250,20 @@ list_configs() {
     done
     echo ""
     echo "B Series - BrowserUse Brain (GPU):"
-    for key in B1.llama B1.gemma B2.llama B2.gemma B3.llama B3.gemma B4.llama B4.gemma; do
+    for key in B0.llama B0.gemma B2.llama B2.gemma B3.llama B3.gemma B4.llama B4.gemma; do
         IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
         printf "  %-16s brain=%-12s model=%-8s calibration=%s\n" \
             "--$key" "$brain" "$model" "$calibration"
     done
     echo ""
     echo "S Series - SmolAgents Brain (GPU):"
-    for key in S1.llama S1.gemma S2.llama S2.gemma S3.llama S3.gemma S4.llama S4.gemma; do
+    for key in S0.llama S0.gemma S2.llama S2.gemma S3.llama S3.gemma S4.llama S4.gemma; do
         IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
         printf "  %-16s brain=%-12s model=%-8s calibration=%s\n" \
             "--$key" "$brain" "$model" "$calibration"
     done
     echo ""
-    echo "Deprecated exp-2 keys are still accepted but map to exp-3 configs."
+    echo "Deprecated exp-2 keys (including old B1/S1) are still accepted."
 }
 
 parse_config_key() {
@@ -284,19 +291,20 @@ parse_args() {
                 parse_config_key "${1#--}"
                 ;;
 
-            # Config key shortcuts - B Series (exp-3)
-            --B1.llama|--B1.gemma|--B2.llama|--B2.gemma|\
+            # Config key shortcuts - B Series
+            --B0.llama|--B0.gemma|--B2.llama|--B2.gemma|\
             --B3.llama|--B3.gemma|--B4.llama|--B4.gemma)
                 parse_config_key "${1#--}"
                 ;;
 
-            # Config key shortcuts - S Series (exp-3)
-            --S1.llama|--S1.gemma|--S2.llama|--S2.gemma|\
+            # Config key shortcuts - S Series
+            --S0.llama|--S0.gemma|--S2.llama|--S2.gemma|\
             --S3.llama|--S3.gemma|--S4.llama|--S4.gemma)
                 parse_config_key "${1#--}"
                 ;;
 
-            # Deprecated exp-2 config keys (still accepted)
+            # Deprecated config keys (still accepted)
+            --B1.llama|--B1.gemma|--S1.llama|--S1.gemma|\
             --M1a.llama|--M1b.gemma|--M1c.deepseek|\
             --M2a.llama|--M2b.gemma|--M2c.deepseek|\
             --B1a.llama|--B1b.gemma|--B1c.deepseek|\
@@ -378,11 +386,19 @@ parse_args() {
 }
 
 generate_config_key() {
-    local version="1"
+    local version
     case "$CALIBRATION" in
         summer24) version="2" ;;
         fall24) version="3" ;;
         spring25) version="4" ;;
+        *)
+            # Baseline version: MCHP=1, BrowserUse/SmolAgents=0
+            if [[ "$BRAIN" == "mchp" ]]; then
+                version="1"
+            else
+                version="0"
+            fi
+            ;;
     esac
 
     if [[ "$BRAIN" == "mchp" ]]; then

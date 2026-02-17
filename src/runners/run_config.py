@@ -5,21 +5,24 @@ Maps configuration keys to brain/content/model combinations.
 
 ARCHITECTURE: Brain + Content (MCHP only) + Model + Calibration
 
-NAMING SCHEME (exp-3):
+NAMING SCHEME:
 [Brain][Version].[Model]
 
 Brain:    M = MCHP, B = BrowserUse, S = SmolAgents
-Version:  1 = baseline (no timing)
+Version:  0 = baseline (B/S only, no timing)
+          1 = baseline (MCHP only, no timing)
           2 = calibrated to summer24
           3 = calibrated to fall24
           4 = calibrated to spring25
 Models:   llama (llama3.1:8b), gemma (gemma3:4b)
 
 MCHP has no LLM — pure scripted automation, no model suffix.
+Calibrated versions (2+) are uniform across all brains.
 
 Examples:
 - M1          = MCHP baseline (no timing)
 - M2          = MCHP + summer24 calibrated timing
+- B0.llama    = BrowserUse + llama baseline (no timing)
 - B3.gemma    = BrowserUse + gemma + fall24 calibrated timing
 - S4.llama    = SmolAgents + llama + spring25 calibrated timing
 """
@@ -31,15 +34,14 @@ BrainType = Literal["mchp", "browseruse", "smolagents"]
 ContentType = Literal["none", "llm"]
 ModelType = Literal["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"]
 
-# Version number -> calibration dataset mapping
-_VERSION_TO_CALIBRATION = {
-    1: None,
+# Calibrated version -> dataset mapping (same for all brains, starts at 2)
+_CALIBRATED_VERSIONS = {
     2: "summer24",
     3: "fall24",
     4: "spring25",
 }
 
-_CALIBRATION_TO_VERSION = {v: k for k, v in _VERSION_TO_CALIBRATION.items()}
+_CALIBRATION_TO_VERSION = {v: k for k, v in _CALIBRATED_VERSIONS.items()}
 
 
 @dataclass
@@ -60,8 +62,12 @@ class SUPConfig:
 
     @property
     def config_key(self) -> str:
-        """Generate the configuration key (e.g., M1, B3.gemma)."""
-        version = _CALIBRATION_TO_VERSION.get(self.calibration, 1)
+        """Generate the configuration key (e.g., M1, B0.llama, B3.gemma)."""
+        if self.calibration is not None:
+            version = _CALIBRATION_TO_VERSION.get(self.calibration, 2)
+        else:
+            # Baseline version: MCHP=1, BrowserUse/SmolAgents=0
+            version = 1 if self.brain == "mchp" else 0
 
         if self.brain == "mchp":
             prefix = "MC" if self.cpu_only else "M"
@@ -91,8 +97,8 @@ CONFIGS = {
     "M4": SUPConfig(brain="mchp", calibration="spring25"),
 
     # === BrowserUse ===
-    "B1.llama": SUPConfig(brain="browseruse", model="llama"),
-    "B1.gemma": SUPConfig(brain="browseruse", model="gemma"),
+    "B0.llama": SUPConfig(brain="browseruse", model="llama"),
+    "B0.gemma": SUPConfig(brain="browseruse", model="gemma"),
     "B2.llama": SUPConfig(brain="browseruse", model="llama", calibration="summer24"),
     "B2.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="summer24"),
     "B3.llama": SUPConfig(brain="browseruse", model="llama", calibration="fall24"),
@@ -101,8 +107,8 @@ CONFIGS = {
     "B4.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="spring25"),
 
     # === SmolAgents ===
-    "S1.llama": SUPConfig(brain="smolagents", model="llama"),
-    "S1.gemma": SUPConfig(brain="smolagents", model="gemma"),
+    "S0.llama": SUPConfig(brain="smolagents", model="llama"),
+    "S0.gemma": SUPConfig(brain="smolagents", model="gemma"),
     "S2.llama": SUPConfig(brain="smolagents", model="llama", calibration="summer24"),
     "S2.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="summer24"),
     "S3.llama": SUPConfig(brain="smolagents", model="llama", calibration="fall24"),
@@ -124,21 +130,27 @@ _ALIASES = {
     "M2b.gemma": "M2",
     "M2c.deepseek": "M2",
 
-    # BrowserUse exp-2 keys -> exp-3 (drop variant letter, drop deepseek)
-    "B1a.llama": "B1.llama",
-    "B1b.gemma": "B1.gemma",
-    "B1c.deepseek": "B1.llama",
+    # BrowserUse exp-2 keys (drop variant letter, drop deepseek)
+    "B1a.llama": "B0.llama",
+    "B1b.gemma": "B0.gemma",
+    "B1c.deepseek": "B0.llama",
     "B2a.llama": "B2.llama",
     "B2b.gemma": "B2.gemma",
     "B2c.deepseek": "B2.llama",
 
-    # SmolAgents exp-2 keys -> exp-3 (drop variant letter, drop deepseek)
-    "S1a.llama": "S1.llama",
-    "S1b.gemma": "S1.gemma",
-    "S1c.deepseek": "S1.llama",
+    # SmolAgents exp-2 keys (drop variant letter, drop deepseek)
+    "S1a.llama": "S0.llama",
+    "S1b.gemma": "S0.gemma",
+    "S1c.deepseek": "S0.llama",
     "S2a.llama": "S2.llama",
     "S2b.gemma": "S2.gemma",
     "S2c.deepseek": "S2.llama",
+
+    # Old B1/S1 baseline keys -> B0/S0
+    "B1.llama": "B0.llama",
+    "B1.gemma": "B0.gemma",
+    "S1.llama": "S0.llama",
+    "S1.gemma": "S0.gemma",
 
     # CPU variants -> map to base configs (no CPU configs in exp-3)
     "MC1a.llama": "M1",
@@ -153,18 +165,18 @@ _ALIASES = {
     "MC2d.lfm": "M2",
     "MC2e.ministral": "M2",
     "MC2f.qwen": "M2",
-    "BC1a.llama": "B1.llama",
-    "BC1b.gemma": "B1.gemma",
-    "BC1c.deepseek": "B1.llama",
-    "BC1d.lfm": "B1.llama",
-    "BC1e.ministral": "B1.llama",
-    "BC1f.qwen": "B1.llama",
-    "SC1a.llama": "S1.llama",
-    "SC1b.gemma": "S1.gemma",
-    "SC1c.deepseek": "S1.llama",
-    "SC1d.lfm": "S1.llama",
-    "SC1e.ministral": "S1.llama",
-    "SC1f.qwen": "S1.llama",
+    "BC1a.llama": "B0.llama",
+    "BC1b.gemma": "B0.gemma",
+    "BC1c.deepseek": "B0.llama",
+    "BC1d.lfm": "B0.llama",
+    "BC1e.ministral": "B0.llama",
+    "BC1f.qwen": "B0.llama",
+    "SC1a.llama": "S0.llama",
+    "SC1b.gemma": "S0.gemma",
+    "SC1c.deepseek": "S0.llama",
+    "SC1d.lfm": "S0.llama",
+    "SC1e.ministral": "S0.llama",
+    "SC1f.qwen": "S0.llama",
 }
 
 

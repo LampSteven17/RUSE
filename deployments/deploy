@@ -161,24 +161,39 @@ trap 'exit 0' INT TERM
 # ─────────────────────────────────────────────────────────────────────────────
 
 get_deployments() {
-    # List deployments: exp-N sorted numerically, then test at the end.
+    # List deployments: controls first, then exp-N sorted numerically, then test.
     # Skip babys-first-sups (deprecated).
-    local -a exps=() others=()
+    local -a first=() exps=() others=()
     local dir name
     for dir in "$SCRIPT_DIR"/*/; do
         [[ -f "${dir}config.yaml" ]] || continue
         name=$(basename "$dir")
         case "$name" in
             babys-first-sups) continue ;;  # deprecated
-            exp-*)  exps+=("$name") ;;
-            test)   others+=("$name") ;;   # test goes last
-            *)      others+=("$name") ;;
+            controls) first+=("$name") ;;  # controls always first
+            exp-*)    exps+=("$name") ;;
+            test)     others+=("$name") ;;  # test goes last
+            *)        others+=("$name") ;;
         esac
     done
+    # Controls first
+    printf '%s\n' "${first[@]}"
     # Sort exp-N numerically
     printf '%s\n' "${exps[@]}" | sort -t- -k2 -n
     # Then non-exp deployments (test etc.)
     printf '%s\n' "${others[@]}"
+}
+
+get_hosts_ini() {
+    # Return the hosts.ini for a deployment: per-deployment first, shared fallback.
+    local deploy_dir="$1"
+    if [[ -f "$deploy_dir/hosts.ini" ]]; then
+        echo "$deploy_dir/hosts.ini"
+    elif [[ -f "$SCRIPT_DIR/hosts.ini" ]]; then
+        echo "$SCRIPT_DIR/hosts.ini"
+    else
+        echo ""
+    fi
 }
 
 get_dep_id() {
@@ -577,7 +592,9 @@ do_spinup() {
         return 1
     fi
 
-    if [[ ! -f "$deploy_dir/hosts.ini" ]]; then
+    local hosts_ini
+    hosts_ini=$(get_hosts_ini "$deploy_dir")
+    if [[ -z "$hosts_ini" ]]; then
         _gum log --level error "No hosts.ini found for: $deployment"
         return 1
     fi
@@ -639,7 +656,7 @@ do_spinup() {
 
     # Phase 1: Provision
     local provision_rc=0
-    run_playbook "provision-vms.yaml" "$deploy_dir/hosts.ini" "$deploy_dir" "" "$dep_id" "$run_dir" || provision_rc=$?
+    run_playbook "provision-vms.yaml" "$hosts_ini" "$deploy_dir" "" "$dep_id" "$run_dir" || provision_rc=$?
 
     if [[ $provision_rc -ne 0 ]]; then
         echo ""
@@ -782,7 +799,13 @@ do_teardown() {
     start_time=$(date +%s)
 
     local rc=0
-    run_playbook "teardown.yaml" "$_PT_DEPLOY_DIR/hosts.ini" "$_PT_DEPLOY_DIR" "render_teardown_table" "$_PT_DEP_ID" "$_PT_RUN_DIR" || rc=$?
+    local hosts_ini
+    hosts_ini=$(get_hosts_ini "$_PT_DEPLOY_DIR")
+    if [[ -z "$hosts_ini" ]]; then
+        _gum log --level error "No hosts.ini found for: $_PT_CONFIG"
+        return 1
+    fi
+    run_playbook "teardown.yaml" "$hosts_ini" "$_PT_DEPLOY_DIR" "render_teardown_table" "$_PT_DEP_ID" "$_PT_RUN_DIR" || rc=$?
 
     # Remove SSH config block (before summary so final render shows it)
     remove_ssh_config "$display_name"
@@ -803,13 +826,18 @@ do_teardown() {
 
 do_teardown_all() {
     local hosts_ini=""
-    local dir
-    for dir in "$SCRIPT_DIR"/*/; do
-        if [[ -f "${dir}hosts.ini" ]]; then
-            hosts_ini="${dir}hosts.ini"
-            break
-        fi
-    done
+    # Prefer shared hosts.ini, fall back to any per-deployment one
+    if [[ -f "$SCRIPT_DIR/hosts.ini" ]]; then
+        hosts_ini="$SCRIPT_DIR/hosts.ini"
+    else
+        local dir
+        for dir in "$SCRIPT_DIR"/*/; do
+            if [[ -f "${dir}hosts.ini" ]]; then
+                hosts_ini="${dir}hosts.ini"
+                break
+            fi
+        done
+    fi
 
     if [[ -z "$hosts_ini" ]]; then
         _gum log --level error "No hosts.ini found in any deployment."
@@ -936,13 +964,15 @@ _menu_choose() {
                 echo "${items[$selected]}"
                 return 0
                 ;;
-            [1-9])  # instant number select
-                local idx=$((key - 1))
-                if [[ $idx -lt $count ]]; then
-                    printf '\033[?25h' >&2
-                    echo "${items[$idx]}"
-                    return 0
-                fi
+            [0-9])  # instant number select — match label prefix "N) ..."
+                local _i
+                for ((_i=0; _i<count; _i++)); do
+                    if [[ "${items[$_i]}" == "${key})"* ]]; then
+                        printf '\033[?25h' >&2
+                        echo "${items[$_i]}"
+                        return 0
+                    fi
+                done
                 ;;
             b|B)
                 printf '\033[?25h' >&2
@@ -1017,11 +1047,12 @@ _wait_for_key() {
 }
 
 _dep_label() {
-    # Convert directory name to display label: exp-3 -> "Experiment 3", test -> "test"
+    # Convert directory name to display label: exp-3 -> "Experiment 3", controls -> "Controls", test -> "test"
     local name="$1"
     case "$name" in
-        exp-*) echo "Experiment ${name#exp-}" ;;
-        *)     echo "$name" ;;
+        exp-*)    echo "Experiment ${name#exp-}" ;;
+        controls) echo "Controls" ;;
+        *)        echo "$name" ;;
     esac
 }
 
@@ -1029,7 +1060,7 @@ select_deployment() {
     local deployments="$1"
 
     local -a choices=() dep_dirs=()
-    local i=1
+    local i=0
     while IFS= read -r dep; do
         [[ -z "$dep" ]] && continue
         local deploy_dir="$SCRIPT_DIR/$dep"
@@ -1046,9 +1077,12 @@ select_deployment() {
     selection=$(_menu_choose "Select deployment" "${choices[@]}"); rc=$?
     (( rc != 0 )) && return $rc
 
-    # Extract index from "N) ..." prefix
-    local num="${selection%%)*}"
-    echo "${dep_dirs[$((num - 1))]}"
+    # Find matching dep_dir by label prefix
+    local idx
+    for ((idx=0; idx<${#choices[@]}; idx++)); do
+        [[ "${choices[$idx]}" == "$selection" ]] && break
+    done
+    echo "${dep_dirs[$idx]}"
 }
 
 select_teardown_target() {
@@ -1101,8 +1135,11 @@ select_teardown_target() {
     selection=$(_menu_choose "Select teardown target" "${choices[@]}"); rc=$?
     (( rc != 0 )) && return $rc
 
-    local num="${selection%%)*}"
-    echo "${targets[$((num - 1))]}"
+    local idx
+    for ((idx=0; idx<${#choices[@]}; idx++)); do
+        [[ "${choices[$idx]}" == "$selection" ]] && break
+    done
+    echo "${targets[$idx]}"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

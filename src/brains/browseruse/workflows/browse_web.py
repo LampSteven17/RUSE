@@ -72,6 +72,7 @@ class BrowseWebWorkflow(BUWorkflow):
         self.max_steps = max_steps
         self._llm = None
         self._logger = None
+        self.task_weights = None
 
     def _get_llm(self, logger: Optional["AgentLogger"] = None):
         """Lazy-load the LLM with logging callbacks."""
@@ -125,14 +126,19 @@ class BrowseWebWorkflow(BUWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            task = random.choice(BROWSE_WEB_TASKS)
+            if self.task_weights:
+                task = random.choices(BROWSE_WEB_TASKS, weights=self.task_weights, k=1)[0]
+                selection_method = "feedback_weighted"
+            else:
+                task = random.choice(BROWSE_WEB_TASKS)
+                selection_method = "random"
             if logger:
                 logger.decision(
                     choice="browse_web_task",
                     options=BROWSE_WEB_TASKS[:5],
                     selected=task,
                     context=f"Task from {len(BROWSE_WEB_TASKS)} available tasks",
-                    method="random"
+                    method=selection_method
                 )
 
         self.category = "browser"
@@ -145,7 +151,9 @@ class BrowseWebWorkflow(BUWorkflow):
             result = asyncio.run(self._run_task_async(task, logger))
             if result:
                 print(f"Browse completed: {str(result)[:200]}...")
-            return result
+            # Extract success from BrowserUse AgentHistoryList judge verdict
+            success = bool(result and result.is_done())
+            return result, success
         except Exception as e:
             raise
 

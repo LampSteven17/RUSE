@@ -28,9 +28,11 @@ class WebBrowse(BaseWorkflow):
         super().__init__(name=WORKFLOW_NAME, description=WORKFLOW_DESCRIPTION, driver=None)
 
         self.max_sleep_time = max_sleep_time
+        self.min_sleep_time = 1
         self.max_navigation_clicks = max_navigation_clicks
         self.default_timeout = default_timeout
         self.website_list = self._load_website_list()
+        self.site_weights = None
 
     def action(self, extra=None, logger=None):
         if self.driver is None:
@@ -45,13 +47,15 @@ class WebBrowse(BaseWorkflow):
 
         self._browse(website, logger=logger)
 
-        sleep(random.randint(1,self.max_sleep_time))
+        sleep(random.randint(self.min_sleep_time, self.max_sleep_time))
 
         self._navigate_website(logger=logger)
 
 
     def _get_random_website(self):
         # Get a random website from the list of websites
+        if self.site_weights:
+            return random.choices(self.website_list, weights=self.site_weights, k=1)[0]
         return random.choice(self.website_list)
 
 
@@ -114,7 +118,7 @@ class WebBrowse(BaseWorkflow):
                     print(f"... {num_click}. Navigated to {url}")
                     if logger:
                         logger.step_success(step_name)
-                    sleep(random.randint(1,self.max_sleep_time))
+                    sleep(random.randint(self.min_sleep_time, self.max_sleep_time))
                 except TimeoutException as error:
                     print(f"Timeout loading {url.rstrip()}: {error}")
                     if logger:

@@ -145,7 +145,9 @@ class BrowseYouTubeWorkflow(BUWorkflow):
             result = asyncio.run(self._run_task_async(task, logger))
             if result:
                 print(f"YouTube browse completed: {str(result)[:200]}...")
-            return result
+            # Extract success from BrowserUse AgentHistoryList judge verdict
+            success = bool(result and result.is_done())
+            return result, success
         except Exception as e:
             raise
 

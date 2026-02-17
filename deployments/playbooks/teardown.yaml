@@ -15,17 +15,24 @@
     config_file: "{{ deployment_dir }}/config.yaml"
 
     os_rc_file: "~/vxn3kr-bot-rc"
-    vm_prefix: "sup-"
 
   pre_tasks:
     - name: Load deployment configuration
       include_vars:
         file: "{{ config_file }}"
 
+    - name: Set deployment-scoped prefix
+      set_fact:
+        deployment_id: "{{ deployment_id | default(deployment_name | regex_replace('-', '')) }}"
+
+    - name: Set VM prefix
+      set_fact:
+        vm_prefix: "sup-{{ deployment_id }}-"
+
     - name: Display deployment info
       pause:
         seconds: 0
-        prompt: "Tearing down deployment: {{ deployment_name }}"
+        prompt: "Tearing down deployment: {{ deployment_name }} (prefix: {{ vm_prefix }})"
 
   tasks:
     - name: Get list of SUP servers
@@ -132,6 +139,6 @@
     - name: Remove local inventory file
       delegate_to: localhost
       file:
-        path: "{{ deployment_dir }}/inventory.ini"
+        path: "{{ (run_dir | default(deployment_dir)) }}/inventory.ini"
         state: absent
       ignore_errors: yes

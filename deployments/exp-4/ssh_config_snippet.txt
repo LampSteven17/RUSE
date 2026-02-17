@@ -1,4 +1,4 @@
-############# SUP VMs - exp-3 #############
+############# SUP VMs - exp-4 #############
 # Add this to your ~/.ssh/config
 # Requires ProxyJump through axes
 
@@ -11,78 +11,78 @@ Host sup-*
     ServerAliveInterval 120
 
 Host sup-C0-0
-    HostName 10.246.117.153
+    HostName 10.246.116.100
 
 Host sup-C0-1
-    HostName 10.246.116.34
+    HostName 10.246.115.142
 
 Host sup-C0-2
-    HostName 10.246.117.149
+    HostName 10.246.118.161
 
 Host sup-M0-0
-    HostName 10.246.118.114
+    HostName 10.246.118.192
 
 Host sup-M0-1
-    HostName 10.246.118.110
+    HostName 10.246.117.162
 
 Host sup-M1-0
-    HostName 10.246.118.20
+    HostName 10.246.118.98
 
 Host sup-M2-0
-    HostName 10.246.117.35
+    HostName 10.246.117.64
 
 Host sup-M3-0
-    HostName 10.246.115.241
+    HostName 10.246.115.236
 
 Host sup-M4-0
-    HostName 10.246.118.93
+    HostName 10.246.117.167
 
 Host sup-B1-llama-0
-    HostName 10.246.118.249
+    HostName 10.246.116.251
 
 Host sup-B1-gemma-0
-    HostName 10.246.115.51
+    HostName 10.246.116.71
 
 Host sup-B2-llama-0
-    HostName 10.246.118.141
+    HostName 10.246.118.205
 
 Host sup-B2-gemma-0
-    HostName 10.246.116.49
+    HostName 10.246.118.90
 
 Host sup-B3-llama-0
-    HostName 10.246.116.248
+    HostName 10.246.116.194
 
 Host sup-B3-gemma-0
-    HostName 10.246.118.147
+    HostName 10.246.117.84
 
 Host sup-B4-llama-0
-    HostName 10.246.118.113
+    HostName 10.246.118.62
 
 Host sup-B4-gemma-0
-    HostName 10.246.115.39
+    HostName 10.246.117.58
 
 Host sup-S1-llama-0
-    HostName 10.246.116.245
+    HostName 10.246.116.186
 
 Host sup-S1-gemma-0
-    HostName 10.246.118.9
+    HostName 10.246.115.18
 
 Host sup-S2-llama-0
-    HostName 10.246.118.71
+    HostName 10.246.115.218
 
 Host sup-S2-gemma-0
-    HostName 10.246.115.103
+    HostName 10.246.118.244
 
 Host sup-S3-llama-0
-    HostName 10.246.118.78
+    HostName 10.246.117.152
 
 Host sup-S3-gemma-0
-    HostName 10.246.118.55
+    HostName 10.246.118.15
 
 Host sup-S4-llama-0
-    HostName 10.246.119.57
+    HostName 10.246.118.0
 
 Host sup-S4-gemma-0
-    HostName 10.246.117.206
+    HostName 10.246.115.45
 
 #############################################
