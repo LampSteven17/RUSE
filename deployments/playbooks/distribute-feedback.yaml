@@ -39,12 +39,13 @@
     # Set to true to remove all feedback configs instead of deploying
     clear_feedback: false
 
-    # Consumable config file types (exclude recommendations.json and timing_profile.json)
+    # Consumable config file types (exclude recommendations.json)
     consumable_configs:
       - workflow_weights.json
       - behavior_modifiers.json
       - site_config.json
       - prompt_augmentation.json
+      - timing_profile.json
 
   tasks:
     # ── Skip controls ──────────────────────────────────────────────

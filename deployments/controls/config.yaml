@@ -1,0 +1,48 @@
+---
+# controls: All baseline configs (no calibrated timing)
+# Used for collecting baseline behavior before applying timing calibration.
+#
+# Includes:
+#   C0       - Bare Ubuntu VM (pure control, no software)
+#   M0       - Upstream MITRE pyhuman (control)
+#   M1       - MCHP baseline (no timing)
+#   B0.llama - BrowserUse + llama baseline (no timing)
+#   B0.gemma - BrowserUse + gemma baseline (no timing)
+#   S0.llama - SmolAgents + llama baseline (no timing)
+#   S0.gemma - SmolAgents + gemma baseline (no timing)
+#
+# Total VMs: 7 (3 non-GPU, 4 v100)
+
+deployment_name: controls
+
+flavor_capacity:
+  v1.14vcpu.28g: 5
+  v100-1gpu.14vcpu.28g: 6
+
+deployments:
+  # === Controls (3) - non-GPU ===
+  - behavior: C0
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: M0
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: M1
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === BrowserUse baselines (2) - v100 ===
+  - behavior: B0.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B0.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === SmolAgents baselines (2) - v100 ===
+  - behavior: S0.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S0.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1

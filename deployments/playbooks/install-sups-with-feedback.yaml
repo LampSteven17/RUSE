@@ -6,10 +6,10 @@
 # install, then distributes feedback configs matched to each SUP's
 # calibration version:
 #
-#   Version 1 (baseline)  → feedback from exp3_axes-fall24 (default)
-#   Version 2 (summer24)  → feedback from exp3_axes-summer24
-#   Version 3 (fall24)    → feedback from exp3_axes-fall24
-#   Version 4 (spring25)  → feedback from exp3_axes-spring25
+#   Version 0/1 (baseline) → feedback from exp3_axes-fall24 (default)
+#   Version 2 (summer24)   → feedback from exp3_axes-summer24
+#   Version 3 (fall24)     → feedback from exp3_axes-fall24
+#   Version 4 (spring25)   → feedback from exp3_axes-spring25
 #
 # Prerequisites:
 #   - PHASE feedback configs generated for all three datasets
@@ -145,12 +145,13 @@
     config_file: "{{ deployment_dir }}/config.yaml"
     ruse_path: "/opt/ruse"
 
-    # Consumable config file types (exclude recommendations.json, timing_profile.json)
+    # Consumable config file types (exclude recommendations.json)
     consumable_configs:
       - workflow_weights.json
       - behavior_modifiers.json
       - site_config.json
       - prompt_augmentation.json
+      - timing_profile.json
 
   pre_tasks:
     - name: Load deployment configuration (for feedback_sources and feedback_map)

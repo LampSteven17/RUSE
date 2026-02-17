@@ -43,6 +43,8 @@ class BrowserUseLoop:
         calibration_profile: Optional[str] = None,
         use_phase_timing: bool = True,
         seed: int = 42,
+        feedback_dir: Optional[str] = None,
+        config_key: Optional[str] = None,
     ):
         self.seed = seed
         self.model = model
@@ -60,6 +62,9 @@ class BrowserUseLoop:
         self._running = False
         self._phase_timing = None
         self._tasks_completed = 0
+        self._feedback_dir = feedback_dir
+        self._config_key = config_key
+        self._workflow_weights = None
 
         if self.calibration_profile:
             self._init_calibrated_timing()
@@ -102,6 +107,67 @@ class BrowserUseLoop:
             return self._phase_timing.get_cluster_delay()
         return random.randrange(self.group_interval)
 
+    def _reload_feedback(self):
+        """Reload feedback config from disk (hot-swap support)."""
+        if not self._feedback_dir or not self._config_key:
+            self._workflow_weights = None
+            return
+
+        from pathlib import Path
+        from common.feedback_config import (
+            load_feedback_config, build_workflow_weights, build_task_weights,
+            build_calibrated_timing_config,
+        )
+
+        fc = load_feedback_config(Path(self._feedback_dir), self._config_key)
+
+        if fc.is_empty():
+            self._workflow_weights = None
+            return
+
+        # Workflow weights
+        self._workflow_weights = build_workflow_weights(self.workflows, fc)
+        if self._workflow_weights and self.logger:
+            self.logger.info(f"[feedback] Loaded workflow_weights for {self._config_key}",
+                             details={"weights": fc.workflow_weights})
+
+        # Site config - apply task weights to BrowseWeb workflow
+        if fc.site_config:
+            for w in self.workflows:
+                if getattr(w, 'name', '') == 'BrowseWeb':
+                    from brains.browseruse.workflows.browse_web import BROWSE_WEB_TASKS
+                    task_weights = build_task_weights(BROWSE_WEB_TASKS, fc.site_config)
+                    w.task_weights = task_weights
+                    if task_weights and self.logger:
+                        self.logger.info("[feedback] Applied task_weights to BrowseWeb")
+                    break
+
+        # Behavior modifiers — max_steps per workflow
+        if fc.behavior_modifiers:
+            max_steps_global = fc.behavior_modifiers.get("max_steps")
+            per_workflow = fc.behavior_modifiers.get("per_workflow", {})
+            for w in self.workflows:
+                wname = getattr(w, 'name', '') or w.__class__.__name__
+                new_max = per_workflow.get(wname, max_steps_global)
+                if new_max is not None and hasattr(w, 'max_steps'):
+                    w.max_steps = int(new_max)
+            if self.logger:
+                self.logger.info("[feedback] Applied behavior_modifiers",
+                                 details=fc.behavior_modifiers)
+
+        # Timing profile — hot-swap calibrated timing
+        if fc.timing_profile:
+            from common.timing.phase_timing import CalibratedTiming
+            old_last_activity = (self._phase_timing._last_activity_time
+                                 if self._phase_timing else None)
+            config = build_calibrated_timing_config(fc.timing_profile)
+            self._phase_timing = CalibratedTiming(config)
+            self._phase_timing._last_activity_time = old_last_activity
+            self.use_phase_timing = True
+            if self.logger:
+                self.logger.info("[feedback] Hot-swapped timing_profile",
+                                 details={"dataset": config.dataset})
+
     def _load_workflows(self):
         """Load all workflows for the loop."""
         from brains.browseruse.workflows.loader import load_workflows
@@ -135,6 +201,9 @@ class BrowserUseLoop:
     def _emulation_loop(self):
         """Main emulation loop - runs workflows in clusters."""
         while self._running:
+            # Hot-reload feedback config at each cluster boundary
+            self._reload_feedback()
+
             # Log activity level if using PHASE timing
             if self.use_phase_timing and self._phase_timing:
                 activity_level = self._phase_timing.get_activity_level()
@@ -165,8 +234,11 @@ class BrowserUseLoop:
                 sleep(task_delay)
 
                 # Select and run workflow
-                index = random.randrange(len(self.workflows))
-                workflow = self.workflows[index]
+                if self._workflow_weights:
+                    workflow = random.choices(self.workflows, weights=self._workflow_weights, k=1)[0]
+                else:
+                    index = random.randrange(len(self.workflows))
+                    workflow = self.workflows[index]
                 workflow_name = workflow.description
 
                 # Log workflow selection decision
@@ -177,7 +249,7 @@ class BrowserUseLoop:
                         options=workflow_options,
                         selected=workflow.name,
                         context=workflow_name,
-                        method="random"
+                        method="feedback_weighted" if self._workflow_weights else "random"
                     )
 
                 print(workflow.display)
@@ -191,12 +263,16 @@ class BrowserUseLoop:
                     })
 
                 try:
-                    workflow.action(logger=self.logger)
+                    action_result = workflow.action(logger=self.logger)
+                    if isinstance(action_result, tuple):
+                        result, success = action_result
+                    else:
+                        result, success = action_result, True
                     self._tasks_completed += 1
                     if self._phase_timing:
                         self._phase_timing.record_activity()
                     if self.logger:
-                        self.logger.workflow_end(workflow_name, success=True)
+                        self.logger.workflow_end(workflow_name, success=success)
                 except Exception as e:
                     print(f"Workflow error: {e}")
                     if self.logger:
@@ -222,6 +298,7 @@ class BrowserUseLoop:
         else:
             random.seed()
         self.workflows = self._load_workflows()
+        self._reload_feedback()
 
         if not self.workflows:
             print("Error: No workflows loaded!")

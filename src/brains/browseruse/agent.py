@@ -287,10 +287,11 @@ class BrowserUseAgent:
                 browser_session=browser_session,
             )
             result = await agent.run(max_steps=self.max_steps)
-            log("Task completed successfully!")
+            success = bool(result and result.is_done())
+            log("Task completed successfully!" if success else "Task finished but agent did not complete goal")
 
             if self.logger:
-                self.logger.workflow_end(workflow_name, success=True,
+                self.logger.workflow_end(workflow_name, success=success,
                                         result=str(result)[:500] if result else None)
             return result
         except Exception as e:

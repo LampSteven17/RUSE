@@ -10,13 +10,10 @@ Host sup-*
     StrictHostKeyChecking no
     ServerAliveInterval 120
 
-Host sup-M1-0
-    HostName 10.246.119.38
+Host sup-M2-0
+    HostName 10.246.117.64
 
-Host sup-B1a-llama-0
-    HostName 10.246.116.182
-
-Host sup-S1a-llama-0
-    HostName 10.246.115.51
+Host sup-M2-1
+    HostName 10.246.116.39
 
 #############################################

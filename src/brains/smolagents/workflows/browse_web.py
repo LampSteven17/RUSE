@@ -63,6 +63,8 @@ class BrowseWebWorkflow(SmolWorkflow):
         self.model_name = get_model(model)
         self.prompts = prompts
         self._agent = None
+        self.max_steps = 6
+        self.task_weights = None
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -83,6 +85,7 @@ class BrowseWebWorkflow(SmolWorkflow):
                 tools=[DuckDuckGoSearchTool()],
                 model=llm,
                 instructions=instructions,
+                max_steps=self.max_steps,
             )
         return self._agent
 
@@ -98,14 +101,19 @@ class BrowseWebWorkflow(SmolWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            task = random.choice(BROWSE_WEB_TASKS)
+            if self.task_weights:
+                task = random.choices(BROWSE_WEB_TASKS, weights=self.task_weights, k=1)[0]
+                selection_method = "feedback_weighted"
+            else:
+                task = random.choice(BROWSE_WEB_TASKS)
+                selection_method = "random"
             if logger:
                 logger.decision(
                     choice="browse_web_task",
                     options=BROWSE_WEB_TASKS[:5],
                     selected=task,
                     context=f"Task from {len(BROWSE_WEB_TASKS)} available tasks",
-                    method="random"
+                    method=selection_method
                 )
 
         self.category = "browser"
@@ -118,7 +126,9 @@ class BrowseWebWorkflow(SmolWorkflow):
             agent = self._get_agent()
             result = agent.run(task)
             print(f"Browse completed: {str(result)[:200]}...")
-            return result
+            # Heuristic: non-empty result = success
+            success = result is not None and str(result).strip() != ""
+            return result, success
         except Exception as e:
             print(f"Browse web error: {e}")
             raise

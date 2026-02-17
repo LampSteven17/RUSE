@@ -35,18 +35,20 @@ class FeedbackConfig:
     behavior_modifiers: Optional[dict] = None   # {"page_dwell": {...}, ...}
     site_config: Optional[dict] = None          # {"site_categories": {...}}
     prompt_augmentation: Optional[dict] = None  # {"prompt_content": "..."}
+    timing_profile: Optional[dict] = None       # calibrated timing profile
 
     def is_empty(self) -> bool:
         return all(v is None for v in
                    [self.workflow_weights, self.behavior_modifiers,
-                    self.site_config, self.prompt_augmentation])
+                    self.site_config, self.prompt_augmentation,
+                    self.timing_profile])
 
 
 def config_key_to_behavior_dir(config_key: str) -> str:
     """
     Map a SUP config key to its PHASE behavior directory name.
 
-    M1-M4 → 'M', B1-B4.llama → 'B.llama', S1-S4.gemma → 'S.gemma', etc.
+    M1-M4 → 'M', B0-B4.llama → 'B.llama', S0-S4.gemma → 'S.gemma', etc.
     Controls (C0, M0) return the key unchanged.
     """
     m = re.match(r'^([A-Z])\d+(?:\.(\w+))?$', config_key)
@@ -141,6 +143,7 @@ def load_feedback_config(feedback_dir: Path, config_key: str) -> FeedbackConfig:
         "behavior_modifiers": f"{config_key}_behavior_modifiers.json",
         "site_config": f"{config_key}_site_config.json",
         "prompt_augmentation": f"{config_key}_prompt_augmentation.json",
+        "timing_profile": f"{config_key}_timing_profile.json",
     }
 
     for attr, legacy_filename in file_map.items():
@@ -228,6 +231,32 @@ def build_site_weights(website_list: list, site_config: dict) -> Optional[List[f
         result.append(float(weight))
 
     return result
+
+
+def build_calibrated_timing_config(timing_profile: dict):
+    """
+    Build a CalibratedTimingConfig from a timing_profile dict.
+
+    Mirrors the structure of load_calibration_profile() in phase_timing.py
+    but accepts an already-loaded dict (from feedback JSON) instead of
+    reading from a bundled profile file.
+
+    Args:
+        timing_profile: Dict with hourly_distribution, burst_characteristics keys
+
+    Returns:
+        CalibratedTimingConfig instance
+    """
+    from common.timing.phase_timing import CalibratedTimingConfig
+
+    burst = timing_profile["burst_characteristics"]
+    return CalibratedTimingConfig(
+        dataset=timing_profile.get("dataset", "feedback"),
+        hourly_fractions=timing_profile["hourly_distribution"]["mean_fraction"],
+        burst_duration=burst["burst_duration_minutes"]["percentiles"],
+        idle_gap=burst["idle_gap_minutes"]["percentiles"],
+        connections_per_burst=burst["connections_per_burst"]["percentiles"],
+    )
 
 
 def build_task_weights(task_list: list, site_config: dict) -> Optional[List[float]]:

@@ -1,20 +1,23 @@
 ---
-# test: Quick log generation test
-# M1 (MCHP, no LLM), B1a.llama (BrowserUse), S1a.llama (SmolAgents)
+# test: TUI test deployment
+# Mixed SUP types: C0 (control), M2 (CPU), B0.llama (GPU), S3.gemma (GPU)
 
 deployment_name: test
 
 flavor_capacity:
-  v1.14vcpu.28g: 1
+  v1.14vcpu.28g: 2
   v100-1gpu.14vcpu.28g: 2
 
 deployments:
-  - behavior: M1
+  - behavior: C0
     flavor: v1.14vcpu.28g
     count: 1
-  - behavior: B1a.llama
+  - behavior: M2
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: B0.llama
     flavor: v100-1gpu.14vcpu.28g
     count: 1
-  - behavior: S1a.llama
+  - behavior: S3.gemma
     flavor: v100-1gpu.14vcpu.28g
     count: 1

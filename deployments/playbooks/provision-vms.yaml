@@ -37,9 +37,15 @@
       include_vars:
         file: "{{ config_file }}"
 
-    - name: Set inventory file path
+    - name: Set deployment prefix
       set_fact:
-        inventory_file: "{{ deployment_dir }}/inventory.ini"
+        deployment_id: "{{ deployment_id | default(deployment_name | regex_replace('-', '')) }}"
+
+    - name: Set VM prefix and output paths
+      set_fact:
+        vm_prefix: "sup-{{ deployment_id }}-"
+        output_dir: "{{ run_dir | default(deployment_dir) }}"
+        inventory_file: "{{ (run_dir | default(deployment_dir)) }}/inventory.ini"
 
     - name: Display deployment info
       pause:
@@ -152,7 +158,7 @@
           Will create {{ vm_list | length }} VMs for {{ deployment_name }}:
           ═══════════════════════════════════════════════════════════════
           {% for vm in vm_list %}
-            - sup-{{ vm.behavior | replace('.', '-') }}-{{ vm.index }} ({{ vm.flavor | regex_replace('-1gpu.*', '') }})
+            - {{ vm_prefix }}{{ vm.behavior | replace('.', '-') }}-{{ vm.index }} ({{ vm.flavor | regex_replace('-1gpu.*', '') }})
           {% endfor %}
 
     # ─────────────────────────────────────────────────────────────────
@@ -162,7 +168,7 @@
     - name: Create OpenStack VMs (batched, {{ vm_create_batch_size | default(10) }} at a time)
       shell: |
         source {{ os_rc_file }}
-        VM_NAME="sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
+        VM_NAME="{{ vm_prefix }}{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
         # Check if VM already exists
         if openstack server show "$VM_NAME" &>/dev/null; then
           echo "EXISTS: $VM_NAME"
@@ -175,6 +181,7 @@
             --network "{{ os_network }}" \
             --key-name "{{ os_keypair }}" \
             --security-group "{{ os_security_group }}" \
+            --property deployment="{{ deployment_id }}" \
             -f value -c id \
             "$VM_NAME"
           echo "CREATED: $VM_NAME"
@@ -183,14 +190,14 @@
         executable: /bin/bash
       loop: "{{ vm_list }}"
       loop_control:
-        label: "sup-{{ item.behavior }}-{{ item.index }}"
+        label: "{{ vm_prefix }}{{ item.behavior }}-{{ item.index }}"
       throttle: "{{ vm_create_batch_size | default(10) }}"
       register: created_vms
 
     - name: Wait for all VMs to become ACTIVE (parallel polling)
       shell: |
         source {{ os_rc_file }}
-        VM_NAME="sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
+        VM_NAME="{{ vm_prefix }}{{ item.behavior | replace('.', '-') }}-{{ item.index }}"
         STATUS=$(openstack server show "$VM_NAME" -f value -c status 2>/dev/null || echo "UNKNOWN")
         if [ "$STATUS" = "ACTIVE" ]; then
           echo "ACTIVE"
@@ -206,7 +213,7 @@
         executable: /bin/bash
       loop: "{{ vm_list }}"
       loop_control:
-        label: "sup-{{ item.behavior }}-{{ item.index }}"
+        label: "{{ vm_prefix }}{{ item.behavior }}-{{ item.index }}"
       register: vm_status_check
       until: vm_status_check.rc == 0
       retries: 60
@@ -217,12 +224,12 @@
     - name: Get VM IPs
       shell: |
         source {{ os_rc_file }}
-        openstack server show "sup-{{ item.behavior | replace('.', '-') }}-{{ item.index }}" -f value -c addresses | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+        openstack server show "{{ vm_prefix }}{{ item.behavior | replace('.', '-') }}-{{ item.index }}" -f value -c addresses | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
       args:
         executable: /bin/bash
       loop: "{{ vm_list }}"
       loop_control:
-        label: "sup-{{ item.behavior }}-{{ item.index }}"
+        label: "{{ vm_prefix }}{{ item.behavior }}-{{ item.index }}"
       register: vm_ips
 
     - name: Build inventory data
@@ -235,7 +242,7 @@
               'ip': result.stdout,
               'behavior': vm.behavior,
               'flavor': vm.flavor,
-              'name': 'sup-' + vm.behavior | replace('.', '-') + '-' + (vm.index | string)
+              'name': vm_prefix + vm.behavior | replace('.', '-') + '-' + (vm.index | string)
             } -%}
             {%- set _ = entries.append(entry) -%}
           {%- endfor -%}
@@ -394,16 +401,16 @@
 
           {% endfor %}
           #############################################
-        dest: "{{ deployment_dir }}/ssh_config_snippet.txt"
+        dest: "{{ output_dir }}/ssh_config_snippet.txt"
 
     - name: Display SSH config location
       pause:
         seconds: 0
-        prompt: "SSH config saved to: {{ deployment_dir }}/ssh_config_snippet.txt"
+        prompt: "SSH config saved to: {{ output_dir }}/ssh_config_snippet.txt"
 
     - name: Print SSH config (copy-pasteable)
       delegate_to: localhost
-      command: cat "{{ deployment_dir }}/ssh_config_snippet.txt"
+      command: cat "{{ output_dir }}/ssh_config_snippet.txt"
       register: ssh_out
       changed_when: false
 
@@ -417,5 +424,5 @@
           ═══════════════════════════════════════════════════════════════
           {{ ssh_out.stdout }}
           ═══════════════════════════════════════════════════════════════
-            Saved to: {{ deployment_dir }}/ssh_config_snippet.txt
+            Saved to: {{ output_dir }}/ssh_config_snippet.txt
           ═══════════════════════════════════════════════════════════════

@@ -427,6 +427,15 @@ process_new_events() {
                 fi
                 ;;
 
+            install_complete)
+                if [[ -n "$host" && -n "${VM_STATUS[$host]+x}" ]]; then
+                    case "${VM_STATUS[$host]}" in
+                        failed|completed) ;;
+                        *) VM_STATUS["$host"]="completed"; VM_INSTALL_END["$host"]="$unix_ts" ;;
+                    esac
+                fi
+                ;;
+
             install_feedback)
                 # Feedback play started — move completed non-control VMs to feedback state
                 if [[ -n "$host" && -n "${VM_STATUS[$host]+x}" ]]; then
@@ -942,9 +951,12 @@ render_status_table() {
         _STEP_ERROR="${VM_ERROR[$vm]:-}"
         _derive_steps "$status" "$behavior"
 
-        # Per-VM elapsed time
+        # Per-VM elapsed time (use install start during install phase)
         local vm_time=""
         local vm_start="${VM_PROVISION_START[$vm]:-}"
+        if [[ "$MONITOR_PHASE" == "installing" && -n "${VM_INSTALL_START[$vm]:-}" ]]; then
+            vm_start="${VM_INSTALL_START[$vm]}"
+        fi
         if [[ -n "$vm_start" && "$vm_start" != "0" ]]; then
             local end_ts="$now"
 
@@ -1021,8 +1033,13 @@ render_status_table() {
     for ((i=0; i<empty; i++)); do bar+="░"; done
 
     if (( _install_pct >= 0 )); then
-        printf '\033[1m %s  [%s]  %d%%  %d/%d done   Elapsed: %s\033[K\033[0m\n' \
-            "$phase_label" "$bar" "$pct" "$done_count" "$COUNT_TOTAL" "$(format_duration "$elapsed")"
+        if (( done_count > 0 )); then
+            printf '\033[1m %s  [%s]  %d%%  %d/%d done   Elapsed: %s\033[K\033[0m\n' \
+                "$phase_label" "$bar" "$pct" "$done_count" "$COUNT_TOTAL" "$(format_duration "$elapsed")"
+        else
+            printf '\033[1m %s  [%s]  %d%%   Elapsed: %s\033[K\033[0m\n' \
+                "$phase_label" "$bar" "$pct" "$(format_duration "$elapsed")"
+        fi
     else
         printf '\033[1m %s  [%s]  %d/%d   Elapsed: %s\033[K\033[0m\n' \
             "$phase_label" "$bar" "$done_count" "$COUNT_TOTAL" "$(format_duration "$elapsed")"

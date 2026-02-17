@@ -63,6 +63,7 @@ class WebSearchWorkflow(SmolWorkflow):
         self.model_name = get_model(model)
         self.prompts = prompts
         self._agent = None
+        self.max_steps = 6
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -83,6 +84,7 @@ class WebSearchWorkflow(SmolWorkflow):
                 tools=[DuckDuckGoSearchTool()],
                 model=llm,
                 instructions=instructions,
+                max_steps=self.max_steps,
             )
         return self._agent
 
@@ -118,7 +120,9 @@ class WebSearchWorkflow(SmolWorkflow):
             agent = self._get_agent()
             result = agent.run(task)
             print(f"Search completed: {str(result)[:200]}...")
-            return result
+            # Heuristic: non-empty result = success
+            success = result is not None and str(result).strip() != ""
+            return result, success
         except Exception as e:
             print(f"Web search error: {e}")
             raise

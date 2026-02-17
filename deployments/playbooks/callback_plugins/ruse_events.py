@@ -153,6 +153,11 @@ class CallbackModule(CallbackBase):
         if "reboot" in task.lower() and result._result.get("rebooted", False):
             self._emit("reboot_complete", {"host": host})
 
+        # Detect per-host Stage 2 completion (async task finished)
+        task_lower = task.lower()
+        if "install_sup" in task_lower and "stage 2" in task_lower:
+            self._emit("install_complete", {"host": host})
+
     def v2_runner_on_failed(self, result, ignore_errors=False):
         """Called when a task fails."""
         host = result._host.get_name()

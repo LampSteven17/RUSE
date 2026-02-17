@@ -119,7 +119,10 @@ class MCHPAgent:
             return
 
         from pathlib import Path
-        from common.feedback_config import load_feedback_config, build_workflow_weights, build_site_weights
+        from common.feedback_config import (
+            load_feedback_config, build_workflow_weights, build_site_weights,
+            build_calibrated_timing_config,
+        )
 
         fc = load_feedback_config(Path(self._feedback_dir), self._config_key)
 
@@ -146,7 +149,7 @@ class MCHPAgent:
                     if "max" in nav_clicks:
                         w.max_navigation_clicks = int(nav_clicks["max"])
                     if self.logger:
-                        self.logger.info(f"[feedback] Applied behavior_modifiers to BrowseWeb",
+                        self.logger.info("[feedback] Applied behavior_modifiers to BrowseWeb",
                                          details=fc.behavior_modifiers)
                     break
 
@@ -157,8 +160,21 @@ class MCHPAgent:
                     site_weights = build_site_weights(w.website_list, fc.site_config)
                     w.site_weights = site_weights
                     if site_weights and self.logger:
-                        self.logger.info(f"[feedback] Applied site_weights to BrowseWeb")
+                        self.logger.info("[feedback] Applied site_weights to BrowseWeb")
                     break
+
+        # Timing profile — hot-swap calibrated timing
+        if fc.timing_profile:
+            from common.timing.phase_timing import CalibratedTiming
+            old_last_activity = (self._phase_timing._last_activity_time
+                                 if self._phase_timing else None)
+            config = build_calibrated_timing_config(fc.timing_profile)
+            self._phase_timing = CalibratedTiming(config)
+            self._phase_timing._last_activity_time = old_last_activity
+            self.use_phase_timing = True
+            if self.logger:
+                self.logger.info("[feedback] Hot-swapped timing_profile",
+                                 details={"dataset": config.dataset})
 
     def _get_cluster_size(self) -> int:
         """Get cluster size based on timing mode."""
