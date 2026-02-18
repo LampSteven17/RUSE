@@ -12,7 +12,7 @@ DEFAULT_MODEL = "llama3.1:8b"
 MODELS = {
     # GPU-optimized models
     "llama": "llama3.1:8b",
-    "gemma": "gemma3:4b",
+    "gemma": "gemma3:1b",
     "deepseek": "deepseek-r1:8b",
     # CPU-friendly models
     "lfm": "lfm2.5-thinking:latest",

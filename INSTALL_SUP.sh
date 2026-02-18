@@ -87,6 +87,18 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --S4.llama          SmolAgents + llama + spring25 timing
     --S4.gemma          SmolAgents + gemma + spring25 timing
 
+  CPU Baselines (no GPU — Ollama on CPU):
+    --B0C.llama         BrowserUse + llama (CPU only)
+    --B0C.gemma         BrowserUse + gemma (CPU only)
+    --S0C.llama         SmolAgents + llama (CPU only)
+    --S0C.gemma         SmolAgents + gemma (CPU only)
+
+  RTX Baselines (RTX 2080 Ti):
+    --B0R.llama         BrowserUse + llama (RTX)
+    --B0R.gemma         BrowserUse + gemma (RTX)
+    --S0R.llama         SmolAgents + llama (RTX)
+    --S0R.gemma         SmolAgents + gemma (RTX)
+
 === Deprecated (exp-2 compat) ===
 
   Old MCHP+LLM keys (M1a.llama, M2a.llama, etc.) map to M1/M2.
@@ -164,6 +176,18 @@ CONFIGS=(
     ["S4.llama"]="smolagents:none:llama:spring25"
     ["S4.gemma"]="smolagents:none:gemma:spring25"
 
+    # CPU baselines (no GPU)
+    ["B0C.llama"]="browseruse:none:llama:none"
+    ["B0C.gemma"]="browseruse:none:gemma:none"
+    ["S0C.llama"]="smolagents:none:llama:none"
+    ["S0C.gemma"]="smolagents:none:gemma:none"
+
+    # RTX baselines (RTX 2080 Ti)
+    ["B0R.llama"]="browseruse:none:llama:none"
+    ["B0R.gemma"]="browseruse:none:gemma:none"
+    ["S0R.llama"]="smolagents:none:llama:none"
+    ["S0R.gemma"]="smolagents:none:gemma:none"
+
     # === Deprecated aliases ===
     # Old B1/S1 baseline keys -> B0/S0
     ["B1.llama"]="browseruse:none:llama:none"
@@ -228,7 +252,7 @@ MODEL_NAMES=(
     ["none"]=""
     # GPU-optimized models
     ["llama"]="llama3.1:8b"
-    ["gemma"]="gemma3:4b"
+    ["gemma"]="gemma3:1b"
     # Legacy (exp-2 compat)
     ["deepseek"]="deepseek-r1:8b"
     ["lfm"]="lfm2.5-thinking:latest"
@@ -261,6 +285,20 @@ list_configs() {
         IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
         printf "  %-16s brain=%-12s model=%-8s calibration=%s\n" \
             "--$key" "$brain" "$model" "$calibration"
+    done
+    echo ""
+    echo "CPU Baselines (no GPU):"
+    for key in B0C.llama B0C.gemma S0C.llama S0C.gemma; do
+        IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-12s model=%-8s (CPU only)\n" \
+            "--$key" "$brain" "$model"
+    done
+    echo ""
+    echo "RTX Baselines (RTX 2080 Ti):"
+    for key in B0R.llama B0R.gemma S0R.llama S0R.gemma; do
+        IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-12s model=%-8s (RTX)\n" \
+            "--$key" "$brain" "$model"
     done
     echo ""
     echo "Deprecated exp-2 keys (including old B1/S1) are still accepted."
@@ -300,6 +338,16 @@ parse_args() {
             # Config key shortcuts - S Series
             --S0.llama|--S0.gemma|--S2.llama|--S2.gemma|\
             --S3.llama|--S3.gemma|--S4.llama|--S4.gemma)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - CPU baselines
+            --B0C.llama|--B0C.gemma|--S0C.llama|--S0C.gemma)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - RTX baselines
+            --B0R.llama|--B0R.gemma|--S0R.llama|--S0R.gemma)
                 parse_config_key "${1#--}"
                 ;;
 

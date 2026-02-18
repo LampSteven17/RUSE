@@ -1,23 +1,23 @@
 ---
 # controls: All baseline configs (no calibrated timing)
-# Used for collecting baseline behavior before applying timing calibration.
+# Used for collecting baseline behavior across hardware types.
 #
 # Includes:
 #   C0       - Bare Ubuntu VM (pure control, no software)
 #   M0       - Upstream MITRE pyhuman (control)
 #   M1       - MCHP baseline (no timing)
-#   B0.llama - BrowserUse + llama baseline (no timing)
-#   B0.gemma - BrowserUse + gemma baseline (no timing)
-#   S0.llama - SmolAgents + llama baseline (no timing)
-#   S0.gemma - SmolAgents + gemma baseline (no timing)
+#   B0/S0    - BrowserUse/SmolAgents baselines on V100
+#   B0C/S0C  - BrowserUse/SmolAgents baselines on CPU (no GPU)
+#   B0R/S0R  - BrowserUse/SmolAgents baselines on RTX 2080 Ti
 #
-# Total VMs: 7 (3 non-GPU, 4 v100)
+# Total VMs: 15 (7 non-GPU, 4 v100, 4 rtx2080ti-A)
 
 deployment_name: controls
 
 flavor_capacity:
-  v1.14vcpu.28g: 5
+  v1.14vcpu.28g: 7
   v100-1gpu.14vcpu.28g: 6
+  rtx2080ti-A-1gpu.14vcpu.28g: 6
 
 deployments:
   # === Controls (3) - non-GPU ===
@@ -31,18 +31,44 @@ deployments:
     flavor: v1.14vcpu.28g
     count: 1
 
-  # === BrowserUse baselines (2) - v100 ===
+  # === V100 baselines (4) ===
   - behavior: B0.llama
     flavor: v100-1gpu.14vcpu.28g
     count: 1
   - behavior: B0.gemma
     flavor: v100-1gpu.14vcpu.28g
     count: 1
-
-  # === SmolAgents baselines (2) - v100 ===
   - behavior: S0.llama
     flavor: v100-1gpu.14vcpu.28g
     count: 1
   - behavior: S0.gemma
     flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === CPU baselines (4) - no GPU ===
+  - behavior: B0C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: B0C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: S0C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: S0C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === RTX baselines (4) - RTX 2080 Ti-A ===
+  - behavior: B0R.llama
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B0R.gemma
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S0R.llama
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S0R.gemma
+    flavor: rtx2080ti-A-1gpu.14vcpu.28g
     count: 1
