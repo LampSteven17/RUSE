@@ -138,6 +138,9 @@ class AgentLogger:
         self._shutdown_registered = False
 
         # Set up log directory
+        # SUP_CONFIG_KEY overrides agent_type for log path (e.g., B0R.llama vs B0.llama)
+        log_identity = os.environ.get("SUP_CONFIG_KEY", agent_type)
+
         if log_dir:
             self.log_dir = Path(log_dir)
         else:
@@ -149,10 +152,10 @@ class AgentLogger:
                 # Default: Use /opt/ruse if it exists (deployed), otherwise relative
                 deployed_base = Path("/opt/ruse/deployed_sups")
                 if deployed_base.exists():
-                    self.log_dir = deployed_base / agent_type / "logs"
+                    self.log_dir = deployed_base / log_identity / "logs"
                 else:
                     # Development fallback: relative to project root
-                    base_dir = Path(__file__).parent.parent.parent.parent / "deployed_sups" / agent_type / "logs"
+                    base_dir = Path(__file__).parent.parent.parent.parent / "deployed_sups" / log_identity / "logs"
                     self.log_dir = base_dir
 
         self.log_dir.mkdir(parents=True, exist_ok=True)

@@ -1678,7 +1678,10 @@ for m in re.finditer(r'^Host (sup-(?!\*)\S+)\s*\n\s+HostName (\S+)', snippet, re
 if not hosts:
     sys.exit(0)
 
-# Derive config label: 'exp-4' → 'EXP4', 'test/0213' → 'TEST_0213'
+# Derive config label: 'sup-controls' → 'CONTROLS', 'exp-4' → 'EXP4'
+# Strip 'sup-' prefix to avoid 'SUPS_SUPCONTROLS' double naming
+if deploy.startswith('sup-'):
+    deploy = deploy[4:]
 label = deploy.upper().replace('-', '').replace('/', '_')
 
 # Map VM hostnames to behavior labels

@@ -1,0 +1,61 @@
+---
+# tuned-csdept-sum24: All brains calibrated to summer24 timing
+# Evaluates PHASE-tuned behavior across MCHP, BrowserUse, SmolAgents
+# on both GPU (V100) and CPU hardware.
+#
+# Includes:
+#   M2           - MCHP + summer24 calibrated timing
+#   B2.llama     - BrowserUse + llama + summer24 (V100)
+#   B2.gemma     - BrowserUse + gemma + summer24 (V100)
+#   S2.llama     - SmolAgents + llama + summer24 (V100)
+#   S2.gemma     - SmolAgents + gemma + summer24 (V100)
+#   B2C.llama    - BrowserUse + llama + summer24 (CPU only)
+#   B2C.gemma    - BrowserUse + gemma + summer24 (CPU only)
+#   S2C.llama    - SmolAgents + llama + summer24 (CPU only)
+#   S2C.gemma    - SmolAgents + gemma + summer24 (CPU only)
+#
+# Total VMs: 9 (5 non-GPU, 4 v100)
+
+deployment_name: tuned-csdept-sum24
+
+flavor_capacity:
+  v1.14vcpu.28g: 7
+  v100-1gpu.14vcpu.28g: 6
+
+deployments:
+  # === MCHP (no LLM, no GPU) ===
+  - behavior: M2
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === BrowserUse + summer24 (V100) ===
+  - behavior: B2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === SmolAgents + summer24 (V100) ===
+  - behavior: S2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === BrowserUse + summer24 (CPU only) ===
+  - behavior: B2C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: B2C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === SmolAgents + summer24 (CPU only) ===
+  - behavior: S2C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: S2C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1

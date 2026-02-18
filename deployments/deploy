@@ -161,18 +161,16 @@ trap 'exit 0' INT TERM
 # ─────────────────────────────────────────────────────────────────────────────
 
 get_deployments() {
-    # List deployments: controls first, then exp-N sorted numerically, then test.
-    # Skip babys-first-sups (deprecated).
+    # List deployments: sup-controls first, then sup-* sorted, then exp-N, then rest.
     local -a first=() exps=() others=()
     local dir name
     for dir in "$SCRIPT_DIR"/*/; do
         [[ -f "${dir}config.yaml" ]] || continue
         name=$(basename "$dir")
         case "$name" in
-            babys-first-sups) continue ;;  # deprecated
-            controls) first+=("$name") ;;  # controls always first
+            sup-controls) first+=("$name") ;;  # controls always first
+            sup-*)    others+=("$name") ;;
             exp-*)    exps+=("$name") ;;
-            test)     others+=("$name") ;;  # test goes last
             *)        others+=("$name") ;;
         esac
     done
@@ -197,9 +195,12 @@ get_hosts_ini() {
 }
 
 get_dep_id() {
-    # Strip hyphens from deployment directory name for VM prefix.
-    # e.g. "exp-3" -> "exp3", "test" -> "test"
+    # Convert deployment directory name to VM prefix component.
+    # Playbook prepends "sup-", so strip leading "sup-" to avoid "sup-sup...".
+    # Then strip remaining hyphens.
+    # e.g. "sup-controls" -> "controls", "exp-3" -> "exp3", "tuned-csdept-sum24" -> "tunedcsdeptsum24"
     local name="$1"
+    name="${name#sup-}"
     echo "${name//-/}"
 }
 
@@ -1047,12 +1048,12 @@ _wait_for_key() {
 }
 
 _dep_label() {
-    # Convert directory name to display label: exp-3 -> "Experiment 3", controls -> "Controls", test -> "test"
+    # Convert directory name to display label: exp-3 -> "Experiment 3", sup-controls -> "SUP Controls"
     local name="$1"
     case "$name" in
-        exp-*)    echo "Experiment ${name#exp-}" ;;
-        controls) echo "Controls" ;;
-        *)        echo "$name" ;;
+        exp-*)        echo "Experiment ${name#exp-}" ;;
+        sup-controls) echo "SUP Controls" ;;
+        *)            echo "$name" ;;
     esac
 }
 
