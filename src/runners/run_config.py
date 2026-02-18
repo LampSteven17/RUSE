@@ -14,7 +14,7 @@ Version:  0 = baseline (B/S only, no timing)
           2 = calibrated to summer24
           3 = calibrated to fall24
           4 = calibrated to spring25
-Models:   llama (llama3.1:8b), gemma (gemma3:4b)
+Models:   llama (llama3.1:8b), gemma (gemma3:1b)
 
 MCHP has no LLM — pure scripted automation, no model suffix.
 Calibrated versions (2+) are uniform across all brains.
@@ -53,6 +53,7 @@ class SUPConfig:
     calibration: Optional[str] = None    # "summer24"/"fall24"/"spring25"/None
     cpu_only: bool = False
     seed: int = 42
+    _key_override: Optional[str] = None  # Explicit key for non-standard naming (e.g., B0R.llama)
 
     # Kept for backward compat with exp-2 code that reads config.phase
     @property
@@ -63,6 +64,8 @@ class SUPConfig:
     @property
     def config_key(self) -> str:
         """Generate the configuration key (e.g., M1, B0.llama, B3.gemma)."""
+        if self._key_override:
+            return self._key_override
         if self.calibration is not None:
             version = _CALIBRATION_TO_VERSION.get(self.calibration, 2)
         else:
@@ -115,6 +118,18 @@ CONFIGS = {
     "S3.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="fall24"),
     "S4.llama": SUPConfig(brain="smolagents", model="llama", calibration="spring25"),
     "S4.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="spring25"),
+
+    # === CPU baselines (no GPU — Ollama runs on CPU) ===
+    "B0C.llama": SUPConfig(brain="browseruse", model="llama", cpu_only=True, _key_override="B0C.llama"),
+    "B0C.gemma": SUPConfig(brain="browseruse", model="gemma", cpu_only=True, _key_override="B0C.gemma"),
+    "S0C.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True, _key_override="S0C.llama"),
+    "S0C.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True, _key_override="S0C.gemma"),
+
+    # === RTX baselines (same as B0/S0 but deployed on RTX 2080 Ti) ===
+    "B0R.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B0R.llama"),
+    "B0R.gemma": SUPConfig(brain="browseruse", model="gemma", _key_override="B0R.gemma"),
+    "S0R.llama": SUPConfig(brain="smolagents", model="llama", _key_override="S0R.llama"),
+    "S0R.gemma": SUPConfig(brain="smolagents", model="gemma", _key_override="S0R.gemma"),
 }
 
 # ============================================================================
