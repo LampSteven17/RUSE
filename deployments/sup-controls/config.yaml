@@ -1,5 +1,5 @@
 ---
-# controls: All baseline configs (no calibrated timing)
+# sup-controls: All baseline configs (no calibrated timing)
 # Used for collecting baseline behavior across hardware types.
 #
 # Includes:
@@ -12,7 +12,7 @@
 #
 # Total VMs: 15 (7 non-GPU, 4 v100, 4 rtx2080ti-A)
 
-deployment_name: controls
+deployment_name: sup-controls
 
 flavor_capacity:
   v1.14vcpu.28g: 7

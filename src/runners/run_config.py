@@ -125,6 +125,12 @@ CONFIGS = {
     "S0C.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True, _key_override="S0C.llama"),
     "S0C.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True, _key_override="S0C.gemma"),
 
+    # === CPU calibrated (no GPU — summer24 timing) ===
+    "B2C.llama": SUPConfig(brain="browseruse", model="llama", calibration="summer24", cpu_only=True, _key_override="B2C.llama"),
+    "B2C.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="summer24", cpu_only=True, _key_override="B2C.gemma"),
+    "S2C.llama": SUPConfig(brain="smolagents", model="llama", calibration="summer24", cpu_only=True, _key_override="S2C.llama"),
+    "S2C.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="summer24", cpu_only=True, _key_override="S2C.gemma"),
+
     # === RTX baselines (same as B0/S0 but deployed on RTX 2080 Ti) ===
     "B0R.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B0R.llama"),
     "B0R.gemma": SUPConfig(brain="browseruse", model="gemma", _key_override="B0R.gemma"),

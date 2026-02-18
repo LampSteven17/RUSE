@@ -5,12 +5,15 @@ SUP Log Collection System
 Collects JSONL logs from remote SUP VMs and loads them into DuckDB.
 Focuses only on structured JSONL logs from AgentLogger - ignores systemd output.
 
+Naming convention:
+    Deployment dir name = experiment name = DB prefix.
+    DB filename includes run ID: {name}-{run_id}.duckdb
+
 Usage:
-    python log_retrieval/collect_sup_logs.py exp-3              # Single experiment
-    python log_retrieval/collect_sup_logs.py exp-2 exp-3        # Multiple experiments
+    python log_retrieval/collect_sup_logs.py sup-controls      # Collect from latest run
     python log_retrieval/collect_sup_logs.py --all              # All with inventory
     python log_retrieval/collect_sup_logs.py --list             # Show configurations
-    python log_retrieval/collect_sup_logs.py --dry-run exp-3    # Preview only
+    python log_retrieval/collect_sup_logs.py --dry-run sup-controls
 """
 
 import argparse
@@ -44,9 +47,8 @@ SSH_USER = "ubuntu"
 # ============================================================================
 # EXPERIMENT CONFIGURATIONS
 # ============================================================================
-# Each experiment defines a RUSE deployment to collect logs from.
-# Usage: python log_retrieval/collect_sup_logs.py exp-3
-#        python log_retrieval/collect_sup_logs.py --experiments exp-2 exp-3
+# Keys MUST match deployment directory names under deployments/.
+# This is metadata only — discovery comes from inventory.ini files.
 
 @dataclass
 class ExperimentConfig:
@@ -55,84 +57,22 @@ class ExperimentConfig:
     description: str
     vm_count: int
     behaviors: List[str]
-    db_name: Optional[str] = None  # Default: sup-logs-{name}.duckdb
 
 
 EXPERIMENTS = {
-    "test": ExperimentConfig(
-        name="test",
-        description="Quick log generation test (M1, B1a.llama, S1a.llama)",
-        vm_count=3,
-        behaviors=["M1", "B1a.llama", "S1a.llama"],
-    ),
-    "exp-1": ExperimentConfig(
-        name="exp-1",
-        description="Pre-PHASE experimental deployment (19 VMs, V100/RTX mix)",
-        vm_count=19,
+    "sup-controls": ExperimentConfig(
+        name="sup-controls",
+        description="Baseline controls across hardware tiers (15 VMs, V100/RTX/CPU)",
+        vm_count=15,
         behaviors=[
-            "M1", "M2a.llama", "M2b.gemma", "M2c.deepseek",
-            "M3a.llama", "M3b.gemma", "M3c.deepseek",
-            "B1a.llama", "B1b.gemma", "B1c.deepseek",
-            "S1a.llama", "S1b.gemma", "S1c.deepseek",
-            "B1a.llama", "B1b.gemma", "B1c.deepseek",  # RTX A duplicates
-            "S1a.llama", "S1b.gemma", "S1c.deepseek",
-        ],
-    ),
-    "exp-2": ExperimentConfig(
-        name="exp-2",
-        description="Simplified architecture deployment (38 VMs, Brain+Content+Model)",
-        vm_count=38,
-        behaviors=[
-            # Controls
-            "C0", "M0",
-            # MCHP
-            "M1", "M1a.llama", "M1b.gemma", "M1c.deepseek",
-            "M2a.llama", "M2b.gemma", "M2c.deepseek",
-            # BrowserUse
-            "B1a.llama", "B1b.gemma", "B1c.deepseek",
-            "B2a.llama", "B2b.gemma", "B2c.deepseek",
-            # SmolAgents
-            "S1a.llama", "S1b.gemma", "S1c.deepseek",
-            "S2a.llama", "S2b.gemma", "S2c.deepseek",
-            # CPU variants
-            "BC1a.llama", "BC1b.gemma", "BC1c.deepseek",
-            "BC1d.lfm", "BC1e.ministral", "BC1f.qwen",
-            "SC1a.llama", "SC1b.gemma", "SC1c.deepseek",
-            "SC1d.lfm", "SC1e.ministral", "SC1f.qwen",
-        ],
-    ),
-    "exp-3": ExperimentConfig(
-        name="exp-3",
-        description="Calibrated PHASE timing (25 VMs, semester profiles)",
-        vm_count=25,
-        behaviors=[
-            # Controls
-            "C0", "M0",
-            # MCHP (no LLM)
-            "M1", "M2", "M3", "M4",
-            # BrowserUse
-            "B1.llama", "B1.gemma", "B2.llama", "B2.gemma",
-            "B3.llama", "B3.gemma", "B4.llama", "B4.gemma",
-            # SmolAgents
-            "S1.llama", "S1.gemma", "S2.llama", "S2.gemma",
-            "S3.llama", "S3.gemma", "S4.llama", "S4.gemma",
-        ],
-    ),
-    "exp-4": ExperimentConfig(
-        name="exp-4",
-        description="PHASE feedback engine evaluation (25 VMs, feedback configs)",
-        vm_count=25,
-        behaviors=[
-            # Controls
-            "C0", "M0",
-            # MCHP (no LLM)
-            "M1", "M2", "M3", "M4",
-            # BrowserUse
-            "B1.llama", "B1.gemma", "B2.llama", "B2.gemma",
-            "B3.llama", "B3.gemma", "B4.llama", "B4.gemma",
-            # SmolAgents
-            "S1.llama", "S1.gemma", "S2.llama", "S2.gemma",
-            "S3.llama", "S3.gemma", "S4.llama", "S4.gemma",
+            # Controls (non-GPU)
+            "C0", "M0", "M1",
+            # V100 baselines
+            "B0.llama", "B0.gemma", "S0.llama", "S0.gemma",
+            # CPU baselines (no GPU)
+            "B0C.llama", "B0C.gemma", "S0C.llama", "S0C.gemma",
+            # RTX baselines (RTX 2080 Ti-A)
+            "B0R.llama", "B0R.gemma", "S0R.llama", "S0R.gemma",
         ],
     ),
 }
@@ -228,53 +168,61 @@ CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
 # Inventory Parsing
 # ============================================================================
 
-def discover_experiments(deployments_dir: Path) -> List[str]:
-    """Find all experiments with inventory.ini files.
+def discover_runs(deployments_dir: Path) -> List[Tuple[str, str, Path]]:
+    """Find all deployment runs with inventory.ini files.
 
-    Discovers both legacy (root inventory.ini) and multi-run (runs/<id>/inventory.ini)
-    layouts. Multi-run experiments are returned as 'config/run_id'.
+    Returns list of (deployment_name, run_id, inventory_path) tuples.
+    For legacy layouts (root inventory.ini), run_id is empty string.
     """
-    experiments = []
+    runs = []
     for path in deployments_dir.iterdir():
         if not path.is_dir() or path.name in ("playbooks", "lib", "logs"):
             continue
 
         # Check for legacy root inventory
-        if (path / "inventory.ini").exists():
-            experiments.append(path.name)
+        inv = path / "inventory.ini"
+        if inv.exists():
+            runs.append((path.name, "", inv))
 
         # Check for multi-run inventories in runs/ subdirs
         runs_dir = path / "runs"
         if runs_dir.is_dir():
             for run_dir in sorted(runs_dir.iterdir()):
-                if run_dir.is_dir() and (run_dir / "inventory.ini").exists():
-                    experiments.append(f"{path.name}/{run_dir.name}")
+                inv = run_dir / "inventory.ini"
+                if run_dir.is_dir() and inv.exists():
+                    runs.append((path.name, run_dir.name, inv))
 
-    return sorted(experiments)
+    return sorted(runs)
 
 
 def list_experiments() -> None:
     """Display available experiment configurations."""
-    available = discover_experiments(DEPLOYMENTS_DIR)
+    all_runs = discover_runs(DEPLOYMENTS_DIR)
+    # Group runs by deployment name
+    runs_by_deploy = {}
+    for deploy_name, run_id, _ in all_runs:
+        runs_by_deploy.setdefault(deploy_name, []).append(run_id)
+
     print("\nConfigured experiments:")
     print("-" * 70)
     for key, cfg in EXPERIMENTS.items():
-        # Check for legacy (bare name) or multi-run (config/run_id) entries
-        matching = [a for a in available if a == key or a.startswith(f"{key}/")]
-        if matching:
-            runs_str = ", ".join(matching)
+        run_ids = runs_by_deploy.get(key, [])
+        if run_ids:
+            runs_str = ", ".join(f"{key}-{r}" if r else key for r in run_ids)
             status = "READY"
         else:
             runs_str = ""
             status = "NO INVENTORY"
-        print(f"  {key:<12} {cfg.vm_count:>2} VMs  [{status:<12}]  {cfg.description}")
-        if runs_str and runs_str != key:
-            print(f"  {'':12}         runs: {runs_str}")
-    # Show any discovered experiments not in EXPERIMENTS
-    known_prefixes = set(EXPERIMENTS.keys())
-    extra = [e for e in available if e.split("/")[0] not in known_prefixes]
+        print(f"  {key:<24} {cfg.vm_count:>2} VMs  [{status:<12}]  {cfg.description}")
+        if runs_str:
+            print(f"  {'':24}         runs: {runs_str}")
+
+    # Show any discovered deployments not in EXPERIMENTS
+    known = set(EXPERIMENTS.keys())
+    extra = [(d, r) for d, r, _ in all_runs if d not in known]
     if extra:
-        print(f"\n  (Also discovered: {', '.join(extra)})")
+        names = sorted(set(f"{d}-{r}" if r else d for d, r in extra))
+        print(f"\n  (Also discovered: {', '.join(names)})")
     print()
 
 
@@ -636,9 +584,9 @@ def preflight_checks(dry_run: bool = False) -> List[str]:
     if result.returncode != 0:
         issues.append("Cannot SSH to axes jump host")
 
-    experiments = discover_experiments(DEPLOYMENTS_DIR)
-    if not experiments:
-        issues.append(f"No experiments with inventory.ini found in {DEPLOYMENTS_DIR}")
+    all_runs = discover_runs(DEPLOYMENTS_DIR)
+    if not all_runs:
+        issues.append(f"No deployments with inventory.ini found in {DEPLOYMENTS_DIR}")
 
     return issues
 
@@ -685,6 +633,57 @@ def write_manifest(
 
 
 # ============================================================================
+# Resolution
+# ============================================================================
+
+def resolve_experiments(
+    requested: List[str],
+    all_runs: List[Tuple[str, str, Path]]
+) -> Optional[List[Tuple[str, str, Path]]]:
+    """Resolve requested experiment names to (deployment, run_id, inventory_path) tuples.
+
+    Accepts bare deployment names (picks latest run) or explicit deployment/run_id.
+    Returns None on error (after printing message).
+    """
+    # Index runs by deployment name
+    runs_by_deploy = {}
+    for deploy_name, run_id, inv_path in all_runs:
+        runs_by_deploy.setdefault(deploy_name, []).append((run_id, inv_path))
+
+    resolved = []
+    for exp in requested:
+        if "/" in exp:
+            # Explicit: "sup-controls/0218"
+            deploy_name, run_id = exp.split("/", 1)
+            candidates = runs_by_deploy.get(deploy_name, [])
+            match = [(r, p) for r, p in candidates if r == run_id]
+            if match:
+                resolved.append((deploy_name, match[0][0], match[0][1]))
+            else:
+                print(f"\nERROR: No inventory for '{exp}'.")
+                return None
+        elif exp in runs_by_deploy:
+            # Bare name — pick latest run
+            candidates = runs_by_deploy[exp]
+            run_id, inv_path = candidates[-1]  # sorted, so last = latest
+            if run_id:
+                print(f"  Resolved {exp} -> {exp}/{run_id}")
+            resolved.append((exp, run_id, inv_path))
+        elif exp in EXPERIMENTS:
+            print(f"\nERROR: '{exp}' is configured but has no inventory.ini.")
+            print(f"  Run provisioning first: cd deployments && ./deploy spinup {exp}")
+            return None
+        else:
+            available = sorted(runs_by_deploy.keys())
+            print(f"\nERROR: Unknown deployment '{exp}'.")
+            print(f"  Configured: {list(EXPERIMENTS.keys())}")
+            print(f"  With inventory: {available}")
+            return None
+
+    return resolved
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -694,24 +693,25 @@ def main():
         description='Collect SUP JSONL logs from remote VMs into DuckDB',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
-Configured experiments: {experiment_names}
+Configured: {experiment_names}
+
+DB naming: {{deployment}}-{{run_id}}.duckdb (e.g., sup-controls-0218.duckdb)
 
 Examples:
-    python log_retrieval/collect_sup_logs.py exp-3                        # Single experiment
-    python log_retrieval/collect_sup_logs.py exp-2 exp-3                  # Multiple experiments
-    python log_retrieval/collect_sup_logs.py --experiments exp-2 --clean  # Delete and rebuild DB
-    python log_retrieval/collect_sup_logs.py --all                        # All with inventory
-    python log_retrieval/collect_sup_logs.py --list                       # Show configurations
-    python log_retrieval/collect_sup_logs.py --dry-run exp-3              # Preview only
+    python log_retrieval/collect_sup_logs.py sup-controls           # Latest run
+    python log_retrieval/collect_sup_logs.py sup-controls/0218      # Specific run
+    python log_retrieval/collect_sup_logs.py --all                  # All with inventory
+    python log_retrieval/collect_sup_logs.py --list                 # Show configurations
+    python log_retrieval/collect_sup_logs.py --dry-run sup-controls # Preview only
         """
     )
-    parser.add_argument('experiments', nargs='*', help='Experiments to collect (e.g., exp-2 exp-3)')
-    parser.add_argument('--all', action='store_true', help='Collect from all experiments with inventory')
+    parser.add_argument('experiments', nargs='*', help='Deployment names to collect (e.g., sup-controls)')
+    parser.add_argument('--all', action='store_true', help='Collect from all deployments with inventory')
     parser.add_argument('--list', action='store_true', help='List configured experiments and exit')
     parser.add_argument('--dry-run', action='store_true', help='Preview without collecting')
     parser.add_argument('--parallel', type=int, default=8, help='Parallel SSH connections')
     parser.add_argument('--skip-load', action='store_true', help='Skip DuckDB loading')
-    parser.add_argument('--db-name', type=str, default=None, help='Custom database name')
+    parser.add_argument('--db-name', type=str, default=None, help='Custom database name (overrides convention)')
     parser.add_argument('--clean', action='store_true', default=True, help='Delete and rebuild database (default)')
     parser.add_argument('--append', action='store_true', help='Append to existing database instead of rebuilding')
     args = parser.parse_args()
@@ -721,7 +721,7 @@ Examples:
         return 0
 
     print("=" * 60)
-    print("SUP Log Collection (JSONL only)")
+    print("SUP Log Collection")
     print("=" * 60)
 
     # Pre-flight checks
@@ -734,71 +734,52 @@ Examples:
         return 1
     print("  All checks passed!")
 
-    # Discover experiments with inventory files
-    available_experiments = discover_experiments(DEPLOYMENTS_DIR)
+    # Discover all deployment runs
+    all_runs = discover_runs(DEPLOYMENTS_DIR)
 
     if args.all:
-        experiments = available_experiments
+        requested = sorted(set(d for d, _, _ in all_runs))
     elif args.experiments:
-        experiments = args.experiments
+        requested = args.experiments
     else:
-        print("\nERROR: No experiments specified.")
-        print("Usage: python log_retrieval/collect_sup_logs.py exp-3")
+        print("\nERROR: No deployment specified.")
+        print("Usage: python log_retrieval/collect_sup_logs.py sup-controls")
         print("       python log_retrieval/collect_sup_logs.py --all")
         print("       python log_retrieval/collect_sup_logs.py --list")
         return 1
 
-    # Validate and expand experiments.
-    # Bare names like "exp-4" resolve to the most recent multi-run with an inventory
-    # (e.g., "exp-4/0216"). Only one run has an inventory at a time — teardown deletes it.
-    resolved = []
-    for exp in experiments:
-        if exp in available_experiments:
-            resolved.append(exp)
-        else:
-            # "exp-4" -> find "exp-4/XXXX" runs with inventory, pick latest
-            runs = sorted(a for a in available_experiments if a.startswith(f"{exp}/"))
-            if runs:
-                pick = runs[-1]
-                print(f"  Resolved {exp} -> {pick}")
-                resolved.append(pick)
-            elif exp in EXPERIMENTS:
-                print(f"\nERROR: Experiment '{exp}' is configured but has no inventory.ini.")
-                print(f"  Run provisioning first: cd deployments && ./deploy spinup {exp}")
-                return 1
-            else:
-                print(f"\nERROR: Unknown experiment '{exp}'.")
-                print(f"  Configured: {list(EXPERIMENTS.keys())}")
-                print(f"  With inventory: {available_experiments}")
-                return 1
-    experiments = resolved
+    # Resolve to concrete (deployment, run_id, inventory_path) tuples
+    resolved = resolve_experiments(requested, all_runs)
+    if resolved is None:
+        return 1
 
-    # Show experiment info
-    print(f"\nExperiments to process:")
-    for exp in experiments:
-        cfg = EXPERIMENTS.get(exp.split("/")[0])
+    # Show what we're collecting
+    print(f"\nDeployments to process:")
+    for deploy_name, run_id, _ in resolved:
+        tag = f"{deploy_name}-{run_id}" if run_id else deploy_name
+        cfg = EXPERIMENTS.get(deploy_name)
         if cfg:
-            print(f"  {exp}: {cfg.description} ({cfg.vm_count} VMs)")
+            print(f"  {tag}: {cfg.description} ({cfg.vm_count} VMs)")
         else:
-            print(f"  {exp}: (no configuration - discovered from inventory)")
+            print(f"  {tag}: (discovered from inventory)")
 
     # Setup directories
     collection_date = datetime.now().strftime("%Y-%m-%d")
     raw_dir = BASE_OUTPUT_DIR / "raw" / collection_date
 
-    # Database naming: CLI flag > experiment config > convention
-    # Use base experiment name (before /run_id) for config lookup and db naming
+    # DB naming: {deployment}-{run_id}.duckdb
     if args.db_name:
         db_name = args.db_name if args.db_name.endswith('.duckdb') else f"{args.db_name}.duckdb"
-    elif len(experiments) == 1:
-        base_name = experiments[0].split("/")[0]
-        cfg = EXPERIMENTS.get(base_name)
-        if cfg and cfg.db_name:
-            db_name = cfg.db_name if cfg.db_name.endswith('.duckdb') else f"{cfg.db_name}.duckdb"
+    elif len(resolved) == 1:
+        deploy_name, run_id, _ = resolved[0]
+        if run_id:
+            db_name = f"{deploy_name}-{run_id}.duckdb"
         else:
-            db_name = f"sup-logs-{base_name}.duckdb"
+            db_name = f"{deploy_name}.duckdb"
     else:
-        db_name = "sup_logs.duckdb"
+        # Multiple deployments — join names
+        names = sorted(set(d for d, _, _ in resolved))
+        db_name = f"{'_'.join(names)}.duckdb"
 
     db_path = BASE_OUTPUT_DIR / db_name
     manifest_path = BASE_OUTPUT_DIR / db_name.replace('.duckdb', '_manifest.json')
@@ -836,26 +817,21 @@ Examples:
     print("Phase 1: Collecting JSONL logs from VMs")
     print("=" * 60)
 
-    for experiment in experiments:
-        # Resolve inventory path: "config/run_id" -> runs/run_id/inventory.ini
-        if "/" in experiment:
-            config_name, run_id = experiment.split("/", 1)
-            inventory_path = DEPLOYMENTS_DIR / config_name / "runs" / run_id / "inventory.ini"
-        else:
-            inventory_path = DEPLOYMENTS_DIR / experiment / "inventory.ini"
-        vms = parse_inventory(inventory_path)
+    for deploy_name, run_id, inv_path in resolved:
+        tag = f"{deploy_name}-{run_id}" if run_id else deploy_name
+        vms = parse_inventory(inv_path)
 
-        print(f"\n[{experiment}] Found {len(vms)} VMs")
+        print(f"\n[{tag}] Found {len(vms)} VMs")
 
         if not vms:
             continue
 
         for vm in vms:
-            vm_info_map[f"{experiment}:{vm.hostname}"] = vm
+            vm_info_map[f"{tag}:{vm.hostname}"] = vm
 
         with ThreadPoolExecutor(max_workers=args.parallel) as executor:
             futures = {
-                executor.submit(collect_logs_from_vm, vm, experiment, raw_dir, args.dry_run): vm
+                executor.submit(collect_logs_from_vm, vm, tag, raw_dir, args.dry_run): vm
                 for vm in vms
             }
 
@@ -906,8 +882,11 @@ Examples:
 
     conn = init_database(local_db_path)
 
+    # Build experiment tags for loading
+    exp_tags = [f"{d}-{r}" if r else d for d, r, _ in resolved]
+
     print("\n  Loading JSONL events...")
-    total_events = load_events_to_duckdb(conn, raw_dir, experiments, vm_info_map)
+    total_events = load_events_to_duckdb(conn, raw_dir, exp_tags, vm_info_map)
     print(f"  Events loaded: {total_events:,}")
 
     print("\n  Creating analysis views...")
@@ -936,12 +915,8 @@ Examples:
     print(f"  session_summary    - Session-level metrics")
     print(f"\nExample queries:")
     print(f"  duckdb {db_path}")
-    print(f"  -- Event counts by type and SUP")
     print(f"  SELECT sup_behavior, event_type, COUNT(*) FROM events GROUP BY 1, 2 ORDER BY 1, 3 DESC;")
-    print(f"  -- LLM token usage by model")
     print(f"  SELECT * FROM llm_performance;")
-    print(f"  -- Session success rates")
-    print(f"  SELECT sup_behavior, COUNT(*), SUM(workflows_succeeded), SUM(error_count) FROM session_summary GROUP BY 1;")
 
     return 0
 

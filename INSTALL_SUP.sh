@@ -93,6 +93,12 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --S0C.llama         SmolAgents + llama (CPU only)
     --S0C.gemma         SmolAgents + gemma (CPU only)
 
+  CPU Calibrated (no GPU — summer24 timing):
+    --B2C.llama         BrowserUse + llama + summer24 (CPU only)
+    --B2C.gemma         BrowserUse + gemma + summer24 (CPU only)
+    --S2C.llama         SmolAgents + llama + summer24 (CPU only)
+    --S2C.gemma         SmolAgents + gemma + summer24 (CPU only)
+
   RTX Baselines (RTX 2080 Ti):
     --B0R.llama         BrowserUse + llama (RTX)
     --B0R.gemma         BrowserUse + gemma (RTX)
@@ -181,6 +187,12 @@ CONFIGS=(
     ["B0C.gemma"]="browseruse:none:gemma:none"
     ["S0C.llama"]="smolagents:none:llama:none"
     ["S0C.gemma"]="smolagents:none:gemma:none"
+
+    # CPU calibrated (no GPU, summer24 timing)
+    ["B2C.llama"]="browseruse:none:llama:summer24"
+    ["B2C.gemma"]="browseruse:none:gemma:summer24"
+    ["S2C.llama"]="smolagents:none:llama:summer24"
+    ["S2C.gemma"]="smolagents:none:gemma:summer24"
 
     # RTX baselines (RTX 2080 Ti)
     ["B0R.llama"]="browseruse:none:llama:none"
@@ -294,6 +306,13 @@ list_configs() {
             "--$key" "$brain" "$model"
     done
     echo ""
+    echo "CPU Calibrated (no GPU, summer24):"
+    for key in B2C.llama B2C.gemma S2C.llama S2C.gemma; do
+        IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-12s model=%-8s calibration=%s (CPU only)\n" \
+            "--$key" "$brain" "$model" "$calibration"
+    done
+    echo ""
     echo "RTX Baselines (RTX 2080 Ti):"
     for key in B0R.llama B0R.gemma S0R.llama S0R.gemma; do
         IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
@@ -343,6 +362,11 @@ parse_args() {
 
             # Config key shortcuts - CPU baselines
             --B0C.llama|--B0C.gemma|--S0C.llama|--S0C.gemma)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - CPU calibrated (summer24)
+            --B2C.llama|--B2C.gemma|--S2C.llama|--S2C.gemma)
                 parse_config_key "${1#--}"
                 ;;
 
@@ -780,6 +804,7 @@ export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
 export PYTHONPATH="$deploy_dir/src:\${PYTHONPATH:-}"
 export LOG_DIR="$deploy_dir/logs"
+export SUP_CONFIG_KEY="$CONFIG_KEY"
 export CALIBRATION_PROFILE="${CALIBRATION}"
 
 # Task (for LLM agents)
