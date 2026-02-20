@@ -1,0 +1,61 @@
+---
+# sups2-csdept-sum24: Iteration 2 SUPs, behavioral configs from summer24 analysis
+# Timing-only: only timing_profile.json from baselines.
+#
+# Total VMs: 11 (4 V100, 5 CPU, 2 RTX)
+
+deployment_name: sups2-csdept-sum24
+behavior_source: ~/PHASE/feedback_engine/configs/axes-sups-controls_axes-summer24
+behavior_configs:
+  - timing_profile.json
+
+flavor_capacity:
+  v1.14vcpu.28g: 5
+  v100-1gpu.14vcpu.28g: 4
+  rtx2080ti-1gpu.14vcpu.28g: 2
+
+deployments:
+  # === MCHP (no LLM, no GPU) ===
+  - behavior: M2
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === BrowserUse (V100) ===
+  - behavior: B2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === SmolAgents (V100) ===
+  - behavior: S2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === BrowserUse (CPU only) ===
+  - behavior: B2C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: B2C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === SmolAgents (CPU only) ===
+  - behavior: S2C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: S2C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1
+
+  # === BrowserUse (RTX) ===
+  - behavior: B2R.llama
+    flavor: rtx2080ti-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2R.gemma
+    flavor: rtx2080ti-1gpu.14vcpu.28g
+    count: 1

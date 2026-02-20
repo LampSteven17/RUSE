@@ -3,8 +3,8 @@
 # SUP Deployment Script
 # Two operations: spinup (provision + install) and teardown
 #
-# Spinup automatically uses feedback-aware install when the deployment's
-# config.yaml contains feedback_sources (e.g., exp-4).
+# Spinup automatically uses behavior-configs-aware install when the deployment's
+# config.yaml contains behavior_source.
 #
 # Usage:
 #   ./deploy.sh                          # Interactive mode
@@ -80,9 +80,9 @@ list_deployments() {
     for dir in "$SCRIPT_DIR"/*/; do
         if [[ -f "${dir}config.yaml" ]]; then
             deployment=$(basename "$dir")
-            # Check if feedback-aware
-            if grep -q "feedback_sources:" "${dir}config.yaml" 2>/dev/null; then
-                echo -e "  $i) $deployment  ${GREEN}[feedback]${NC}"
+            # Check if behavior-configs-aware
+            if grep -q "behavior_source:" "${dir}config.yaml" 2>/dev/null; then
+                echo -e "  $i) $deployment  ${GREEN}[behavior]${NC}"
             else
                 echo "  $i) $deployment"
             fi
@@ -102,10 +102,10 @@ get_deployments() {
     echo "${deployments[@]}"
 }
 
-# Check if deployment has feedback config
-has_feedback() {
+# Check if deployment has behavioral configs
+has_behavior_configs() {
     local deploy_dir="$1"
-    grep -q "feedback_sources:" "$deploy_dir/config.yaml" 2>/dev/null
+    grep -q "behavior_source:" "$deploy_dir/config.yaml" 2>/dev/null
 }
 
 # Check prerequisites
@@ -160,7 +160,7 @@ run_provision() {
     fi
 }
 
-# Run install playbook (auto-selects feedback-aware variant)
+# Run install playbook (auto-selects behavior-configs-aware variant)
 run_install() {
     local deployment=$1
     local deploy_dir="$SCRIPT_DIR/$deployment"
@@ -170,11 +170,11 @@ run_install() {
         return 1
     fi
 
-    # Auto-select playbook based on feedback presence
+    # Auto-select playbook based on behavior config presence
     local playbook="install-sups.yaml"
-    if has_feedback "$deploy_dir"; then
-        playbook="install-sups-with-feedback.yaml"
-        print_step "Installing SUPs with PHASE feedback for: $deployment"
+    if has_behavior_configs "$deploy_dir"; then
+        playbook="install-sups-with-behavior-configs.yaml"
+        print_step "Installing SUPs with behavioral configs for: $deployment"
     else
         print_step "Installing SUPs for: $deployment"
     fi
@@ -189,7 +189,7 @@ run_install() {
     print_step "SUP installation complete!"
 }
 
-# Spinup: provision + install (with feedback if present)
+# Spinup: provision + install (with behavioral configs if present)
 run_spinup() {
     local deployment=$1
     local deploy_dir="$SCRIPT_DIR/$deployment"

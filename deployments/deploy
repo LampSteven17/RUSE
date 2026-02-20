@@ -326,9 +326,9 @@ _parse_target() {
     fi
 }
 
-has_feedback() {
+has_behavior_configs() {
     local deploy_dir="$1"
-    grep -q "feedback_sources:" "$deploy_dir/config.yaml" 2>/dev/null
+    grep -qE "^behavior_source:" "$deploy_dir/config.yaml" 2>/dev/null
 }
 
 get_vm_count() {
@@ -520,8 +520,9 @@ do_list() {
     echo ""
 
     # Interactive selection
-    local selection rc
-    selection=$(_menu_choose "Select deployment" "${target_labels[@]}"); rc=$?
+    local selection
+    local rc=0
+    selection=$(_menu_choose "Select deployment" "${target_labels[@]}") || rc=$?
     (( rc == 2 )) && exit 0
     (( rc != 0 )) && return 0
 
@@ -534,8 +535,9 @@ do_list() {
 
     # Action submenu
     local action
+    rc=0
     action=$(_menu_choose "Action: $selection" \
-        "1) Teardown    delete VMs and volumes"); rc=$?
+        "1) Teardown    delete VMs and volumes") || rc=$?
     (( rc == 2 )) && exit 0
     (( rc != 0 )) && return 0
 
@@ -572,9 +574,9 @@ for dep in cfg.get('deployments', []):
 
     _print_table "16,8,30" "${rows[@]}"
 
-    if has_feedback "$deploy_dir"; then
+    if has_behavior_configs "$deploy_dir"; then
         echo ""
-        _color 46 "Feedback: enabled"
+        _color 46 "Behavior configs: enabled"
     fi
 
     local vm_count
@@ -674,12 +676,12 @@ do_spinup() {
         return 1
     fi
 
-    # Phase 2: Install (auto-select feedback-aware playbook)
-    SHOW_FEEDBACK=false
+    # Phase 2: Install (auto-select behavior-configs-aware playbook)
+    SHOW_BEHAVIOR_CONFIGS=false
     local playbook="install-sups.yaml"
-    if has_feedback "$deploy_dir"; then
-        playbook="install-sups-with-feedback.yaml"
-        SHOW_FEEDBACK=true
+    if has_behavior_configs "$deploy_dir"; then
+        playbook="install-sups-with-behavior-configs.yaml"
+        SHOW_BEHAVIOR_CONFIGS=true
     fi
 
     local install_rc=0
@@ -734,11 +736,11 @@ do_install() {
         VM_STATUS["$vm"]="provisioned"
     done
 
-    SHOW_FEEDBACK=false
+    SHOW_BEHAVIOR_CONFIGS=false
     local playbook="install-sups.yaml"
-    if has_feedback "$_PT_DEPLOY_DIR"; then
-        playbook="install-sups-with-feedback.yaml"
-        SHOW_FEEDBACK=true
+    if has_behavior_configs "$_PT_DEPLOY_DIR"; then
+        playbook="install-sups-with-behavior-configs.yaml"
+        SHOW_BEHAVIOR_CONFIGS=true
     fi
 
     local start_time
@@ -1001,11 +1003,12 @@ interactive_menu() {
         printf '\033[2J\033[H'
         print_ruse_header
 
-        local action rc
+        local action
+        local rc=0
         action=$(_menu_choose "Realistic User Simulation Engine" \
             "1) Deploy     provision VMs + install SUPs" \
             "2) Teardown   delete VMs and volumes" \
-            "3) List       show deployed RUSEs"); rc=$?
+            "3) List       show deployed RUSEs") || rc=$?
         (( rc == 2 )) && exit 0   # q = quit
         (( rc != 0 )) && continue # b/Esc = back (re-render)
 
@@ -1013,7 +1016,8 @@ interactive_menu() {
             1)
                 clear_content_area
                 local dep
-                dep=$(select_deployment "$deployments"); rc=$?
+                rc=0
+                dep=$(select_deployment "$deployments") || rc=$?
                 (( rc == 2 )) && exit 0
                 (( rc != 0 )) && continue
                 do_spinup "$dep" || true
@@ -1022,7 +1026,8 @@ interactive_menu() {
             2)
                 clear_content_area
                 local dep
-                dep=$(select_teardown_target "$deployments"); rc=$?
+                rc=0
+                dep=$(select_teardown_target "$deployments") || rc=$?
                 (( rc == 2 )) && exit 0
                 (( rc != 0 )) && continue
                 if [[ "$dep" == "__ALL__" ]]; then
@@ -1068,14 +1073,15 @@ select_deployment() {
         local vm_count label tag=""
         vm_count=$(get_vm_count "$deploy_dir/config.yaml")
         label=$(_dep_label "$dep")
-        has_feedback "$deploy_dir" && tag=" [feedback]"
+        has_behavior_configs "$deploy_dir" && tag=" [behavior]"
         choices+=("$i) $label  ($vm_count VMs)$tag")
         dep_dirs+=("$dep")
         i=$((i + 1))
     done <<< "$deployments"
 
-    local selection rc
-    selection=$(_menu_choose "Select deployment" "${choices[@]}"); rc=$?
+    local selection
+    local rc=0
+    selection=$(_menu_choose "Select deployment" "${choices[@]}") || rc=$?
     (( rc != 0 )) && return $rc
 
     # Find matching dep_dir by label prefix
@@ -1132,8 +1138,9 @@ select_teardown_target() {
     choices+=("$i) ALL  (delete every sup-* server and volume)")
     targets+=("__ALL__")
 
-    local selection rc
-    selection=$(_menu_choose "Select teardown target" "${choices[@]}"); rc=$?
+    local selection
+    local rc=0
+    selection=$(_menu_choose "Select teardown target" "${choices[@]}") || rc=$?
     (( rc != 0 )) && return $rc
 
     local idx

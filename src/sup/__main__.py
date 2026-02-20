@@ -50,8 +50,8 @@ Configuration Keys:
     parser.add_argument("--seed", type=int, default=42,
         help="Random seed for deterministic behavior (default: 42, 0 = non-deterministic)")
     parser.add_argument("--task", type=str, default=None)
-    parser.add_argument("--feedback-dir", type=str, default=None,
-        help="Override feedback config directory (default: auto-discover from deployed_sups)")
+    parser.add_argument("--behavior-config-dir", type=str, default=None,
+        help="Override behavioral config directory (default: auto-discover from deployed_sups)")
     parser.add_argument("--list", action="store_true")
 
     args = parser.parse_args()
@@ -117,13 +117,13 @@ Configuration Keys:
 
     if config.brain == "mchp":
         from runners.run_mchp import run_mchp
-        run_mchp(config, feedback_dir=args.feedback_dir)
+        run_mchp(config, behavior_config_dir=args.behavior_config_dir)
     elif config.brain == "browseruse":
         from runners.run_browseruse import run_browseruse
-        run_browseruse(config, task=args.task, feedback_dir=args.feedback_dir)
+        run_browseruse(config, task=args.task, behavior_config_dir=args.behavior_config_dir)
     elif config.brain == "smolagents":
         from runners.run_smolagents import run_smolagents
-        run_smolagents(config, task=args.task, feedback_dir=args.feedback_dir)
+        run_smolagents(config, task=args.task, behavior_config_dir=args.behavior_config_dir)
     else:
         print(f"Error: Unknown brain type '{config.brain}'")
         sys.exit(1)

@@ -1,0 +1,10 @@
+{
+  "page_dwell": {
+    "min_seconds": 5,
+    "max_seconds": 30
+  },
+  "navigation_clicks": {
+    "max": 5
+  },
+  "max_steps": 10
+}

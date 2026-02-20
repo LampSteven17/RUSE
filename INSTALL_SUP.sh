@@ -105,6 +105,10 @@ Usage: ./INSTALL_SUP.sh <CONFIG> [OPTIONS]
     --S0R.llama         SmolAgents + llama (RTX)
     --S0R.gemma         SmolAgents + gemma (RTX)
 
+  RTX Iteration 2 (RTX 2080 Ti):
+    --B2R.llama         BrowserUse + llama iteration 2 (RTX)
+    --B2R.gemma         BrowserUse + gemma iteration 2 (RTX)
+
 === Deprecated (exp-2 compat) ===
 
   Old MCHP+LLM keys (M1a.llama, M2a.llama, etc.) map to M1/M2.
@@ -199,6 +203,10 @@ CONFIGS=(
     ["B0R.gemma"]="browseruse:none:gemma:none"
     ["S0R.llama"]="smolagents:none:llama:none"
     ["S0R.gemma"]="smolagents:none:gemma:none"
+
+    # RTX iteration 2 (RTX 2080 Ti)
+    ["B2R.llama"]="browseruse:none:llama:none"
+    ["B2R.gemma"]="browseruse:none:gemma:none"
 
     # === Deprecated aliases ===
     # Old B1/S1 baseline keys -> B0/S0
@@ -320,6 +328,13 @@ list_configs() {
             "--$key" "$brain" "$model"
     done
     echo ""
+    echo "RTX Iteration 2 (RTX 2080 Ti):"
+    for key in B2R.llama B2R.gemma; do
+        IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
+        printf "  %-16s brain=%-12s model=%-8s (RTX)\n" \
+            "--$key" "$brain" "$model"
+    done
+    echo ""
     echo "Deprecated exp-2 keys (including old B1/S1) are still accepted."
 }
 
@@ -372,6 +387,11 @@ parse_args() {
 
             # Config key shortcuts - RTX baselines
             --B0R.llama|--B0R.gemma|--S0R.llama|--S0R.gemma)
+                parse_config_key "${1#--}"
+                ;;
+
+            # Config key shortcuts - RTX iteration 2
+            --B2R.llama|--B2R.gemma)
                 parse_config_key "${1#--}"
                 ;;
 
