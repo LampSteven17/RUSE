@@ -1262,6 +1262,13 @@ monitoring_loop() {
     local start_time
     start_time=$(date +%s)
 
+    # Reset the entire screen so absolute cursor positions are valid.
+    # After a previous monitoring_loop (e.g. provisioning → install), the
+    # terminal may have scrolled past the logo, making \033[18;1H point to
+    # scrollback instead of the viewport — which causes header duplication.
+    printf '\033[2J\033[H'   # clear screen + cursor to 1,1
+    print_ruse_header        # repaint logo (lines 1-17)
+
     clear_content_area
     _EVENT_FILE_POS=0  # reset for new event file (critical between provision→install)
     _LOG_PARSE_POS=0   # reset for log-based teardown fallback
