@@ -1,23 +1,23 @@
 """
-PHASE Feedback Engine configuration loader.
+Behavioral configuration loader.
 
-Loads feedback configs from a drop-in directory for hot-swappable
+Loads behavioral configs from a drop-in directory for hot-swappable
 behavior adjustment. The PHASE Feedback Engine generates per-behavior JSON
 files that adjust workflow weights, behavior modifiers, site config,
 and prompt augmentation.
 
 Directory auto-discovery (matches AgentLogger pattern):
-1. RUSE_FEEDBACK_DIR env var
-2. /opt/ruse/deployed_sups/<config_key>/feedback/  (production)
-3. <project_root>/deployed_sups/<config_key>/feedback/     (development)
+1. RUSE_BEHAVIOR_CONFIG_DIR env var
+2. /opt/ruse/deployed_sups/<config_key>/behavioral_configurations/  (production)
+3. <project_root>/deployed_sups/<config_key>/behavioral_configurations/     (development)
 
 Supports two file naming conventions:
   - New (per-behavior directory): bare filenames (workflow_weights.json, etc.)
   - Legacy (flat directory): prefixed filenames (<config_key>_workflow_weights.json, etc.)
 
 Supports two directory layouts:
-  - Behavior directory: --feedback-dir points directly at M/, B.llama/, etc.
-  - Experiment directory: --feedback-dir points at parent (e.g., exp3_axes-fall24/)
+  - Behavior directory: --behavior-config-dir points directly at M/, B.llama/, etc.
+  - Experiment directory: --behavior-config-dir points at parent (e.g., exp3_axes-fall24/)
     and the behavior subdir is auto-resolved from config_key.
 """
 import json
@@ -29,8 +29,8 @@ from typing import Optional, List
 
 
 @dataclass
-class FeedbackConfig:
-    """PHASE feedback configuration for a single SUP."""
+class BehavioralConfig:
+    """Behavioral configuration for a single SUP."""
     workflow_weights: Optional[dict] = None     # {"BrowseWeb": 0.45, ...}
     behavior_modifiers: Optional[dict] = None   # {"page_dwell": {...}, ...}
     site_config: Optional[dict] = None          # {"site_categories": {...}}
@@ -48,7 +48,7 @@ def config_key_to_behavior_dir(config_key: str) -> str:
     """
     Map a SUP config key to its PHASE behavior directory name.
 
-    M1-M4 → 'M', B0-B4.llama → 'B.llama', S0-S4.gemma → 'S.gemma', etc.
+    M1-M4 -> 'M', B0-B4.llama -> 'B.llama', S0-S4.gemma -> 'S.gemma', etc.
     Controls (C0, M0) return the key unchanged.
     """
     m = re.match(r'^([A-Z])\d+(?:\.(\w+))?$', config_key)
@@ -64,7 +64,7 @@ def _resolve_behavior_subdir(path: Path, config_key: str) -> Path:
 
     If path already contains bare config JSON files, return it as-is.
     """
-    # If the dir already has config JSONs, it's a behavior dir — use directly
+    # If the dir already has config JSONs, it's a behavior dir -- use directly
     if any(path.glob("workflow_weights.json")) or any(path.glob(f"{config_key}_*.json")):
         return path
 
@@ -74,23 +74,23 @@ def _resolve_behavior_subdir(path: Path, config_key: str) -> Path:
     if subdir.is_dir():
         return subdir
 
-    # No subdir found — return original (loader will find nothing, which is fine)
+    # No subdir found -- return original (loader will find nothing, which is fine)
     return path
 
 
-def resolve_feedback_dir(config_key: str, override_dir: Optional[str] = None) -> Path:
+def resolve_behavioral_config_dir(config_key: str, override_dir: Optional[str] = None) -> Path:
     """
-    Resolve the feedback directory path using auto-discovery.
+    Resolve the behavioral configurations directory path using auto-discovery.
 
     Supports pointing at either a behavior directory (has *.json files)
     or an experiment directory (has M/, B.llama/, etc. subdirs).
 
     Args:
         config_key: SUP config key (e.g., 'M3', 'B3.gemma')
-        override_dir: Optional explicit path (from --feedback-dir CLI flag)
+        override_dir: Optional explicit path (from --behavior-config-dir CLI flag)
 
     Returns:
-        Path to the feedback directory (created if it doesn't exist)
+        Path to the behavioral configurations directory (created if it doesn't exist)
     """
     if override_dir:
         path = Path(override_dir).expanduser()
@@ -99,7 +99,7 @@ def resolve_feedback_dir(config_key: str, override_dir: Optional[str] = None) ->
         return resolved
 
     # 1. Check env var
-    env_dir = os.environ.get("RUSE_FEEDBACK_DIR")
+    env_dir = os.environ.get("RUSE_BEHAVIOR_CONFIG_DIR")
     if env_dir:
         path = Path(env_dir).expanduser()
         resolved = _resolve_behavior_subdir(path, config_key)
@@ -109,33 +109,33 @@ def resolve_feedback_dir(config_key: str, override_dir: Optional[str] = None) ->
     # 2. Check deployed path
     deployed_base = Path("/opt/ruse/deployed_sups")
     if deployed_base.exists():
-        path = deployed_base / config_key / "feedback"
+        path = deployed_base / config_key / "behavioral_configurations"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     # 3. Development fallback: relative to project root
     project_root = Path(__file__).parent.parent.parent
-    path = project_root / "deployed_sups" / config_key / "feedback"
+    path = project_root / "deployed_sups" / config_key / "behavioral_configurations"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def load_feedback_config(feedback_dir: Path, config_key: str) -> FeedbackConfig:
+def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfig:
     """
-    Load feedback config files from the feedback directory.
+    Load behavioral config files from the behavioral configurations directory.
 
     Missing files are silently skipped (fields stay None).
 
     Args:
-        feedback_dir: Path to the feedback directory
+        config_dir: Path to the behavioral configurations directory
         config_key: SUP config key for filename prefix
 
     Returns:
-        FeedbackConfig with loaded data, or empty config if dir not found
+        BehavioralConfig with loaded data, or empty config if dir not found
     """
-    config = FeedbackConfig()
+    config = BehavioralConfig()
 
-    if not feedback_dir.exists():
+    if not config_dir.exists():
         return config
 
     file_map = {
@@ -148,35 +148,35 @@ def load_feedback_config(feedback_dir: Path, config_key: str) -> FeedbackConfig:
 
     for attr, legacy_filename in file_map.items():
         # Try bare filename first (new per-behavior directory layout)
-        filepath = feedback_dir / f"{attr}.json"
+        filepath = config_dir / f"{attr}.json"
         if not filepath.exists():
             # Fallback: legacy prefixed filename
-            filepath = feedback_dir / legacy_filename
+            filepath = config_dir / legacy_filename
         if filepath.exists():
             try:
                 with open(filepath, "r") as f:
                     setattr(config, attr, json.load(f))
             except (json.JSONDecodeError, OSError) as e:
-                print(f"[feedback] Warning: Failed to load {filepath.name}: {e}")
+                print(f"[behavior] Warning: Failed to load {filepath.name}: {e}")
 
     return config
 
 
-def build_workflow_weights(workflows, feedback_config: FeedbackConfig) -> Optional[List[float]]:
+def build_workflow_weights(workflows, behavioral_config: BehavioralConfig) -> Optional[List[float]]:
     """
     Build a weights list parallel to workflows for random.choices().
 
     Args:
         workflows: List of workflow objects (must have .name attribute)
-        feedback_config: FeedbackConfig with workflow_weights dict
+        behavioral_config: BehavioralConfig with workflow_weights dict
 
     Returns:
         List of floats parallel to workflows, or None if no weights configured
     """
-    if not feedback_config.workflow_weights:
+    if not behavioral_config.workflow_weights:
         return None
 
-    weights = feedback_config.workflow_weights
+    weights = behavioral_config.workflow_weights
     result = []
     for w in workflows:
         # Try workflow name first, then class name
@@ -238,7 +238,7 @@ def build_calibrated_timing_config(timing_profile: dict):
     Build a CalibratedTimingConfig from a timing_profile dict.
 
     Mirrors the structure of load_calibration_profile() in phase_timing.py
-    but accepts an already-loaded dict (from feedback JSON) instead of
+    but accepts an already-loaded dict (from behavioral config JSON) instead of
     reading from a bundled profile file.
 
     Args:
@@ -251,7 +251,7 @@ def build_calibrated_timing_config(timing_profile: dict):
 
     burst = timing_profile["burst_characteristics"]
     return CalibratedTimingConfig(
-        dataset=timing_profile.get("dataset", "feedback"),
+        dataset=timing_profile.get("dataset", "default"),
         hourly_fractions=timing_profile["hourly_distribution"]["mean_fraction"],
         burst_duration=burst["burst_duration_minutes"]["percentiles"],
         idle_gap=burst["idle_gap_minutes"]["percentiles"],

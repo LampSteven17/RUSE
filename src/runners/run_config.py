@@ -3,28 +3,28 @@ Configuration loader for SUP runners.
 
 Maps configuration keys to brain/content/model combinations.
 
-ARCHITECTURE: Brain + Content (MCHP only) + Model + Calibration
+ARCHITECTURE: Brain + Content (MCHP only) + Model
 
 NAMING SCHEME:
 [Brain][Version].[Model]
 
 Brain:    M = MCHP, B = BrowserUse, S = SmolAgents
-Version:  0 = baseline (B/S only, no timing)
-          1 = baseline (MCHP only, no timing)
-          2 = calibrated to summer24
-          3 = calibrated to fall24
-          4 = calibrated to spring25
+Version:  0 = baseline (B/S only, no behavioral configs)
+          1 = baseline (MCHP only, no behavioral configs)
+          2+ = iteration number (behavior from behavioral_configurations/)
 Models:   llama (llama3.1:8b), gemma (gemma3:1b)
 
 MCHP has no LLM — pure scripted automation, no model suffix.
-Calibrated versions (2+) are uniform across all brains.
+Baselines (v0/v1) run clean with no behavioral configs.
+Iteration configs (v2+) get ALL behavior from behavioral_configurations/
+directory — either shipped defaults or PHASE feedback engine overrides.
 
 Examples:
-- M1          = MCHP baseline (no timing)
-- M2          = MCHP + summer24 calibrated timing
-- B0.llama    = BrowserUse + llama baseline (no timing)
-- B3.gemma    = BrowserUse + gemma + fall24 calibrated timing
-- S4.llama    = SmolAgents + llama + spring25 calibrated timing
+- M1          = MCHP baseline (no behavioral configs)
+- M2          = MCHP iteration 2
+- B0.llama    = BrowserUse + llama baseline (no behavioral configs)
+- B3.gemma    = BrowserUse + gemma iteration 3
+- S4.llama    = SmolAgents + llama iteration 4
 """
 import warnings
 from dataclasses import dataclass
@@ -33,16 +33,6 @@ from typing import Optional, Literal
 BrainType = Literal["mchp", "browseruse", "smolagents"]
 ContentType = Literal["none", "llm"]
 ModelType = Literal["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"]
-
-# Calibrated version -> dataset mapping (same for all brains, starts at 2)
-_CALIBRATED_VERSIONS = {
-    2: "summer24",
-    3: "fall24",
-    4: "spring25",
-}
-
-_CALIBRATION_TO_VERSION = {v: k for k, v in _CALIBRATED_VERSIONS.items()}
-
 
 @dataclass
 class SUPConfig:
@@ -66,11 +56,8 @@ class SUPConfig:
         """Generate the configuration key (e.g., M1, B0.llama, B3.gemma)."""
         if self._key_override:
             return self._key_override
-        if self.calibration is not None:
-            version = _CALIBRATION_TO_VERSION.get(self.calibration, 2)
-        else:
-            # Baseline version: MCHP=1, BrowserUse/SmolAgents=0
-            version = 1 if self.brain == "mchp" else 0
+        # Baseline version: MCHP=1, BrowserUse/SmolAgents=0
+        version = 1 if self.brain == "mchp" else 0
 
         if self.brain == "mchp":
             prefix = "MC" if self.cpu_only else "M"
@@ -95,29 +82,29 @@ CONFIGS = {
 
     # === MCHP (no LLM, no model) ===
     "M1": SUPConfig(brain="mchp"),
-    "M2": SUPConfig(brain="mchp", calibration="summer24"),
-    "M3": SUPConfig(brain="mchp", calibration="fall24"),
-    "M4": SUPConfig(brain="mchp", calibration="spring25"),
+    "M2": SUPConfig(brain="mchp", _key_override="M2"),
+    "M3": SUPConfig(brain="mchp", _key_override="M3"),
+    "M4": SUPConfig(brain="mchp", _key_override="M4"),
 
     # === BrowserUse ===
     "B0.llama": SUPConfig(brain="browseruse", model="llama"),
     "B0.gemma": SUPConfig(brain="browseruse", model="gemma"),
-    "B2.llama": SUPConfig(brain="browseruse", model="llama", calibration="summer24"),
-    "B2.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="summer24"),
-    "B3.llama": SUPConfig(brain="browseruse", model="llama", calibration="fall24"),
-    "B3.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="fall24"),
-    "B4.llama": SUPConfig(brain="browseruse", model="llama", calibration="spring25"),
-    "B4.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="spring25"),
+    "B2.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B2.llama"),
+    "B2.gemma": SUPConfig(brain="browseruse", model="gemma", _key_override="B2.gemma"),
+    "B3.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B3.llama"),
+    "B3.gemma": SUPConfig(brain="browseruse", model="gemma", _key_override="B3.gemma"),
+    "B4.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B4.llama"),
+    "B4.gemma": SUPConfig(brain="browseruse", model="gemma", _key_override="B4.gemma"),
 
     # === SmolAgents ===
     "S0.llama": SUPConfig(brain="smolagents", model="llama"),
     "S0.gemma": SUPConfig(brain="smolagents", model="gemma"),
-    "S2.llama": SUPConfig(brain="smolagents", model="llama", calibration="summer24"),
-    "S2.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="summer24"),
-    "S3.llama": SUPConfig(brain="smolagents", model="llama", calibration="fall24"),
-    "S3.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="fall24"),
-    "S4.llama": SUPConfig(brain="smolagents", model="llama", calibration="spring25"),
-    "S4.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="spring25"),
+    "S2.llama": SUPConfig(brain="smolagents", model="llama", _key_override="S2.llama"),
+    "S2.gemma": SUPConfig(brain="smolagents", model="gemma", _key_override="S2.gemma"),
+    "S3.llama": SUPConfig(brain="smolagents", model="llama", _key_override="S3.llama"),
+    "S3.gemma": SUPConfig(brain="smolagents", model="gemma", _key_override="S3.gemma"),
+    "S4.llama": SUPConfig(brain="smolagents", model="llama", _key_override="S4.llama"),
+    "S4.gemma": SUPConfig(brain="smolagents", model="gemma", _key_override="S4.gemma"),
 
     # === CPU baselines (no GPU — Ollama runs on CPU) ===
     "B0C.llama": SUPConfig(brain="browseruse", model="llama", cpu_only=True, _key_override="B0C.llama"),
@@ -125,17 +112,21 @@ CONFIGS = {
     "S0C.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True, _key_override="S0C.llama"),
     "S0C.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True, _key_override="S0C.gemma"),
 
-    # === CPU calibrated (no GPU — summer24 timing) ===
-    "B2C.llama": SUPConfig(brain="browseruse", model="llama", calibration="summer24", cpu_only=True, _key_override="B2C.llama"),
-    "B2C.gemma": SUPConfig(brain="browseruse", model="gemma", calibration="summer24", cpu_only=True, _key_override="B2C.gemma"),
-    "S2C.llama": SUPConfig(brain="smolagents", model="llama", calibration="summer24", cpu_only=True, _key_override="S2C.llama"),
-    "S2C.gemma": SUPConfig(brain="smolagents", model="gemma", calibration="summer24", cpu_only=True, _key_override="S2C.gemma"),
+    # === CPU iteration 2 (no GPU) ===
+    "B2C.llama": SUPConfig(brain="browseruse", model="llama", cpu_only=True, _key_override="B2C.llama"),
+    "B2C.gemma": SUPConfig(brain="browseruse", model="gemma", cpu_only=True, _key_override="B2C.gemma"),
+    "S2C.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True, _key_override="S2C.llama"),
+    "S2C.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True, _key_override="S2C.gemma"),
 
     # === RTX baselines (same as B0/S0 but deployed on RTX 2080 Ti) ===
     "B0R.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B0R.llama"),
     "B0R.gemma": SUPConfig(brain="browseruse", model="gemma", _key_override="B0R.gemma"),
     "S0R.llama": SUPConfig(brain="smolagents", model="llama", _key_override="S0R.llama"),
     "S0R.gemma": SUPConfig(brain="smolagents", model="gemma", _key_override="S0R.gemma"),
+
+    # === RTX iteration 2 (deployed on RTX 2080 Ti) ===
+    "B2R.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B2R.llama"),
+    "B2R.gemma": SUPConfig(brain="browseruse", model="gemma", _key_override="B2R.gemma"),
 }
 
 # ============================================================================

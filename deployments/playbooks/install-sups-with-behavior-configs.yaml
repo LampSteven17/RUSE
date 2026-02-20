@@ -1,23 +1,24 @@
 ---
-# Ansible Playbook: install-sups-with-feedback.yaml
-# Step 2b: Install SUPs then distribute matching PHASE feedback configs.
+# Ansible Playbook: install-sups-with-behavior-configs.yaml
+# Step 2b: Install SUPs then distribute matching PHASE behavioral configs.
 #
-# This is the exp-4 variant of install-sups.yaml. It runs the standard
-# install, then distributes feedback configs matched to each SUP's
-# calibration version:
+# This is the behavior-configs variant of install-sups.yaml. It runs the
+# standard install, then distributes behavioral configs matched to each
+# SUP's baseline version:
 #
-#   Version 0/1 (baseline) → feedback from exp3_axes-fall24 (default)
-#   Version 2 (summer24)   → feedback from exp3_axes-summer24
-#   Version 3 (fall24)     → feedback from exp3_axes-fall24
-#   Version 4 (spring25)   → feedback from exp3_axes-spring25
+#   Version 0/1 (baseline) → configs from exp3_axes-fall24 (default)
+#   Version 2 (iteration 2) → configs from behavior_source
+#   Version 3 (iteration 3) → configs from behavior_source
+#   Version 4 (iteration 4) → configs from behavior_source
 #
 # Prerequisites:
-#   - PHASE feedback configs generated for all three datasets
+#   - PHASE behavioral configs generated for all three datasets
 #   - VMs provisioned (inventory.ini exists)
 #
 # Usage:
-#   ansible-playbook -i ../exp-4/inventory.ini install-sups-with-feedback.yaml \
-#       -e deployment_dir=../exp-4
+#   ansible-playbook -i ../sups2-csdept-sum24/runs/0219/inventory.ini \
+#       install-sups-with-behavior-configs.yaml \
+#       -e deployment_dir=../sups2-csdept-sum24
 
 # ── Phase 1: Standard SUP install (identical to install-sups.yaml) ──────────
 - name: Install SUPs
@@ -134,8 +135,8 @@
         install_service: "{{ service_status.stdout | default('none') | trim }}"
 
 
-# ── Phase 2: Distribute feedback configs matched to calibration ─────────────
-- name: Distribute PHASE feedback configs (version-matched)
+# ── Phase 2: Distribute behavioral configs matched to baseline ──────────────
+- name: Distribute PHASE behavioral configs (baseline-matched)
   hosts: sup_hosts
   become: yes
   strategy: free
@@ -145,106 +146,97 @@
     config_file: "{{ deployment_dir }}/config.yaml"
     ruse_path: "/opt/ruse"
 
-    # Consumable config file types (exclude recommendations.json)
-    consumable_configs:
-      - workflow_weights.json
-      - behavior_modifiers.json
-      - site_config.json
-      - prompt_augmentation.json
-      - timing_profile.json
-
   pre_tasks:
-    - name: Load deployment configuration (for feedback_sources and feedback_map)
+    - name: Load deployment configuration (for behavior_source)
       include_vars:
         file: "{{ config_file }}"
       delegate_to: localhost
       run_once: true
 
   tasks:
-    # Skip controls — they don't get feedback
+    # Skip controls — they don't get behavioral configs
     - name: Skip control configs (C0, M0)
       meta: end_host
       when: sup_behavior in ['C0', 'M0']
 
-    # Derive behavior directory from config key: M3 → M, B3.gemma → B.gemma
+    # Derive behavior directory from config key: M3 → M, B3.gemma → B.gemma, B0C.gemma → B.gemma
     - name: Derive behavior directory from config key
       set_fact:
-        behavior_dir: "{{ sup_behavior | regex_replace('^([A-Z])\\d+(.*)$', '\\1\\2') }}"
+        behavior_dir: "{{ sup_behavior | regex_replace('^([A-Z])\\d+[A-Z]*(.*)$', '\\1\\2') }}"
 
-    # Extract the version number from sup_behavior (e.g., "B3.gemma" → "3", "M1" → "1")
-    - name: Extract version number from behavior
+    # Derive baseline config key: M2 → M1, B2C.gemma → B0C.gemma, S3.llama → S0.llama
+    - name: Derive baseline version (M=1, B/S=0)
       set_fact:
-        sup_version: "{{ sup_behavior | regex_replace('^[A-Z]+([0-9]+).*$', '\\1') }}"
+        baseline_version: "{{ '1' if sup_behavior[0] == 'M' else '0' }}"
 
-    # Look up which feedback dataset this version maps to
-    - name: Resolve feedback dataset for this version
+    - name: Derive baseline config key (e.g. B2C.gemma → B0C.gemma)
       set_fact:
-        feedback_dataset: "{{ feedback_map[sup_version | int] | default(feedback_default) }}"
+        baseline_config: "{{ sup_behavior | regex_replace('^([A-Z])\\d+', '\\1' ~ baseline_version) }}"
 
     # Resolve the source directory path (expand ~ on control node)
-    - name: Resolve feedback source directory
+    - name: Resolve behavior source
       set_fact:
-        feedback_source_dir: "{{ feedback_sources[feedback_dataset] | replace('~', lookup('env', 'HOME')) }}"
+        resolved_behavior_source: "{{ behavior_source | replace('~', lookup('env', 'HOME')) }}"
 
-    # Resolve to behavior subdirectory
-    - name: Resolve behavior source path
+    - name: Resolve config-specific source directory
       set_fact:
-        behavior_source_dir: "{{ feedback_source_dir }}/{{ behavior_dir }}"
+        config_source_dir: "{{ resolved_behavior_source }}/{{ behavior_dir }}/{{ baseline_config }}"
 
-    - name: Display feedback mapping
+    - name: Display behavior config mapping
       debug:
-        msg: "{{ sup_behavior }} (v{{ sup_version }}) → {{ feedback_dataset }} → {{ behavior_source_dir }}"
+        msg: "{{ sup_behavior }} → {{ baseline_config }} → {{ config_source_dir }}"
 
-    # Verify the behavior source directory exists
-    - name: Check behavior source directory exists
+    # Verify the config source directory exists
+    - name: Check config source directory exists
       stat:
-        path: "{{ behavior_source_dir }}"
+        path: "{{ config_source_dir }}"
       delegate_to: localhost
-      register: fb_source_dir
+      register: bc_source_dir
 
-    - name: Warn if behavior source not found
+    - name: Warn if config source not found
       debug:
-        msg: "WARNING: Behavior source not found: {{ behavior_source_dir }} — skipping feedback for {{ sup_behavior }}"
-      when: not fb_source_dir.stat.exists
+        msg: "WARNING: Config source not found: {{ config_source_dir }} — skipping behavioral configs for {{ sup_behavior }}"
+      when: not bc_source_dir.stat.exists
 
-    - name: Track feedback skipped
+    - name: Track behavior configs skipped
       set_fact:
-        install_feedback: "SKIP"
-      when: not fb_source_dir.stat.exists
+        install_behavior_configs: "SKIP"
+      when: not bc_source_dir.stat.exists
 
-    # Deploy feedback configs from behavior directory
-    - name: Deploy feedback configs
-      when: fb_source_dir.stat.exists
+    # Deploy behavioral configs from source directory
+    - name: Deploy behavioral configs
+      when: bc_source_dir.stat.exists
       block:
-        - name: Ensure feedback directory exists on VM
+        - name: Ensure behavioral_configurations directory exists on VM
           file:
-            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/"
             state: directory
             mode: '0755'
 
-        - name: Copy consumable feedback configs to SUP
-          copy:
-            src: "{{ behavior_source_dir }}/{{ item }}"
-            dest: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/{{ item }}"
-            mode: '0644'
-          loop: "{{ consumable_configs }}"
-          loop_control:
-            label: "{{ item }}"
-          ignore_errors: yes
-
-        - name: Count deployed files
+        - name: Find behavior config files
           find:
-            paths: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/feedback/"
-            patterns: "*.json"
-          register: deployed_files
+            paths: "{{ config_source_dir }}"
+            patterns: "{{ behavior_configs | default(['*.json']) }}"
+            excludes: "recommendations.json"
+          delegate_to: localhost
+          register: behavior_config_files
+
+        - name: Copy behavior configs to SUP
+          copy:
+            src: "{{ item.path }}"
+            dest: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/{{ item.path | basename }}"
+            mode: '0644'
+          loop: "{{ behavior_config_files.files }}"
+          loop_control:
+            label: "{{ item.path | basename }}"
 
         - name: Report deployment
           debug:
-            msg: "{{ sup_behavior }} ← {{ behavior_dir }}/ from {{ feedback_dataset }} ({{ deployed_files.files | length }} configs)"
+            msg: "{{ sup_behavior }} ← {{ behavior_dir }}/{{ baseline_config }}/ ({{ behavior_config_files.files | length }} configs)"
 
-        - name: Track feedback deployment
+        - name: Track behavior configs deployment
           set_fact:
-            install_feedback: "{{ deployed_files.files | length }} files"
+            install_behavior_configs: "{{ behavior_config_files.files | length }} files"
 
 
 # ── Summary ─────────────────────────────────────────────────────────────────
@@ -269,7 +261,7 @@
           ═══════════════════════════════════════════════════════════════════════════════════════
             DEPLOYMENT MATRIX  ({{ matrix_hosts | length }} hosts)
           ═══════════════════════════════════════════════════════════════════════════════════════
-            {{ "%-24s %-14s %-8s %-8s %-8s %-10s %s" | format("HOST", "CONFIG", "STAGE1", "REBOOT", "STAGE2", "SERVICE", "FEEDBACK") }}
+            {{ "%-24s %-14s %-8s %-8s %-8s %-10s %s" | format("HOST", "CONFIG", "STAGE1", "REBOOT", "STAGE2", "SERVICE", "BHVR") }}
             {{ "─" * 84 }}
           {% for host in matrix_hosts %}
           {% set hv = hostvars[host] %}
@@ -279,8 +271,8 @@
           {% set rb = hv.install_reboot | default('--') %}
           {% set s2 = hv.install_stage2 | default('FAIL') %}
           {% set svc = 'n/a' if is_ctl else (hv.install_service | default('FAIL')) %}
-          {% set fb = 'n/a' if is_ctl else (hv.install_feedback | default('FAIL')) %}
-            {{ "%-24s %-14s %-8s %-8s %-8s %-10s %s" | format(host, config, s1, rb, s2, svc, fb) }}
+          {% set bc = 'n/a' if is_ctl else (hv.install_behavior_configs | default('FAIL')) %}
+            {{ "%-24s %-14s %-8s %-8s %-8s %-10s %s" | format(host, config, s1, rb, s2, svc, bc) }}
           {% endfor %}
             {{ "─" * 84 }}
           {% set ns = namespace(ok=0, fail=0) %}
@@ -298,7 +290,7 @@
           REBOOT  = NVIDIA driver reload (YES = rebooted, skip = not needed)
           STAGE2  = Ollama + Python + services (INSTALL_SUP.sh --stage=2)
           SERVICE = systemd service status after install
-          FEEDBACK = PHASE feedback configs deployed (file count)
+          BHVR    = PHASE behavioral configs deployed (file count)
 
     - name: Check for SSH config file
       stat:

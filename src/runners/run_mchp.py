@@ -19,21 +19,21 @@ def log(msg: str):
     print(f"[{ts}] {msg}")
 
 
-def run_mchp(config: SUPConfig, use_phase_timing: bool = False, feedback_dir: str = None):
+def run_mchp(config: SUPConfig, use_phase_timing: bool = False, behavior_config_dir: str = None):
     """
     Run MCHP brain with optional calibrated timing.
 
     Args:
         config: SUP configuration
         use_phase_timing: Legacy flag, ignored if config.calibration is set.
-        feedback_dir: Optional override for feedback config directory.
+        behavior_config_dir: Optional override for behavioral config directory.
     """
     # Determine calibration profile (config.calibration takes precedence)
     calibration_profile = config.calibration
 
-    # Resolve feedback directory
-    from common.feedback_config import resolve_feedback_dir
-    resolved_feedback_dir = resolve_feedback_dir(config.config_key, override_dir=feedback_dir)
+    # Resolve behavioral config directory
+    from common.behavioral_config import resolve_behavioral_config_dir
+    resolved_behavior_config_dir = resolve_behavioral_config_dir(config.config_key, override_dir=behavior_config_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
     logger.session_start(config={
@@ -43,7 +43,7 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False, feedback_dir: st
         "calibration": calibration_profile,
         "config_key": config.config_key,
         "seed": config.seed,
-        "feedback_dir": str(resolved_feedback_dir),
+        "behavior_config_dir": str(resolved_behavior_config_dir),
     })
 
     # Set up environment for LLM-augmented configurations
@@ -77,7 +77,7 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False, feedback_dir: st
             use_phase_timing=use_phase_timing if not calibration_profile else False,
             exclude_windows_workflows=is_augmented,
             seed=config.seed,
-            feedback_dir=str(resolved_feedback_dir),
+            behavior_config_dir=str(resolved_behavior_config_dir),
             config_key=config.config_key,
         )
         agent.run()
@@ -100,8 +100,8 @@ if __name__ == "__main__":
     parser.add_argument("--model", choices=["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"], default="llama")
     parser.add_argument("--calibration", choices=["summer24", "fall24", "spring25"], default=None)
     parser.add_argument("--phase-timing", action="store_true", help="Legacy: use summer24 calibration")
-    parser.add_argument("--feedback-dir", type=str, default=None,
-                        help="Override feedback config directory")
+    parser.add_argument("--behavior-config-dir", type=str, default=None,
+                        help="Override behavioral config directory")
     args = parser.parse_args()
 
     calibration = args.calibration
@@ -110,4 +110,4 @@ if __name__ == "__main__":
 
     config = build_config(brain="mchp", content=args.content, model=args.model,
                           calibration=calibration)
-    run_mchp(config, feedback_dir=args.feedback_dir)
+    run_mchp(config, behavior_config_dir=args.behavior_config_dir)

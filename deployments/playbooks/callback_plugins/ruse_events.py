@@ -110,9 +110,9 @@ class CallbackModule(CallbackBase):
             "name": self._current_play,
         })
 
-        # Detect feedback distribution play
-        if "feedback" in self._current_play.lower():
-            self._emit("install_feedback")
+        # Detect behavioral config distribution play
+        if "behavior" in self._current_play.lower():
+            self._emit("install_behavior_configs")
 
     def v2_playbook_on_task_start(self, task, is_conditional):
         """Called when a task starts."""

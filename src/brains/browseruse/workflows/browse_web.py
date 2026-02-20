@@ -128,7 +128,7 @@ class BrowseWebWorkflow(BUWorkflow):
         if task is None:
             if self.task_weights:
                 task = random.choices(BROWSE_WEB_TASKS, weights=self.task_weights, k=1)[0]
-                selection_method = "feedback_weighted"
+                selection_method = "behavior_weighted"
             else:
                 task = random.choice(BROWSE_WEB_TASKS)
                 selection_method = "random"

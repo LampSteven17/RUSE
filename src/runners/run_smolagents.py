@@ -17,11 +17,11 @@ def log(msg: str):
     print(f"[{ts}] {msg}")
 
 
-def run_smolagents(config: SUPConfig, task: str = None, feedback_dir: str = None):
+def run_smolagents(config: SUPConfig, task: str = None, behavior_config_dir: str = None):
     """Run SmolAgents brain in single-task mode."""
-    # Resolve feedback directory
-    from common.feedback_config import resolve_feedback_dir, load_feedback_config
-    resolved_feedback_dir = resolve_feedback_dir(config.config_key, override_dir=feedback_dir)
+    # Resolve behavioral config directory
+    from common.behavioral_config import resolve_behavioral_config_dir, load_behavioral_config
+    resolved_behavior_config_dir = resolve_behavioral_config_dir(config.config_key, override_dir=behavior_config_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
     logger.session_start(config={
@@ -30,7 +30,7 @@ def run_smolagents(config: SUPConfig, task: str = None, feedback_dir: str = None
         "calibration": config.calibration,
         "config_key": config.config_key,
         "seed": config.seed,
-        "feedback_dir": str(resolved_feedback_dir),
+        "behavior_config_dir": str(resolved_behavior_config_dir),
     })
 
     from brains.smolagents import SmolAgent, DEFAULT_PROMPTS, PHASE_PROMPTS
@@ -38,12 +38,12 @@ def run_smolagents(config: SUPConfig, task: str = None, feedback_dir: str = None
 
     prompts = PHASE_PROMPTS if config.phase else DEFAULT_PROMPTS
 
-    # Apply prompt augmentation from feedback
-    fc = load_feedback_config(resolved_feedback_dir, config.config_key)
+    # Apply prompt augmentation from behavioral config
+    fc = load_behavioral_config(resolved_behavior_config_dir, config.config_key)
     if fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"):
         from brains.smolagents.prompts import SMOLPrompts
         prompts = SMOLPrompts(task=prompts.task, content=fc.prompt_augmentation["prompt_content"])
-        log(f"[feedback] Applied prompt augmentation for {config.config_key}")
+        log(f"[behavior] Applied prompt augmentation for {config.config_key}")
     if task is None:
         task = get_random_task()
 
@@ -70,13 +70,13 @@ def run_smolagents(config: SUPConfig, task: str = None, feedback_dir: str = None
         logger.session_end()
 
 
-def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True, feedback_dir: str = None):
+def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True, behavior_config_dir: str = None):
     """Run SmolAgents in loop mode (continuous execution)."""
     calibration_profile = config.calibration
 
-    # Resolve feedback directory
-    from common.feedback_config import resolve_feedback_dir, load_feedback_config
-    resolved_feedback_dir = resolve_feedback_dir(config.config_key, override_dir=feedback_dir)
+    # Resolve behavioral config directory
+    from common.behavioral_config import resolve_behavioral_config_dir, load_behavioral_config
+    resolved_behavior_config_dir = resolve_behavioral_config_dir(config.config_key, override_dir=behavior_config_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
     logger.session_start(config={
@@ -86,19 +86,19 @@ def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True, feedba
         "loop_mode": True,
         "config_key": config.config_key,
         "seed": config.seed,
-        "feedback_dir": str(resolved_feedback_dir),
+        "behavior_config_dir": str(resolved_behavior_config_dir),
     })
 
     from brains.smolagents import SmolAgentLoop, DEFAULT_PROMPTS, PHASE_PROMPTS
 
     prompts = PHASE_PROMPTS if config.phase else DEFAULT_PROMPTS
 
-    # Apply prompt augmentation from feedback
-    fc = load_feedback_config(resolved_feedback_dir, config.config_key)
+    # Apply prompt augmentation from behavioral config
+    fc = load_behavioral_config(resolved_behavior_config_dir, config.config_key)
     if fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"):
         from brains.smolagents.prompts import SMOLPrompts
         prompts = SMOLPrompts(task=prompts.task, content=fc.prompt_augmentation["prompt_content"])
-        log(f"[feedback] Applied prompt augmentation for {config.config_key}")
+        log(f"[behavior] Applied prompt augmentation for {config.config_key}")
 
     log(f"Running SmolAgents loop (config: {config.config_key})")
     log(f"Calibration: {calibration_profile or 'none'}")
@@ -116,7 +116,7 @@ def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True, feedba
             # Legacy compat: fall back to use_phase_timing if no calibration
             use_phase_timing=use_phase_timing if not calibration_profile else False,
             seed=config.seed,
-            feedback_dir=str(resolved_feedback_dir),
+            behavior_config_dir=str(resolved_behavior_config_dir),
             config_key=config.config_key,
         )
         agent.run()
@@ -142,8 +142,8 @@ if __name__ == "__main__":
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--no-phase-timing", action="store_true")
-    parser.add_argument("--feedback-dir", type=str, default=None,
-                        help="Override feedback config directory")
+    parser.add_argument("--behavior-config-dir", type=str, default=None,
+                        help="Override behavioral config directory")
     args = parser.parse_args()
 
     calibration = args.calibration
@@ -155,6 +155,6 @@ if __name__ == "__main__":
 
     if args.loop:
         run_smolagents_loop(config, use_phase_timing=not args.no_phase_timing,
-                            feedback_dir=args.feedback_dir)
+                            behavior_config_dir=args.behavior_config_dir)
     else:
-        run_smolagents(config, task=args.task, feedback_dir=args.feedback_dir)
+        run_smolagents(config, task=args.task, behavior_config_dir=args.behavior_config_dir)

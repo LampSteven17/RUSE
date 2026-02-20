@@ -1,0 +1,170 @@
+---
+# Ansible Playbook: distribute-behavior-configs.yaml
+# Distribute PHASE behavioral configs to deployed SUP VMs.
+#
+# Each SUP picks up configs from its behavioral_configurations/ directory
+# automatically at the next cluster boundary — no restart needed.
+#
+# Usage:
+#   # Push behavior configs to all sup-controls SUPs
+#   ansible-playbook -i ../sup-controls/runs/0219/inventory.ini distribute-behavior-configs.yaml \
+#       -e config_source=~/PHASE/feedback_engine/configs/axes-sups-controls_axes-summer24
+#
+#   # Push to a single SUP (by hostname or config key)
+#   ansible-playbook -i ../sup-controls/runs/0219/inventory.ini distribute-behavior-configs.yaml \
+#       -e config_source=~/PHASE/feedback_engine/configs/axes-sups-controls_axes-summer24 \
+#       --limit sup-M1-0
+#
+#   # Clear all behavior configs (revert to uniform random)
+#   ansible-playbook -i ../sup-controls/runs/0219/inventory.ini distribute-behavior-configs.yaml \
+#       -e clear_configs=true
+#
+#   # Dry-run (check mode)
+#   ansible-playbook -i ../sup-controls/runs/0219/inventory.ini distribute-behavior-configs.yaml \
+#       -e config_source=~/PHASE/feedback_engine/configs/axes-sups-controls_axes-summer24 \
+#       --check --diff
+
+- name: Distribute PHASE behavioral configs
+  hosts: sup_hosts
+  become: yes
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30'
+    ruse_path: "/opt/ruse"
+
+    # Required: path to PHASE config output directory (on control node)
+    # e.g. ~/PHASE/feedback_engine/configs/axes-sups-controls_axes-summer24
+    config_source: ""
+
+    # Set to true to remove all behavior configs instead of deploying
+    clear_configs: false
+
+    # Optional: restrict which config files to copy (default: all *.json)
+    # e.g. ['timing_profile.json'] for timing-only deployments
+    # behavior_configs: ['*.json']
+
+  tasks:
+    # ── Skip controls ──────────────────────────────────────────────
+    - name: Skip control configs (C0, M0)
+      meta: end_host
+      when: sup_behavior in ['C0', 'M0']
+
+    # ── Derive behavior directory from config key ──────────────────
+    # M3 → M, B3.gemma → B.gemma, B0C.gemma → B.gemma, S0R.llama → S.llama
+    - name: Derive behavior directory from config key
+      set_fact:
+        behavior_dir: "{{ sup_behavior | regex_replace('^([A-Z])\\d+[A-Z]*(.*)$', '\\1\\2') }}"
+
+    # ── Derive baseline config key ─────────────────────────────────
+    # M2 → M1, B2C.gemma → B0C.gemma, S3.llama → S0.llama
+    - name: Derive baseline version (M=1, B/S=0)
+      set_fact:
+        baseline_version: "{{ '1' if sup_behavior[0] == 'M' else '0' }}"
+
+    - name: Derive baseline config key (e.g. B2C.gemma → B0C.gemma)
+      set_fact:
+        baseline_config: "{{ sup_behavior | regex_replace('^([A-Z])\\d+', '\\1' ~ baseline_version) }}"
+
+    # ── Clear mode ─────────────────────────────────────────────────
+    - name: Clear behavior configs
+      when: clear_configs | bool
+      block:
+        - name: Remove behavioral_configurations directory contents
+          file:
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/"
+            state: absent
+
+        - name: Re-create empty behavioral_configurations directory
+          file:
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/"
+            state: directory
+            mode: '0755'
+
+        - name: Report cleared
+          debug:
+            msg: "Cleared behavior configs for {{ sup_behavior }} on {{ inventory_hostname }}"
+
+    # ── Deploy mode ────────────────────────────────────────────────
+    - name: Deploy behavior configs
+      when: not (clear_configs | bool)
+      block:
+        - name: Validate config_source is set
+          fail:
+            msg: "config_source must be set. Use -e config_source=/path/to/configs"
+          when: config_source == ""
+          run_once: true
+          delegate_to: localhost
+
+        - name: Resolve config-specific source directory
+          set_fact:
+            config_source_dir: "{{ config_source }}/{{ behavior_dir }}/{{ baseline_config }}"
+
+        - name: Check config source directory exists
+          stat:
+            path: "{{ config_source_dir }}"
+          delegate_to: localhost
+          register: source_dir
+
+        - name: Warn if config source not found
+          debug:
+            msg: "WARNING: Config source not found: {{ config_source_dir }} — skipping {{ sup_behavior }}"
+          when: not source_dir.stat.exists
+
+        - name: Deploy configs from source directory
+          when: source_dir.stat.exists
+          block:
+            - name: Ensure behavioral_configurations directory exists
+              file:
+                path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/"
+                state: directory
+                mode: '0755'
+
+            - name: Find behavior config files
+              find:
+                paths: "{{ config_source_dir }}"
+                patterns: "{{ behavior_configs | default(['*.json']) }}"
+                excludes: "recommendations.json"
+              delegate_to: localhost
+              register: behavior_config_files
+
+            - name: Copy behavior configs to SUP
+              copy:
+                src: "{{ item.path }}"
+                dest: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/{{ item.path | basename }}"
+                mode: '0644'
+              loop: "{{ behavior_config_files.files }}"
+              loop_control:
+                label: "{{ item.path | basename }}"
+
+            - name: Report deployment
+              debug:
+                msg: "{{ sup_behavior }} ← {{ behavior_dir }}/{{ baseline_config }}/ ({{ behavior_config_files.files | length }} configs)"
+
+
+- name: Distribution Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display summary
+      pause:
+        seconds: 0
+        prompt: |
+
+          ┌───────────────────────────────────────────────────────────────────┐
+          │  Behavioral config distribution complete.                         │
+          │                                                                   │
+          │  Configs take effect at the next cluster boundary (typically      │
+          │  within a few minutes) — no restart needed.                       │
+          │                                                                   │
+          │  To verify on a VM:                                               │
+          │    ssh sup-M1-0 'ls /opt/ruse/deployed_sups/M1/                  │
+          │      behavioral_configurations/'                                  │
+          │                                                                   │
+          │  To check logs for config loading:                                │
+          │    ssh sup-M1-0 'grep behavior /opt/ruse/deployed_sups/          │
+          │      M1/logs/latest.jsonl'                                        │
+          │                                                                   │
+          │  To revert (remove all configs):                                  │
+          │    ansible-playbook ... distribute-behavior-configs.yaml          │
+          │      -e clear_configs=true                                        │
+          └───────────────────────────────────────────────────────────────────┘

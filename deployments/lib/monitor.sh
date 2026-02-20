@@ -184,8 +184,8 @@ declare -ga VM_ORDER=()
 # Current deployment phase
 MONITOR_PHASE="idle"
 
-# Whether current deployment includes feedback distribution
-SHOW_FEEDBACK=false
+# Whether current deployment includes behavioral config distribution
+SHOW_BEHAVIOR_CONFIGS=false
 TEARDOWN_SSH_CLEANED=false
 
 # File position for incremental reads
@@ -436,12 +436,12 @@ process_new_events() {
                 fi
                 ;;
 
-            install_feedback)
-                # Feedback play started — move completed non-control VMs to feedback state
+            install_behavior_configs)
+                # Behavior configs play started — move completed non-control VMs to behavior_configs state
                 if [[ -n "$host" && -n "${VM_STATUS[$host]+x}" ]]; then
                     case "${VM_BEHAVIOR[$host]}" in
-                        C0|M0) ;; # controls skip feedback
-                        *) [[ "${VM_STATUS[$host]}" == "completed" ]] && VM_STATUS["$host"]="feedback" ;;
+                        C0|M0) ;; # controls skip behavior configs
+                        *) [[ "${VM_STATUS[$host]}" == "completed" ]] && VM_STATUS["$host"]="behavior_configs" ;;
                     esac
                 else
                     local vm
@@ -449,7 +449,7 @@ process_new_events() {
                         case "${VM_BEHAVIOR[$vm]}" in
                             C0|M0) continue ;;
                         esac
-                        [[ "${VM_STATUS[$vm]}" == "completed" ]] && VM_STATUS["$vm"]="feedback"
+                        [[ "${VM_STATUS[$vm]}" == "completed" ]] && VM_STATUS["$vm"]="behavior_configs"
                     done
                 fi
                 ;;
@@ -706,7 +706,7 @@ get_vm_counts() {
             pending)     COUNT_PENDING=$((COUNT_PENDING + 1)) ;;
             creating)    COUNT_CREATING=$((COUNT_CREATING + 1)) ;;
             provisioned) COUNT_PROVISIONED=$((COUNT_PROVISIONED + 1)) ;;
-            installing|preparing|stage1|rebooting|stage2|feedback) COUNT_INSTALLING=$((COUNT_INSTALLING + 1)) ;;
+            installing|preparing|stage1|rebooting|stage2|behavior_configs) COUNT_INSTALLING=$((COUNT_INSTALLING + 1)) ;;
             completed)   COUNT_COMPLETED=$((COUNT_COMPLETED + 1)) ;;
             failed)      COUNT_FAILED=$((COUNT_FAILED + 1)) ;;
         esac
@@ -760,15 +760,15 @@ format_duration() {
 #   Deps  = System deps + GPU/CUDA drivers (INSTALL_SUP.sh --stage=1)
 #   Boot  = NVIDIA driver reload
 #   Agent = Ollama + Python + SUP service (INSTALL_SUP.sh --stage=2)
-#   Fdbk  = PHASE feedback config distribution (feedback deployments only)
+#   Bhvr  = Behavioral config distribution (behavior-configs deployments only)
 #
-# Sets: _S_PROVISION _S_SSH _S_PREP _S_DRIVERS _S_REBOOT _S_AGENT _S_FEEDBACK
+# Sets: _S_PROVISION _S_SSH _S_PREP _S_DRIVERS _S_REBOOT _S_AGENT _S_BHVR
 _derive_steps() {
     local status="$1"
     local behavior="${2:-}"
 
     # Defaults
-    _S_PROVISION="--"; _S_SSH="--"; _S_PREP="--"; _S_DRIVERS="--"; _S_REBOOT="--"; _S_AGENT="--"; _S_FEEDBACK="--"
+    _S_PROVISION="--"; _S_SSH="--"; _S_PREP="--"; _S_DRIVERS="--"; _S_REBOOT="--"; _S_AGENT="--"; _S_BHVR="--"
 
     case "$status" in
         pending)
@@ -794,11 +794,11 @@ _derive_steps() {
         stage2)
             _S_PROVISION="ok"; _S_SSH="ok"; _S_PREP="ok"; _S_DRIVERS="ok"; _S_REBOOT="ok"; _S_AGENT=".."
             ;;
-        feedback)
-            _S_PROVISION="ok"; _S_SSH="ok"; _S_PREP="ok"; _S_DRIVERS="ok"; _S_REBOOT="ok"; _S_AGENT="ok"; _S_FEEDBACK=".."
+        behavior_configs)
+            _S_PROVISION="ok"; _S_SSH="ok"; _S_PREP="ok"; _S_DRIVERS="ok"; _S_REBOOT="ok"; _S_AGENT="ok"; _S_BHVR=".."
             ;;
         completed)
-            _S_PROVISION="ok"; _S_SSH="ok"; _S_PREP="ok"; _S_DRIVERS="ok"; _S_REBOOT="ok"; _S_AGENT="ok"; _S_FEEDBACK="ok"
+            _S_PROVISION="ok"; _S_SSH="ok"; _S_PREP="ok"; _S_DRIVERS="ok"; _S_REBOOT="ok"; _S_AGENT="ok"; _S_BHVR="ok"
             ;;
         failed)
             # Figure out which step failed based on what completed
@@ -827,7 +827,7 @@ _derive_steps() {
 
     # C0 (bare Ubuntu control) has no install steps
     if [[ "$behavior" == "C0" ]]; then
-        _S_PREP="skip"; _S_DRIVERS="skip"; _S_REBOOT="skip"; _S_AGENT="skip"; _S_FEEDBACK="skip"
+        _S_PREP="skip"; _S_DRIVERS="skip"; _S_REBOOT="skip"; _S_AGENT="skip"; _S_BHVR="skip"
     fi
 }
 
@@ -866,7 +866,7 @@ render_status_table() {
                             stage1)              _sw=$((_sw + 2)) ;;
                             rebooting)           _sw=$((_sw + 3)) ;;
                             stage2)              _sw=$((_sw + 4)) ;;
-                            completed|feedback)  _sw=$((_sw + 5)) ;;
+                            completed|behavior_configs)  _sw=$((_sw + 5)) ;;
                         esac ;;
                 esac
             done
@@ -928,10 +928,10 @@ render_status_table() {
     fi
 
     # Header (dim)
-    if [[ "$SHOW_FEEDBACK" == "true" ]]; then
+    if [[ "$SHOW_BEHAVIOR_CONFIGS" == "true" ]]; then
         printf '\033[2m %-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %*s\033[K\033[0m\n' \
             $W_SUP "SUP" $W_IDX "#" $W_HW "HW" \
-            $W_STEP "Prov" $W_STEP "SSH" $W_STEP "Prep" $W_STEP "Deps" $W_STEP "Boot" $W_STEP "Agent" $W_STEP "Fdbk" $W_TIME "Time"
+            $W_STEP "Prov" $W_STEP "SSH" $W_STEP "Prep" $W_STEP "Deps" $W_STEP "Boot" $W_STEP "Agent" $W_STEP "Bhvr" $W_TIME "Time"
     else
         printf '\033[2m %-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %-*s %*s\033[K\033[0m\n' \
             $W_SUP "SUP" $W_IDX "#" $W_HW "HW" \
@@ -966,8 +966,8 @@ render_status_table() {
             for _step in "$_S_PROVISION" "$_S_SSH" "$_S_PREP" "$_S_DRIVERS" "$_S_REBOOT" "$_S_AGENT"; do
                 case "$_step" in ok|skip|"!!") ;; *) _all_done=false; break ;; esac
             done
-            if [[ "$SHOW_FEEDBACK" == "true" && "$_all_done" == "true" ]]; then
-                case "$_S_FEEDBACK" in ok|skip|"!!") ;; *) _all_done=false ;; esac
+            if [[ "$SHOW_BEHAVIOR_CONFIGS" == "true" && "$_all_done" == "true" ]]; then
+                case "$_S_BHVR" in ok|skip|"!!") ;; *) _all_done=false ;; esac
             fi
             # Failed VMs always freeze (remaining "--" steps won't run)
             [[ "$status" == "failed" ]] && _all_done=true
@@ -998,11 +998,11 @@ render_status_table() {
         _step_fmt "$_S_REBOOT" $W_STEP;    local sf_reboot="$_SF"
         _step_fmt "$_S_AGENT" $W_STEP;     local sf_agent="$_SF"
 
-        if [[ "$SHOW_FEEDBACK" == "true" ]]; then
-            _step_fmt "$_S_FEEDBACK" $W_STEP; local sf_feedback="$_SF"
+        if [[ "$SHOW_BEHAVIOR_CONFIGS" == "true" ]]; then
+            _step_fmt "$_S_BHVR" $W_STEP; local sf_bhvr="$_SF"
             printf ' %-*s %-*s %-*s %s %s %s %s %s %s %s %*s\033[K\n' \
                 $W_SUP "$behavior" $W_IDX "$idx" $W_HW "$hw" \
-                "$sf_provision" "$sf_ssh" "$sf_prep" "$sf_drivers" "$sf_reboot" "$sf_agent" "$sf_feedback" \
+                "$sf_provision" "$sf_ssh" "$sf_prep" "$sf_drivers" "$sf_reboot" "$sf_agent" "$sf_bhvr" \
                 $W_TIME "$vm_time"
         else
             printf ' %-*s %-*s %-*s %s %s %s %s %s %s %*s\033[K\n' \
@@ -1285,6 +1285,7 @@ monitoring_loop() {
     local running=true
     while $running; do
         # Recalculate layout each cycle (VM_ORDER may grow from discovery events)
+        term_height=$(tput lines 2>/dev/null) || term_height=50
         vm_count=${#VM_ORDER[@]}
         (( vm_count < 1 )) && vm_count=1
         overhead=$((CONTENT_START_LINE + 13))
@@ -1295,7 +1296,9 @@ monitoring_loop() {
         table_lines=$((displayed_vms + 5))
         log_area_start=$((CONTENT_START_LINE + table_lines + 1))
         log_lines_to_show=$((term_height - log_area_start))
-        (( log_lines_to_show < 5 )) && log_lines_to_show=5
+        # Clamp to 1 (not 5) — forcing 5 log lines when the table fills
+        # the screen causes scroll overflow and header duplication
+        (( log_lines_to_show < 1 )) && log_lines_to_show=1
         # Defensive: restore terminal output processing in case a backgrounded
         # process (ansible pause module) cleared OPOST/ONLCR via setraw().
         stty opost onlcr 2>/dev/null || true
