@@ -162,7 +162,7 @@
     # Derive behavior directory from config key: M3 → M, B3.gemma → B.gemma, B0C.gemma → B.gemma
     - name: Derive behavior directory from config key
       set_fact:
-        behavior_dir: "{{ sup_behavior | regex_replace('^([A-Z])\\d+[A-Z]*(.*)$', '\\1\\2') }}"
+        behavior_dir: "{{ sup_behavior | regex_replace('^([A-Z])\\d+[A-Z]*(.*)$', '\\g<1>\\g<2>') }}"
 
     # Derive baseline config key: M2 → M1, B2C.gemma → B0C.gemma, S3.llama → S0.llama
     - name: Derive baseline version (M=1, B/S=0)
@@ -171,7 +171,7 @@
 
     - name: Derive baseline config key (e.g. B2C.gemma → B0C.gemma)
       set_fact:
-        baseline_config: "{{ sup_behavior | regex_replace('^([A-Z])\\d+', '\\1' ~ baseline_version) }}"
+        baseline_config: "{{ sup_behavior | regex_replace('^([A-Z])\\d+', '\\g<1>VVVV') | replace('VVVV', baseline_version) }}"
 
     # Resolve the source directory path (expand ~ on control node)
     - name: Resolve behavior source
