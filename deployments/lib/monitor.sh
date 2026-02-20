@@ -1302,9 +1302,12 @@ monitoring_loop() {
         (( displayed_vms > max_vm_rows )) && displayed_vms=$((max_vm_rows))
         table_lines=$((displayed_vms + 5))
         log_area_start=$((CONTENT_START_LINE + table_lines + 1))
-        log_lines_to_show=$((term_height - log_area_start))
-        # Clamp to 1 (not 5) — forcing 5 log lines when the table fills
-        # the screen causes scroll overflow and header duplication
+        # Reserve 1 line at bottom: each log line ends with \n, so the
+        # cursor after the last line must land ON the last terminal row,
+        # not past it. Without -1, the final \n scrolls the viewport by
+        # 1 line per render cycle, drifting CONTENT_START_LINE into scrollback
+        # and duplicating the table header.
+        log_lines_to_show=$((term_height - log_area_start - 1))
         (( log_lines_to_show < 1 )) && log_lines_to_show=1
         # Defensive: restore terminal output processing in case a backgrounded
         # process (ansible pause module) cleared OPOST/ONLCR via setraw().
