@@ -4,16 +4,12 @@ SmolAgentLoop - Continuous execution for SmolAgents.
 Runs SmolAgents-native workflows (browse_web, web_search, browse_youtube)
 in clusters with configurable timing.
 """
-import signal
-import random
-import sys
-from datetime import datetime
-from time import sleep
 from typing import Optional, TYPE_CHECKING
+
+from common.emulation_loop import BaseEmulationLoop
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
-    from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
 
 # Default timing parameters (matching MCHP defaults)
 DEFAULT_CLUSTER_SIZE = 5
@@ -21,7 +17,7 @@ DEFAULT_TASK_INTERVAL = 10
 DEFAULT_GROUP_INTERVAL = 500
 
 
-class SmolAgentLoop:
+class SmolAgentLoop(BaseEmulationLoop):
     """
     SmolAgents agent with continuous execution.
 
@@ -42,130 +38,27 @@ class SmolAgentLoop:
         behavior_config_dir: Optional[str] = None,
         config_key: Optional[str] = None,
     ):
-        self.seed = seed
         self.model = model
         self.prompts = prompts
-        self.cluster_size = cluster_size
-        self.task_interval = task_interval
-        self.group_interval = group_interval
-        self.logger = logger
-        self.calibration_profile = calibration_profile
-        self.use_phase_timing = use_phase_timing or (calibration_profile is not None)
 
-        self.workflows = []
-        self._running = False
-        self._phase_timing = None
-        self._tasks_completed = 0
-        self._behavior_config_dir = behavior_config_dir
-        self._config_key = config_key
-        self._workflow_weights = None
-
-        if self.calibration_profile:
-            self._init_calibrated_timing()
-        elif self.use_phase_timing:
-            self._init_phase_timing()
-
-    def _init_calibrated_timing(self):
-        from common.timing.phase_timing import CalibratedTiming, load_calibration_profile
-        config = load_calibration_profile(self.calibration_profile)
-        self._phase_timing = CalibratedTiming(config)
-
-    def _init_phase_timing(self):
-        from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
-        config = PhaseTimingConfig(
-            min_cluster_size=3, max_cluster_size=8,
-            min_task_delay=5.0, max_task_delay=30.0,
-            min_cluster_delay=120.0, max_cluster_delay=600.0,
-            enable_hourly_adjustment=True,
-        )
-        self._phase_timing = PhaseTiming(config)
-
-    def _get_cluster_size(self) -> int:
-        """Get cluster size based on timing mode."""
-        if self.use_phase_timing and self._phase_timing:
-            return self._phase_timing.get_cluster_size()
-        return random.randint(1, self.cluster_size)
-
-    def _get_task_delay(self) -> float:
-        """Get inter-task delay based on timing mode."""
-        if self.use_phase_timing and self._phase_timing:
-            return self._phase_timing.get_task_delay()
-        return random.randrange(self.task_interval)
-
-    def _get_cluster_delay(self) -> float:
-        """Get inter-cluster delay based on timing mode."""
-        if self.use_phase_timing and self._phase_timing:
-            if self._phase_timing.should_take_break(self._tasks_completed):
-                self._tasks_completed = 0
-                return self._phase_timing.get_break_duration()
-            return self._phase_timing.get_cluster_delay()
-        return random.randrange(self.group_interval)
-
-    def _reload_behavioral_config(self):
-        """Reload behavioral config from disk (hot-swap support)."""
-        if not self._behavior_config_dir or not self._config_key:
-            self._workflow_weights = None
-            return
-
-        from pathlib import Path
-        from common.behavioral_config import (
-            load_behavioral_config, build_workflow_weights, build_task_weights,
-            build_calibrated_timing_config,
+        super().__init__(
+            cluster_size=cluster_size,
+            task_interval=task_interval,
+            group_interval=group_interval,
+            logger=logger,
+            calibration_profile=calibration_profile,
+            use_phase_timing=use_phase_timing,
+            seed=seed,
+            behavior_config_dir=behavior_config_dir,
+            config_key=config_key,
         )
 
-        fc = load_behavioral_config(Path(self._behavior_config_dir), self._config_key)
+    # ── Brain-specific implementations ───────────────────────────────
 
-        if fc.is_empty():
-            self._workflow_weights = None
-            return
+    def _agent_type_label(self) -> str:
+        return "smolagents_loop"
 
-        # Workflow weights
-        self._workflow_weights = build_workflow_weights(self.workflows, fc)
-        if self._workflow_weights and self.logger:
-            self.logger.info(f"[behavior] Loaded workflow_weights for {self._config_key}",
-                             details={"weights": fc.workflow_weights})
-
-        # Site config — apply task weights to BrowseWeb workflow
-        if fc.site_config:
-            for w in self.workflows:
-                if getattr(w, 'name', '') == 'BrowseWeb':
-                    from brains.smolagents.workflows.browse_web import BROWSE_WEB_TASKS
-                    task_weights = build_task_weights(BROWSE_WEB_TASKS, fc.site_config)
-                    w.task_weights = task_weights
-                    if task_weights and self.logger:
-                        self.logger.info("[behavior] Applied task_weights to BrowseWeb")
-                    break
-
-        # Behavior modifiers — max_steps per workflow
-        if fc.behavior_modifiers:
-            max_steps_global = fc.behavior_modifiers.get("max_steps")
-            per_workflow = fc.behavior_modifiers.get("per_workflow", {})
-            for w in self.workflows:
-                wname = getattr(w, 'name', '') or w.__class__.__name__
-                new_max = per_workflow.get(wname, max_steps_global)
-                if new_max is not None and hasattr(w, 'max_steps'):
-                    old_max = w.max_steps
-                    w.max_steps = int(new_max)
-                    if old_max != w.max_steps:
-                        w._agent = None  # Force re-creation with new max_steps
-            if self.logger:
-                self.logger.info("[behavior] Applied behavior_modifiers",
-                                 details=fc.behavior_modifiers)
-
-        # Timing profile — hot-swap calibrated timing
-        if fc.timing_profile:
-            from common.timing.phase_timing import CalibratedTiming
-            old_last_activity = (self._phase_timing._last_activity_time
-                                 if self._phase_timing else None)
-            config = build_calibrated_timing_config(fc.timing_profile)
-            self._phase_timing = CalibratedTiming(config)
-            self._phase_timing._last_activity_time = old_last_activity
-            self.use_phase_timing = True
-            if self.logger:
-                self.logger.info("[behavior] Hot-swapped timing_profile",
-                                 details={"dataset": config.dataset})
-
-    def _load_workflows(self):
+    def _load_workflows(self) -> list:
         """Load all workflows for the loop."""
         from brains.smolagents.workflows.loader import load_workflows
 
@@ -193,183 +86,51 @@ class SmolAgentLoop:
 
         return workflows
 
-    def _emulation_loop(self):
-        """Main emulation loop - runs workflows in clusters."""
-        while self._running:
-            # Hot-reload behavioral config at each cluster boundary
-            self._reload_behavioral_config()
-
-            # Log activity level if using PHASE timing
-            if self.use_phase_timing and self._phase_timing:
-                activity_level = self._phase_timing.get_activity_level()
-                current_hour = datetime.now().hour
-                print(f"[{datetime.now().strftime('%H:%M')}] Activity level: {activity_level}")
-                if self.logger:
-                    self.logger.info(f"Activity level: {activity_level}", details={
-                        "hour": current_hour,
-                        "level": activity_level
-                    })
-
-            cluster_size = self._get_cluster_size()
-
-            # Log cluster size decision
-            if self.logger:
-                self.logger.decision(
-                    choice="cluster_size",
-                    selected=str(cluster_size),
-                    context=f"Tasks to run in this cluster",
-                    method="phase" if self.use_phase_timing else "random"
-                )
-
-            for _ in range(cluster_size):
-                # Inter-task delay
-                task_delay = self._get_task_delay()
-                if self.logger:
-                    self.logger.timing_delay(task_delay, reason="inter_task")
-                sleep(task_delay)
-
-                # Select and run workflow
-                if self._workflow_weights:
-                    workflow = random.choices(self.workflows, weights=self._workflow_weights, k=1)[0]
-                else:
-                    index = random.randrange(len(self.workflows))
-                    workflow = self.workflows[index]
-                workflow_name = workflow.description
-
-                # Log workflow selection decision
-                if self.logger:
-                    workflow_options = [w.name for w in self.workflows]
-                    self.logger.decision(
-                        choice="workflow_selection",
-                        options=workflow_options,
-                        selected=workflow.name,
-                        context=workflow_name,
-                        method="behavior_weighted" if self._workflow_weights else "random"
-                    )
-
-                print(workflow.display)
-
-                if self.logger:
-                    self.logger.workflow_start(workflow_name, params={
-                        "agent_type": "smolagents_loop",
-                        "workflow_class": workflow.__class__.__name__,
-                        "category": getattr(workflow, 'category', 'Unknown'),
-                        "phase_timing": self.use_phase_timing
-                    })
-
-                try:
-                    action_result = workflow.action(logger=self.logger)
-                    if isinstance(action_result, tuple):
-                        result, success = action_result
-                    else:
-                        result, success = action_result, True
-                    self._tasks_completed += 1
-                    if self._phase_timing:
-                        self._phase_timing.record_activity()
-                    if self.logger:
-                        self.logger.workflow_end(workflow_name, success=success)
-                except Exception as e:
-                    print(f"Workflow error: {e}")
-                    if self.logger:
-                        self.logger.workflow_end(workflow_name, success=False, error=str(e))
-                        self.logger.error(f"Workflow '{workflow_name}' failed", exception=e)
-                    # Don't re-raise - continue with next workflow
-
-            # Inter-cluster delay
-            group_delay = self._get_cluster_delay()
-            if self.logger:
-                self.logger.timing_delay(group_delay, reason="inter_cluster")
-            sleep(group_delay)
-
-    def _signal_handler(self, sig, frame):
-        """Handle shutdown signals gracefully."""
-        self.stop()
-        sys.exit(0)
-
-    def run(self):
-        """Start the SmolAgentLoop emulation."""
-        if self.seed != 0:
-            random.seed(self.seed)
-        else:
-            random.seed()
-        self.workflows = self._load_workflows()
-        self._reload_behavioral_config()
-
-        if not self.workflows:
-            print("Error: No workflows loaded!")
-            if self.logger:
-                self.logger.error("No workflows loaded", fatal=True)
-            return
-
-        self._running = True
-
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-
-        print(f"\nStarting SmolAgentLoop with {len(self.workflows)} workflows")
-        print(f"PHASE timing: {self.use_phase_timing}")
-        if not self.use_phase_timing:
-            print(f"Timing: cluster_size={self.cluster_size}, task_interval={self.task_interval}, group_interval={self.group_interval}")
-        print("-" * 60)
-
-        if self.logger:
-            self.logger.info("SmolAgentLoop started", details={
-                "workflow_count": len(self.workflows),
-                "phase_timing": self.use_phase_timing
-            })
-
+    def _execute_workflow(self, workflow) -> bool:
+        """Execute a single SmolAgents workflow."""
         try:
-            self._emulation_loop()
-        except KeyboardInterrupt:
-            self.stop()
-            sys.exit(0)
+            action_result = workflow.action(logger=self.logger)
+            if isinstance(action_result, tuple):
+                result, success = action_result
+            else:
+                result, success = action_result, True
+            if self.logger:
+                self.logger.workflow_end(workflow.description, success=success)
+            return success
+        except Exception as e:
+            print(f"Workflow error: {e}")
+            if self.logger:
+                self.logger.workflow_end(workflow.description, success=False, error=str(e))
+                self.logger.error(f"Workflow '{workflow.description}' failed", exception=e)
+            return False
 
-    def stop(self):
-        """Stop the emulation and cleanup workflows."""
-        if not self._running:
-            return
-        self._running = False
-        print("\nTerminating SmolAgentLoop...")
-        if self.logger:
-            self.logger.info("SmolAgentLoop terminating")
-        for workflow in self.workflows:
-            try:
-                workflow.cleanup()
-            except Exception:
-                pass
+    def _apply_brain_specific_config(self, fc) -> None:
+        """Apply SmolAgents-specific behavioral config: task_weights, max_steps."""
+        from common.behavioral_config import build_task_weights
 
+        # Site config — apply task weights to BrowseWeb workflow
+        if fc.site_config:
+            for w in self.workflows:
+                if getattr(w, 'name', '') == 'BrowseWeb':
+                    from brains.smolagents.workflows.browse_web import BROWSE_WEB_TASKS
+                    task_weights = build_task_weights(BROWSE_WEB_TASKS, fc.site_config)
+                    w.task_weights = task_weights
+                    if task_weights and self.logger:
+                        self.logger.info("[behavior] Applied task_weights to BrowseWeb")
+                    break
 
-def run(
-    model: str = None,
-    prompts=None,
-    cluster_size: int = DEFAULT_CLUSTER_SIZE,
-    task_interval: int = DEFAULT_TASK_INTERVAL,
-    group_interval: int = DEFAULT_GROUP_INTERVAL,
-):
-    """Convenience function to run SmolAgentLoop."""
-    agent = SmolAgentLoop(
-        model=model,
-        prompts=prompts,
-        cluster_size=cluster_size,
-        task_interval=task_interval,
-        group_interval=group_interval,
-    )
-    agent.run()
-
-
-if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='SmolAgents Loop Agent')
-    parser.add_argument('--model', choices=['llama', 'gemma', 'deepseek'], default='llama')
-    parser.add_argument('--clustersize', type=int, default=DEFAULT_CLUSTER_SIZE)
-    parser.add_argument('--taskinterval', type=int, default=DEFAULT_TASK_INTERVAL)
-    parser.add_argument('--taskgroupinterval', type=int, default=DEFAULT_GROUP_INTERVAL)
-    args = parser.parse_args()
-
-    run(
-        model=args.model,
-        cluster_size=args.clustersize,
-        task_interval=args.taskinterval,
-        group_interval=args.taskgroupinterval,
-    )
+        # Behavior modifiers — max_steps per workflow (force agent re-creation on change)
+        if fc.behavior_modifiers:
+            max_steps_global = fc.behavior_modifiers.get("max_steps")
+            per_workflow = fc.behavior_modifiers.get("per_workflow", {})
+            for w in self.workflows:
+                wname = getattr(w, 'name', '') or w.__class__.__name__
+                new_max = per_workflow.get(wname, max_steps_global)
+                if new_max is not None and hasattr(w, 'max_steps'):
+                    old_max = w.max_steps
+                    w.max_steps = int(new_max)
+                    if old_max != w.max_steps:
+                        w._agent = None  # Force re-creation with new max_steps
+            if self.logger:
+                self.logger.info("[behavior] Applied behavior_modifiers",
+                                 details=fc.behavior_modifiers)

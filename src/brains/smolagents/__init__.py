@@ -3,7 +3,7 @@ SmolAgents Brain - HuggingFace smolagents-based research agent.
 
 Configurations:
 - S1.llama: DEFAULT_PROMPTS + llama3.1:8b (single task mode)
-- S2.gemma: DEFAULT_PROMPTS + gemma3:4b (single task mode)
+- S2.gemma: DEFAULT_PROMPTS + gemma3:1b (single task mode)
 - S3.deepseek: DEFAULT_PROMPTS + deepseek-r1:8b (single task mode)
 - S?.model+: POST-PHASE with PHASE-improved prompts
 

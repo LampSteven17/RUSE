@@ -364,9 +364,12 @@ class CalibratedTiming:
     _PERCENTILE_POINTS = [0.05, 0.25, 0.50, 0.75, 0.95]
     _PERCENTILE_KEYS = ["5", "25", "50", "75", "95"]
 
-    def __init__(self, config: CalibratedTimingConfig):
+    def __init__(self, config: CalibratedTimingConfig, variance_config: dict = None,
+                 activity_config: dict = None):
         self.config = config
         self._last_activity_time: Optional[float] = None
+        self._variance_config = variance_config or {}
+        self._activity_config = activity_config or {}
 
         # Normalize hourly fractions so peak hour = 1.0
         max_fraction = max(config.hourly_fractions)
@@ -402,7 +405,12 @@ class CalibratedTiming:
         """Sample connections_per_burst from the profile."""
         raw = self._sample_percentile(self.config.connections_per_burst)
         scaled = raw * self._get_hourly_scale()
-        return max(1, min(int(scaled), 50))
+        # Variance injection: lognormal noise to increase volume_std
+        vol_var = self._variance_config.get("volume_variance", {})
+        cv = vol_var.get("cluster_size_cv", 0)
+        if cv > 0:
+            scaled *= random.lognormvariate(0, cv)
+        return max(1, min(int(scaled), 200))
 
     def get_task_delay(self) -> float:
         """Intra-burst pacing derived from burst_duration / connections_per_burst."""
@@ -417,6 +425,11 @@ class CalibratedTiming:
         hourly_scale = self._get_hourly_scale()
         scale_factor = 1.0 / hourly_scale if hourly_scale > 0.05 else 20.0
         gap_seconds = gap_minutes * 60.0 * scale_factor
+        # Variance injection: lognormal noise to idle gaps
+        vol_var = self._variance_config.get("volume_variance", {})
+        cv = vol_var.get("idle_gap_cv", 0)
+        if cv > 0:
+            gap_seconds *= random.lognormvariate(0, cv)
         return max(30.0, min(gap_seconds, 3600.0))
 
     def should_take_break(self, tasks_completed: int) -> bool:
@@ -446,6 +459,40 @@ class CalibratedTiming:
             return "high"
         else:
             return "peak"
+
+    def should_skip_hour(self) -> bool:
+        """Check if current hour should be idle based on activity pattern."""
+        if not self._activity_config:
+            return False
+        probs = self._activity_config.get("daily_shape", {}).get(
+            "per_hour_activity_probability", [])
+        if not probs:
+            return False
+        hour = datetime.now().hour
+        if hour < len(probs):
+            return random.random() > probs[hour] * 24  # Normalize: 1/24 = baseline
+        return False
+
+    def should_take_long_idle(self) -> tuple:
+        """Check if a long idle period should be injected.
+        Returns (should_idle, duration_seconds)."""
+        if not self._activity_config:
+            return False, 0
+        idle_cfg = self._activity_config.get("idle_behavior", {})
+        prob = idle_cfg.get("long_idle_probability", 0)
+        if prob > 0 and random.random() < prob:
+            dur_cfg = idle_cfg.get("long_idle_duration_minutes", {"min": 30, "max": 120})
+            duration = random.uniform(dur_cfg["min"], dur_cfg["max"]) * 60
+            return True, duration
+        return False, 0
+
+    def update_variance_config(self, variance_config: dict):
+        """Hot-update variance injection config."""
+        self._variance_config = variance_config or {}
+
+    def update_activity_config(self, activity_config: dict):
+        """Hot-update activity pattern config."""
+        self._activity_config = activity_config or {}
 
     def record_activity(self) -> None:
         self._last_activity_time = time.time()
