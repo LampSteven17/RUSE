@@ -12,7 +12,7 @@ from ..openstack import OpenStack
 
 
 def run_list(deploy_dir: Path) -> int:
-    """Display all active deployments."""
+    """Display all active deployments grouped by type."""
     output.info("")
     output.banner("ACTIVE DEPLOYMENTS")
     output.info("")
@@ -20,7 +20,13 @@ def run_list(deploy_dir: Path) -> int:
     output.dim("  Querying OpenStack...")
     os_client = OpenStack()
 
-    rows = []
+    # Collect rows grouped by deployment type
+    groups: dict[str, list[list[str]]] = {
+        "ruse": [],
+        "rampart": [],
+        "ghosts": [],
+        "other": [],
+    }
 
     for config_dir in sorted(deploy_dir.iterdir()):
         config_file = config_dir / "config.yaml"
@@ -37,6 +43,15 @@ def run_list(deploy_dir: Path) -> int:
         except Exception:
             continue
 
+        if config.is_rampart():
+            group = "rampart"
+        elif config.is_ghosts():
+            group = "ghosts"
+        elif config.deployment_type == "sup":
+            group = "ruse"
+        else:
+            group = "other"
+
         for run_dir in sorted(runs_dir.iterdir()):
             if not run_dir.is_dir():
                 continue
@@ -52,15 +67,29 @@ def run_list(deploy_dir: Path) -> int:
             date_col = _format_run_date(rid)
             target = f"{name}-{rid}"
 
-            rows.append([target, vm_summary, date_col])
+            groups[group].append([target, vm_summary, date_col])
 
-    if not rows:
+    total = sum(len(rows) for rows in groups.values())
+    if total == 0:
         output.dim("  No active deployments.")
         output.info("")
         return 0
 
-    output.table(["Target", "VMs", "Date"], rows)
-    output.info("")
+    GROUP_LABELS = {
+        "ruse": "RUSE SUPs",
+        "rampart": "RAMPART Enterprise",
+        "ghosts": "GHOSTS NPCs",
+        "other": "Other",
+    }
+
+    for key in ("ruse", "rampart", "ghosts", "other"):
+        rows = groups[key]
+        if not rows:
+            continue
+        output.header(GROUP_LABELS[key])
+        output.table(["Target", "VMs", "Date"], rows)
+        output.info("")
+
     return 0
 
 
