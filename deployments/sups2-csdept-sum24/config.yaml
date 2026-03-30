@@ -5,7 +5,7 @@
 # Total VMs: 11 (4 V100, 5 CPU, 2 RTX)
 
 deployment_name: sups2-csdept-sum24
-behavior_source: ~/PHASE/feedback_engine/configs/axes-sups-controls_axes-summer24
+behavior_source: ~/PHASE/feedback_engine/configs/axes-sup-controls_axes-summer24_std-ctrls
 behavior_configs:
   - timing_profile.json
 

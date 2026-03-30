@@ -1,0 +1,104 @@
+---
+# Ansible Playbook: install-ghosts-api.yaml
+# Install GHOSTS API stack (Docker containers) on the API VM.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini install-ghosts-api.yaml \
+#       -e ghosts_repo=https://github.com/cmu-sei/GHOSTS.git -e ghosts_branch=master
+
+- name: Install GHOSTS API
+  hosts: ghosts_api
+  become: yes
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30 -o IdentitiesOnly=yes'
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    ansible_ssh_retries: 5
+    ghosts_repo: "https://github.com/cmu-sei/GHOSTS.git"
+    ghosts_branch: "master"
+    ghosts_path: "/opt/ghosts"
+
+  tasks:
+    - name: Wait for SSH
+      wait_for_connection:
+        delay: 5
+        timeout: 300
+      retries: 3
+      delay: 10
+
+    - name: Wait for cloud-init
+      command: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install prerequisites
+      apt:
+        name: [git, curl, wget, ca-certificates, gnupg, lsb-release]
+        state: present
+
+    - name: Install Docker and Docker Compose
+      shell: |
+        # Skip if already installed
+        if command -v docker &>/dev/null; then
+          echo "Docker already installed"
+          exit 0
+        fi
+        # Add Docker GPG key
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+        # Add Docker repo
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+          https://download.docker.com/linux/ubuntu \
+          $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" \
+          > /etc/apt/sources.list.d/docker.list
+        apt-get update
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      args:
+        executable: /bin/bash
+      async: 600
+      poll: 15
+
+    - name: Clone GHOSTS repository
+      git:
+        repo: "{{ ghosts_repo }}"
+        dest: "{{ ghosts_path }}"
+        version: "{{ ghosts_branch }}"
+        force: yes
+
+    - name: Patch frontend Dockerfile (fix Angular peer dep conflict)
+      shell: |
+        sed -i 's/RUN npm ci\r\?$/RUN npm ci --legacy-peer-deps/' {{ ghosts_path }}/src/Ghosts.Frontend/Dockerfile
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Start GHOSTS API stack
+      shell: |
+        cd {{ ghosts_path }}/src/Ghosts.Api
+        docker compose up -d --build
+      args:
+        executable: /bin/bash
+      async: 900
+      poll: 15
+      register: compose_result
+
+    - name: Wait for GHOSTS API health
+      uri:
+        url: "http://localhost:5000/api/home"
+        method: GET
+        status_code: [200, 302]
+      register: api_health
+      until: api_health.status is defined and api_health.status in [200, 302]
+      retries: 30
+      delay: 10
+      ignore_errors: yes
+
+    - name: Report API status
+      debug:
+        msg: >-
+          GHOSTS API is {{ 'UP' if (api_health.status is defined and api_health.status in [200, 302]) else 'NOT RESPONDING (may still be starting)' }}

@@ -1,42 +1,31 @@
 ---
-# Ansible Playbook: install-sups.yaml (Shared)
-# Step 2: Install SUP behaviors on provisioned VMs
+# Ansible Playbook: install-sups.yaml
+# Install SUP agents on provisioned VMs (stage 1 → reboot → stage 2).
+# Display/summary is handled by the Python CLI.
 #
-# Architecture:
-#   Ansible → SSH (ProxyJump) → axes → SSH → VMs
-#
-# Prerequisites:
-#   - Run provision-vms.yaml first to create VMs and inventory.ini
-#   - inventory.ini contains ProxyJump config for reaching VMs through axes
+# Prerequisites: provision-vms.yaml must have run first (inventory.ini exists).
 #
 # Usage:
-#   ansible-playbook -i ../exp-1/inventory.ini install-sups.yaml -e deployment_dir=../exp-1
+#   ansible-playbook -i runs/032226/inventory.ini install-sups.yaml \
+#       -e deployment_dir=../ruse-controls
 
 - name: Install SUPs
   hosts: sup_hosts
   become: yes
-  # Process 10 hosts at a time to avoid apt lock contention
-  # (especially for CPU-only VMs that all install playwright deps simultaneously)
   serial: 10
-  # Within each batch, let hosts progress independently through tasks
   strategy: free
-  # SSH keepalive to prevent timeout during long-running tasks (CUDA install, model downloads)
-  # SSH retries for initial connection failures (VMs may not be ready immediately)
   vars:
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -o ConnectTimeout=30'
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=60 -o ConnectTimeout=30 -o IdentitiesOnly=yes'
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
     ansible_ssh_retries: 5
-
-    # Default paths (can be overridden via -e)
     deployment_dir: "{{ playbook_dir }}"
     config_file: "{{ deployment_dir }}/config.yaml"
-
-    # Git repo for RUSE
     ruse_repo: "https://github.com/LampSteven17/RUSE.git"
     ruse_branch: "main"
     ruse_path: "/opt/ruse"
 
   pre_tasks:
-    - name: Wait for SSH to become available
+    - name: Wait for SSH
       wait_for_connection:
         delay: 5
         timeout: 300
@@ -50,11 +39,12 @@
       run_once: true
 
   tasks:
-    - name: Display target configuration
-      debug:
-        msg: "Installing {{ sup_behavior }} on {{ inventory_hostname }} ({{ ansible_host }})"
+    # C0 is bare Ubuntu — skip everything, just verify SSH works
+    - name: Skip C0 (bare control VM)
+      meta: end_host
+      when: sup_behavior == 'C0'
 
-    - name: Wait for cloud-init to complete
+    - name: Wait for cloud-init
       command: cloud-init status --wait
       changed_when: false
       timeout: 300
@@ -66,10 +56,7 @@
 
     - name: Install prerequisites
       apt:
-        name:
-          - git
-          - curl
-          - wget
+        name: [git, curl, wget]
         state: present
 
     - name: Clone RUSE repo
@@ -84,7 +71,7 @@
         path: "{{ ruse_path }}/INSTALL_SUP.sh"
         mode: '0755'
 
-    - name: Run INSTALL_SUP.sh Stage 1 (system deps, drivers)
+    - name: "Stage 1: system deps + drivers"
       shell: |
         cd {{ ruse_path }}
         ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=1
@@ -95,18 +82,13 @@
       register: stage1_result
       failed_when: stage1_result.rc not in [0, 100]
 
-    - name: Reboot if NVIDIA drivers were installed (exit code 100)
+    - name: Reboot for NVIDIA drivers (exit code 100)
       reboot:
         reboot_timeout: 600
-        msg: "Rebooting for NVIDIA driver to load"
+        msg: "Rebooting for NVIDIA driver"
       when: stage1_result.rc == 100
 
-    - name: Track Stage 1 outcome
-      set_fact:
-        install_stage1: "OK"
-        install_reboot: "{{ 'YES' if stage1_result.rc == 100 else 'skip' }}"
-
-    - name: Run INSTALL_SUP.sh Stage 2 (ollama, python, services)
+    - name: "Stage 2: ollama + python + services"
       shell: |
         cd {{ ruse_path }}
         ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
@@ -116,91 +98,7 @@
       poll: 30
       register: stage2_result
 
-    - name: Track Stage 2 outcome
-      set_fact:
-        install_stage2: "OK"
-
-    - name: Display install result
-      debug:
-        msg: "SUP {{ sup_behavior }} installed successfully on {{ inventory_hostname }}"
-      when: stage2_result.rc == 0
-
     - name: Check SUP service status
       shell: systemctl is-active $(systemctl list-units --type=service | grep -E '(mchp|smol|bu)' | awk '{print $1}' | head -1) || true
       register: service_status
       changed_when: false
-
-    - name: Track service status
-      set_fact:
-        install_service: "{{ service_status.stdout | default('none') | trim }}"
-
-- name: Deployment Summary
-  hosts: localhost
-  gather_facts: false
-  vars:
-    deployment_dir: "{{ playbook_dir }}"
-    _output_dir: "{{ run_dir | default(deployment_dir) }}"
-  tasks:
-    - name: Display deployment matrix
-      vars:
-        matrix_hosts: "{{ groups['sup_hosts'] | sort }}"
-      pause:
-        seconds: 0
-        prompt: |
-
-          ═══════════════════════════════════════════════════════════════════════════════
-            DEPLOYMENT MATRIX  ({{ matrix_hosts | length }} hosts)
-          ═══════════════════════════════════════════════════════════════════════════════
-            {{ "%-24s %-14s %-8s %-8s %-8s %s" | format("HOST", "CONFIG", "STAGE1", "REBOOT", "STAGE2", "SERVICE") }}
-            {{ "─" * 74 }}
-          {% for host in matrix_hosts %}
-          {% set hv = hostvars[host] %}
-          {% set config = hv.sup_behavior | default('?') %}
-          {% set is_ctl = config in ['C0', 'M0'] %}
-          {% set s1 = hv.install_stage1 | default('FAIL') %}
-          {% set rb = hv.install_reboot | default('--') %}
-          {% set s2 = hv.install_stage2 | default('FAIL') %}
-          {% set svc = 'n/a' if is_ctl else (hv.install_service | default('FAIL')) %}
-            {{ "%-24s %-14s %-8s %-8s %-8s %s" | format(host, config, s1, rb, s2, svc) }}
-          {% endfor %}
-            {{ "─" * 74 }}
-          {% set ns = namespace(ok=0, fail=0) %}
-          {% for host in matrix_hosts %}
-          {% if hostvars[host].install_stage2 | default('') == 'OK' %}
-          {% set ns.ok = ns.ok + 1 %}
-          {% else %}
-          {% set ns.fail = ns.fail + 1 %}
-          {% endif %}
-          {% endfor %}
-            RESULT: {{ ns.ok }} installed / {{ ns.fail }} failed
-          ═══════════════════════════════════════════════════════════════════════════════
-
-          STAGE1  = System deps + GPU drivers (INSTALL_SUP.sh --stage=1)
-          REBOOT  = NVIDIA driver reload (YES = rebooted, skip = not needed)
-          STAGE2  = Ollama + Python + services (INSTALL_SUP.sh --stage=2)
-          SERVICE = systemd service status after install
-
-    - name: Check for SSH config file
-      stat:
-        path: "{{ _output_dir }}/ssh_config_snippet.txt"
-      register: ssh_config_file
-
-    - name: Read SSH config
-      command: cat "{{ _output_dir }}/ssh_config_snippet.txt"
-      register: ssh_config_content
-      when: ssh_config_file.stat.exists
-      changed_when: false
-
-    - name: Display SSH Config
-      pause:
-        seconds: 0
-        prompt: |
-
-          ═══════════════════════════════════════════════════════════════
-            SSH CONFIG - Copy and paste into ~/.ssh/config
-          ═══════════════════════════════════════════════════════════════
-          {{ ssh_config_content.stdout }}
-          ═══════════════════════════════════════════════════════════════
-            Saved to: {{ _output_dir }}/ssh_config_snippet.txt
-          ═══════════════════════════════════════════════════════════════
-      when: ssh_config_file.stat.exists

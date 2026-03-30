@@ -1,0 +1,144 @@
+# --- RUSE rampart-feedback-stdctrls-sum24-all run 032826111502 ---
+
+Host e-fac99-dc1
+    HostName 10.246.117.13
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: 1JF9Ll3igZirVmoWESFN
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-dc2
+    HostName 10.246.116.10
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: bZv2bF2oH2mDvDRSbwFG
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-dc3
+    HostName 10.246.118.161
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: NIdTUvnGR5qFVMOYSX9l
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep1
+    HostName 10.246.117.162
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: v9411604h7xanPSJmDE4
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep2
+    HostName 10.246.116.16
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: uy9xrvjnymtpWxK5jxkT
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep3
+    HostName 10.246.115.214
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: OCPlSysjaAQq9hdUec9t
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep4
+    HostName 10.246.118.182
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: N9w98Ud5u3WKcBCktiiF
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep5
+    HostName 10.246.119.94
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: vassLmeBC4Qe8rw4X3fF
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep6
+    HostName 10.246.118.198
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: 2YYJCO7iyYdSba669CVI
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep7
+    HostName 10.246.119.45
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: iOXcajBZR1WuABcXPX8p
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep8
+    HostName 10.246.119.61
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: S9bJ9LVP8w4BjfGAG1y2
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep9
+    HostName 10.246.116.108
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: YTz7j56zeqaNqtjOhy2I
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-winep10
+    HostName 10.246.118.120
+    User Administrator
+    # Windows VM — use RDP or password auth
+    # Password: aZZCL6X4Ub6axp4bRkaw
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep1
+    HostName 10.246.119.66
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep2
+    HostName 10.246.118.48
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep3
+    HostName 10.246.118.91
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep4
+    HostName 10.246.118.180
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep5
+    HostName 10.246.116.171
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep6
+    HostName 10.246.118.74
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep7
+    HostName 10.246.118.88
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep8
+    HostName 10.246.117.78
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep9
+    HostName 10.246.117.126
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+Host e-fac99-linep10
+    HostName 10.246.116.121
+    User ubuntu
+    IdentityFile ~/.ssh/id_rsa
+
+# --- end RUSE rampart-feedback-stdctrls-sum24-all run 032826111502 ---

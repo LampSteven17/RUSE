@@ -27,27 +27,27 @@ behaviors:
 
   # BrowserUse Series - Baseline (LLM-driven browser automation)
   - B1.llama     # BrowserUse + llama3.1:8b
-  - B2.gemma     # BrowserUse + gemma3:4b
+  - B2.gemma     # BrowserUse + gemma3:1b
   - B3.deepseek  # BrowserUse + deepseek-r1:8b
 
   # BrowserUse Series - Improved (Loop mode + MCHP workflows + PHASE timing)
   - B4.llama     # BrowserUseLoop + llama3.1:8b + PHASE timing
-  - B5.gemma     # BrowserUseLoop + gemma3:4b + PHASE timing
+  - B5.gemma     # BrowserUseLoop + gemma3:1b + PHASE timing
   - B6.deepseek  # BrowserUseLoop + deepseek-r1:8b + PHASE timing
 
   # SmolAgents Series - Baseline (HuggingFace smolagents)
   - S1.llama     # SmolAgents + llama3.1:8b
-  - S2.gemma     # SmolAgents + gemma3:4b
+  - S2.gemma     # SmolAgents + gemma3:1b
   - S3.deepseek  # SmolAgents + deepseek-r1:8b
 
   # SmolAgents Series - Improved (Loop mode + MCHP workflows + PHASE timing)
   - S4.llama     # SmolAgentLoop + llama3.1:8b + PHASE timing
-  - S5.gemma     # SmolAgentLoop + gemma3:4b + PHASE timing
+  - S5.gemma     # SmolAgentLoop + gemma3:1b + PHASE timing
   - S6.deepseek  # SmolAgentLoop + deepseek-r1:8b + PHASE timing
 
   # BrowserUse CPU Series - Baseline (no GPU, CPU inference only)
   - BC1.llama    # BrowserUse + llama3.1:8b (CPU)
-  - BC2.gemma    # BrowserUse + gemma3:4b (CPU)
+  - BC2.gemma    # BrowserUse + gemma3:1b (CPU)
   - BC3.deepseek # BrowserUse + deepseek-r1:8b (CPU)
   - BC7.lfm      # BrowserUse + lfm2.5-thinking (CPU)
   - BC8.ministral # BrowserUse + ministral:3b (CPU)
@@ -55,7 +55,7 @@ behaviors:
 
   # SmolAgents CPU Series - Baseline (no GPU, CPU inference only)
   - SC1.llama    # SmolAgents + llama3.1:8b (CPU)
-  - SC2.gemma    # SmolAgents + gemma3:4b (CPU)
+  - SC2.gemma    # SmolAgents + gemma3:1b (CPU)
   - SC3.deepseek # SmolAgents + deepseek-r1:8b (CPU)
   - SC7.lfm      # SmolAgents + lfm2.5-thinking (CPU)
   - SC8.ministral # SmolAgents + ministral:3b (CPU)

@@ -1,0 +1,250 @@
+{
+  "nodes": [
+    {
+      "name": "e-fac99-dc1",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "domain_controller_leader",
+        "windows"
+      ]
+    },
+    {
+      "name": "e-fac99-dc2",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "domain_controller",
+        "windows"
+      ]
+    },
+    {
+      "name": "e-fac99-dc3",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "domain_controller",
+        "windows"
+      ]
+    },
+    {
+      "name": "e-fac99-winep1",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep2",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep3",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep4",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep5",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep6",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep7",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep8",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep9",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-winep10",
+      "os": "win2k22",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "windows",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep1",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "shared"
+      ]
+    },
+    {
+      "name": "e-fac99-linep2",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "shared"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep3",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep4",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep5",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep6",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep7",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep8",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "standard user"
+    },
+    {
+      "name": "e-fac99-linep9",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "admin user"
+    },
+    {
+      "name": "e-fac99-linep10",
+      "os": "jammy",
+      "domain": "castle",
+      "roles": [
+        "endpoint",
+        "linux",
+        "personal"
+      ],
+      "user": "power user"
+    }
+  ]
+}

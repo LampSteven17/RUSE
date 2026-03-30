@@ -1,0 +1,72 @@
+---
+# Ansible Playbook: install-rampart-emulation.yaml
+# Deploy autonomous pyhuman emulation services on Rampart endpoint VMs.
+# Each endpoint runs its own systemd service (Linux) or scheduled task (Windows).
+#
+# Requires per-host variables in inventory:
+#   rampart_username   - AD username (e.g. frankbates)
+#   rampart_password   - AD password
+#   rampart_domain     - AD domain (e.g. castle)
+#   rampart_workflows  - space-separated workflow list
+#   rampart_seed       - random seed
+#   rampart_is_windows - "true" or "false"
+#   rampart_enterprise_url - domain FQDN suffix (e.g. vxn3kr-bot-project.os)
+#
+# Usage:
+#   ansible-playbook -i rampart-inventory.ini install-rampart-emulation.yaml
+
+- name: Deploy emulation on Linux endpoints
+  hosts: rampart_linux
+  become: yes
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30 -o IdentitiesOnly=yes'
+    ansible_ssh_private_key_file: "~/.ssh/id_rsa"
+
+  tasks:
+    - name: Write emulation passfile
+      copy:
+        content: |
+          {{ rampart_username }}
+          {{ rampart_password }}
+        dest: "/tmp/shib_login.{{ rampart_username }}"
+        mode: '0644'
+
+    - name: Create emulation systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=Rampart Human Emulation ({{ rampart_username }}@{{ rampart_domain }})
+          After=network.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/xvfb-run -a /opt/pyhuman/bin/python -u /opt/pyhuman/human.py --clustersize 5 --taskinterval 10 --taskgroupinterval 500 --seed {{ rampart_seed }} --workflows {{ rampart_workflows }} --extra passfile /tmp/shib_login.{{ rampart_username }}
+          Restart=always
+          RestartSec=30
+          Environment=PYTHONUNBUFFERED=1
+          Environment=HOME=/home/{{ rampart_username }}
+          WorkingDirectory=/tmp
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/rampart-human.service
+        mode: '0644'
+
+    - name: Start emulation service
+      systemd:
+        name: rampart-human
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Check emulation status
+      shell: systemctl is-active rampart-human
+      register: emulation_status
+      changed_when: false
+      ignore_errors: yes
+
+
+  # Windows emulation is deployed from Python (rampart.py) using sshpass
+  # because Ansible's raw module mangles PowerShell $ variables.
+  # See _deploy_windows_emulation() in rampart.py.
