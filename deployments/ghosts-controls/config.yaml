@@ -1,0 +1,18 @@
+---
+# ghosts-controls: GHOSTS NPC baseline traffic generators
+#
+# Deploys 1 API VM (Docker stack: ghosts-api, postgres, frontend, n8n, grafana)
+# plus N client VMs (GHOSTS universal client containers).
+# Baseline: default timeline, no PHASE feedback.
+#
+# Total VMs: 6 (1 api + 5 npc clients)
+
+deployment_name: ghosts-controls
+type: ghosts
+
+ghosts:
+  api_flavor: v1.14vcpu.28g
+  client_flavor: v1.14vcpu.28g
+  client_count: 5
+  ghosts_repo: https://github.com/cmu-sei/GHOSTS.git
+  ghosts_branch: master

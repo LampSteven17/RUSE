@@ -1,0 +1,296 @@
+---
+# Ansible Playbook: install-ghosts-clients.yaml
+# Install GHOSTS universal client (.NET 9) on NPC VMs.
+# Clones the GHOSTS repo, builds the client, runs as a systemd service.
+# Each client connects to the API VM via ghosts_api_ip (set in inventory).
+#
+# Usage:
+#   ansible-playbook -i inventory.ini install-ghosts-clients.yaml
+
+- name: Install GHOSTS Clients
+  hosts: ghosts_clients
+  become: yes
+  serial: 10
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30 -o IdentitiesOnly=yes'
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    ansible_ssh_retries: 5
+    ghosts_repo: "https://github.com/cmu-sei/GHOSTS.git"
+    ghosts_branch: "master"
+    ghosts_path: "/opt/ghosts"
+    ghosts_client_src: "/opt/ghosts/src/Ghosts.Client.Universal"
+    ghosts_client_publish: "/opt/ghosts-client"
+    # ghosts_api_ip is set per-host in inventory
+
+  tasks:
+    - name: Wait for SSH
+      wait_for_connection:
+        delay: 5
+        timeout: 300
+      retries: 3
+      delay: 10
+
+    - name: Wait for cloud-init
+      command: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install prerequisites
+      apt:
+        name: [git, curl, wget]
+        state: present
+
+    - name: Install .NET 9 SDK
+      shell: |
+        if command -v dotnet &>/dev/null && dotnet --list-sdks | grep -q "^9\."; then
+          echo ".NET 9 SDK already installed"
+          exit 0
+        fi
+        wget -q https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh
+        chmod +x /tmp/dotnet-install.sh
+        /tmp/dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet
+        ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet
+        echo 'export DOTNET_ROOT=/usr/share/dotnet' >> /etc/profile.d/dotnet.sh
+        echo 'export PATH=$PATH:/usr/share/dotnet' >> /etc/profile.d/dotnet.sh
+      args:
+        executable: /bin/bash
+      async: 600
+      poll: 15
+
+    - name: Clone GHOSTS repository
+      git:
+        repo: "{{ ghosts_repo }}"
+        dest: "{{ ghosts_path }}"
+        version: "{{ ghosts_branch }}"
+        force: yes
+
+    - name: Build GHOSTS universal client
+      shell: |
+        cd {{ ghosts_client_src }}
+        /usr/share/dotnet/dotnet publish \
+          -c Release \
+          -r linux-x64 \
+          --self-contained false \
+          -o {{ ghosts_client_publish }} \
+          /p:NoWarn=NU1605
+      args:
+        executable: /bin/bash
+      environment:
+        DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      async: 600
+      poll: 15
+
+    - name: Create client config directory
+      file:
+        path: "{{ ghosts_client_publish }}/config"
+        state: directory
+        mode: '0755'
+
+    - name: Configure GHOSTS client (application.json)
+      copy:
+        content: |
+          {
+            "ApiRootUrl": "http://{{ ghosts_api_ip }}:5000/api",
+            "Sockets": {
+              "IsEnabled": true,
+              "Heartbeat": 50000
+            },
+            "Id": {
+              "IsEnabled": true,
+              "Format": "guestlocal",
+              "FormatKey": "",
+              "FormatValue": "$machinename$"
+            },
+            "AllowMultipleInstances": false,
+            "EncodeHeaders": false,
+            "ClientResults": {
+              "IsEnabled": true,
+              "IsSecure": false,
+              "CycleSleep": 300000
+            },
+            "ClientUpdates": {
+              "IsEnabled": true,
+              "CycleSleep": 300000
+            },
+            "Survey": {
+              "IsEnabled": false,
+              "IsSecure": false,
+              "Frequency": "once",
+              "CycleSleepMinutes": 5,
+              "OutputFormat": "indent"
+            },
+            "Timeline": {
+              "Location": "config/timeline.json"
+            },
+            "Content": {
+              "EmailContent": "",
+              "EmailReply": "",
+              "EmailDomain": "",
+              "EmailOutside": "",
+              "BlogContent": "",
+              "BlogReply": "",
+              "FileNames": "",
+              "Dictionary": ""
+            },
+            "ResourceControl": {
+              "ManageProcesses": true
+            },
+            "HealthIsEnabled": true,
+            "HandlersIsEnabled": true,
+            "DisableStartup": false
+          }
+        dest: "{{ ghosts_client_publish }}/config/application.json"
+        mode: '0644'
+
+    - name: Deploy PHASE-generated timeline
+      copy:
+        src: "{{ ghosts_timeline_file }}"
+        dest: "{{ ghosts_client_publish }}/config/timeline.json"
+        mode: '0644'
+      when: ghosts_timeline_file is defined and ghosts_timeline_file != ""
+
+    - name: Configure GHOSTS client timeline (default)
+      when: ghosts_timeline_file is not defined or ghosts_timeline_file == ""
+      copy:
+        content: |
+          {
+            "Status": "Run",
+            "TimeLineHandlers": [
+              {
+                "HandlerType": "BrowserFirefox",
+                "Initial": "about:blank",
+                "UtcTimeOn": "00:00:00",
+                "UtcTimeOff": "24:00:00",
+                "Loop": true,
+                "HandlerArgs": {
+                  "isheadless": "true",
+                  "blockimages": "true",
+                  "blockstyles": "false",
+                  "blockflash": "true",
+                  "blockscripts": "true",
+                  "stickiness": 0,
+                  "stickiness-depth-min": 1,
+                  "stickiness-depth-max": 10
+                },
+                "TimeLineEvents": [
+                  {
+                    "Command": "random",
+                    "CommandArgs": [
+                      "http://google.com",
+                      "http://wikipedia.org",
+                      "http://reddit.com",
+                      "http://amazon.com",
+                      "http://cnn.com",
+                      "http://nytimes.com",
+                      "http://stackoverflow.com",
+                      "http://github.com",
+                      "http://espn.com",
+                      "http://weather.com",
+                      "http://craigslist.org",
+                      "http://imdb.com",
+                      "http://ebay.com",
+                      "http://msn.com",
+                      "http://apple.com",
+                      "http://webmd.com",
+                      "http://nih.gov",
+                      "http://usatoday.com",
+                      "http://wsj.com",
+                      "http://npr.org",
+                      "http://bloomberg.com",
+                      "http://reuters.com",
+                      "http://theguardian.com",
+                      "http://cmu.edu",
+                      "http://virginia.edu"
+                    ],
+                    "DelayAfter": 15000,
+                    "DelayBefore": 0
+                  }
+                ]
+              },
+              {
+                "HandlerType": "Bash",
+                "Initial": "",
+                "UtcTimeOn": "00:00:00",
+                "UtcTimeOff": "24:00:00",
+                "Loop": true,
+                "TimeLineEvents": [
+                  {
+                    "Command": "ls -la /tmp",
+                    "DelayAfter": 300000,
+                    "DelayBefore": 0
+                  },
+                  {
+                    "Command": "df -h",
+                    "DelayAfter": 300000,
+                    "DelayBefore": 0
+                  },
+                  {
+                    "Command": "uptime",
+                    "DelayAfter": 300000,
+                    "DelayBefore": 0
+                  }
+                ]
+              },
+              {
+                "HandlerType": "Curl",
+                "Initial": "",
+                "UtcTimeOn": "00:00:00",
+                "UtcTimeOff": "24:00:00",
+                "Loop": true,
+                "TimeLineEvents": [
+                  {
+                    "Command": "https://httpbin.org/get",
+                    "DelayAfter": 60000,
+                    "DelayBefore": 0
+                  },
+                  {
+                    "Command": "https://jsonplaceholder.typicode.com/posts",
+                    "DelayAfter": 60000,
+                    "DelayBefore": 0
+                  }
+                ]
+              }
+            ]
+          }
+        dest: "{{ ghosts_client_publish }}/config/timeline.json"
+        mode: '0644'
+
+    - name: Create GHOSTS client systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=GHOSTS NPC Client
+          After=network.target
+
+          [Service]
+          Type=simple
+          WorkingDirectory={{ ghosts_client_publish }}
+          ExecStart=/usr/share/dotnet/dotnet {{ ghosts_client_publish }}/Ghosts.Client.Universal.dll
+          Restart=always
+          RestartSec=10
+          Environment=DOTNET_ROOT=/usr/share/dotnet
+          Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/ghosts-client.service
+        mode: '0644'
+
+    - name: Start GHOSTS client service
+      systemd:
+        name: ghosts-client
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Check GHOSTS client status
+      shell: systemctl is-active ghosts-client
+      register: client_status
+      changed_when: false
+      ignore_errors: yes

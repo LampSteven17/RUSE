@@ -1,45 +1,32 @@
 ---
 # Ansible Playbook: teardown-all.yaml
-# Destroy ALL SUP VMs and their volumes (not deployment-specific)
+# Destroy ALL RUSE/Enterprise VMs and their volumes.
 #
 # Usage:
-#   ansible-playbook -i ../exp-1/hosts.ini teardown-all.yaml
+#   ansible-playbook -i hosts.ini teardown-all.yaml
 
 - name: Teardown ALL SUP VMs
   hosts: openstack_controller
   gather_facts: false
 
   vars:
-    os_rc_file: "~/vxn3kr-bot-rc"
-    vm_prefix: "sup-"
+    os_rc_file: "{{ lookup('env', 'HOME') }}/vxn3kr-bot-rc"
+    all_prefixes: "(r-|e-|g-|sup-)"
 
   tasks:
-    - name: Get list of ALL SUP servers
+    # ── Find servers ─────────────────────────────────────────────────
+    - name: Get list of ALL RUSE servers
       shell: |
         source {{ os_rc_file }}
-        openstack server list -f value -c ID -c Name | grep "{{ vm_prefix }}" || true
+        openstack server list -f value -c ID -c Name | grep -E "{{ all_prefixes }}" || true
       args:
         executable: /bin/bash
       register: server_list
 
-    - name: Display servers to be deleted
-      pause:
-        seconds: 0
-        prompt: |
-          Found {{ server_list.stdout_lines | length }} servers to delete:
-          {{ server_list.stdout_lines | default(['(none)']) | join('\n') }}
-      when: server_list.stdout | length > 0
-
-    - name: No servers found
-      pause:
-        seconds: 0
-        prompt: "No SUP servers found to delete."
-      when: server_list.stdout | length == 0
-
-    - name: Get volume IDs attached to SUP servers
+    - name: Get attached volume IDs
       shell: |
         source {{ os_rc_file }}
-        for server in $(openstack server list -f value -c Name | grep "{{ vm_prefix }}"); do
+        for server in $(openstack server list -f value -c Name | grep -E "{{ all_prefixes }}"); do
           openstack server show "$server" -f json | jq -r '.volumes_attached[]?.id' 2>/dev/null || true
         done
       args:
@@ -47,11 +34,8 @@
       register: attached_volume_ids
       when: server_list.stdout | length > 0
 
-    # ─────────────────────────────────────────────────────────────────
-    # BATCHED VM DELETION: Delete VMs in batches to avoid overloading OpenStack
-    # Uses throttle to limit concurrent deletes, no --wait for faster submission
-    # ─────────────────────────────────────────────────────────────────
-    - name: Delete ALL SUP servers (parallel - all at once)
+    # ── Delete servers ───────────────────────────────────────────────
+    - name: Delete ALL RUSE servers
       shell: |
         source {{ os_rc_file }}
         openstack server delete "{{ item.split()[0] }}"
@@ -60,22 +44,18 @@
       loop: "{{ server_list.stdout_lines }}"
       loop_control:
         label: "{{ item.split()[1] | default(item) }}"
-      throttle: "{{ vm_delete_batch_size | default(50) }}"
+      throttle: 50
       when: server_list.stdout | length > 0
       ignore_errors: yes
       async: 300
       poll: 0
 
-    - name: Wait for all servers to be deleted (parallel polling)
+    - name: Wait for servers to be deleted
       shell: |
         source {{ os_rc_file }}
-        SERVER_ID="{{ item.split()[0] }}"
-        SERVER_NAME="{{ item.split()[1] }}"
-        if ! openstack server show "$SERVER_ID" &>/dev/null; then
-          echo "DELETED: $SERVER_NAME ($SERVER_ID)"
+        if ! openstack server show "{{ item.split()[0] }}" &>/dev/null; then
           exit 0
         else
-          echo "WAITING: $SERVER_NAME ($SERVER_ID) still exists"
           exit 1
         fi
       args:
@@ -91,10 +71,11 @@
       when: server_list.stdout | length > 0
       ignore_errors: yes
 
-    - name: Get ALL SUP volumes (including orphaned)
+    # ── Delete volumes ───────────────────────────────────────────────
+    - name: Get ALL RUSE volumes
       shell: |
         source {{ os_rc_file }}
-        openstack volume list -f value -c ID -c Name | grep "{{ vm_prefix }}" | awk '{print $1}' || true
+        openstack volume list -f value -c ID -c Name | grep -E "{{ all_prefixes }}" | awk '{print $1}' || true
       args:
         executable: /bin/bash
       register: all_volumes
@@ -103,19 +84,7 @@
       set_fact:
         all_volume_ids: "{{ (all_volumes.stdout_lines | default([])) | union(attached_volume_ids.stdout_lines | default([]) | select('match', '.+') | list) | unique }}"
 
-    - name: Display volumes to be deleted
-      pause:
-        seconds: 0
-        prompt: |
-          Found {{ all_volume_ids | length }} volumes to delete:
-          {{ all_volume_ids | default(['(none)']) | join('\n') }}
-      when: all_volume_ids | length > 0
-
-    # ─────────────────────────────────────────────────────────────────
-    # BATCHED VOLUME DELETION: Delete volumes in batches to avoid overloading OpenStack
-    # Uses throttle to limit concurrent deletes
-    # ─────────────────────────────────────────────────────────────────
-    - name: Delete ALL SUP volumes (parallel - all at once)
+    - name: Delete ALL RUSE volumes
       shell: |
         source {{ os_rc_file }}
         openstack volume delete "{{ item }}"
@@ -124,20 +93,18 @@
       loop: "{{ all_volume_ids }}"
       loop_control:
         label: "{{ item }}"
-      throttle: "{{ vol_delete_batch_size | default(50) }}"
+      throttle: 50
       when: all_volume_ids | length > 0
       ignore_errors: yes
       async: 300
       poll: 0
 
-    - name: Wait for all volumes to be deleted (parallel polling)
+    - name: Wait for volumes to be deleted
       shell: |
         source {{ os_rc_file }}
         if ! openstack volume show "{{ item }}" &>/dev/null; then
-          echo "DELETED: {{ item }}"
           exit 0
         else
-          echo "WAITING: {{ item }} still exists"
           exit 1
         fi
       args:
@@ -153,11 +120,8 @@
       when: all_volume_ids | length > 0
       ignore_errors: yes
 
-    # ─────────────────────────────────────────────────────────────────
-    # ORPHAN VOLUME CLEANUP: Delete nameless volumes matching SUP boot volume size
-    # These are left behind when VMs are deleted but volumes aren't cleaned up
-    # ─────────────────────────────────────────────────────────────────
-    - name: Find orphaned SUP boot volumes (nameless, 200GB, available)
+    # ── Orphan volume cleanup ────────────────────────────────────────
+    - name: Find orphaned boot volumes (nameless, 200GB, available)
       shell: |
         source {{ os_rc_file }}
         openstack volume list -f json | jq -r '.[] | select(.Name == "" and .Size == 200 and .Status == "available") | .ID'
@@ -165,15 +129,7 @@
         executable: /bin/bash
       register: orphan_volumes
 
-    - name: Display orphaned volumes to be deleted
-      pause:
-        seconds: 0
-        prompt: |
-          Found {{ orphan_volumes.stdout_lines | length }} orphaned boot volumes (nameless, 200GB):
-          {{ orphan_volumes.stdout_lines | default(['(none)']) | join('\n') }}
-      when: orphan_volumes.stdout_lines | length > 0
-
-    - name: Delete orphaned boot volumes (parallel)
+    - name: Delete orphaned boot volumes
       shell: |
         source {{ os_rc_file }}
         openstack volume delete "{{ item }}"
@@ -182,32 +138,13 @@
       loop: "{{ orphan_volumes.stdout_lines }}"
       loop_control:
         label: "{{ item }}"
-      throttle: "{{ vol_delete_batch_size | default(50) }}"
+      throttle: 50
       when: orphan_volumes.stdout_lines | length > 0
       ignore_errors: yes
       async: 300
       poll: 0
 
-    - name: Verify cleanup
-      shell: |
-        source {{ os_rc_file }}
-        echo "=== Remaining SUP servers ==="
-        openstack server list -f value -c Name | grep "{{ vm_prefix }}" || echo "(none)"
-        echo ""
-        echo "=== Remaining SUP volumes ==="
-        openstack volume list -f value -c Name | grep "{{ vm_prefix }}" || echo "(none)"
-        echo ""
-        echo "=== Remaining orphaned volumes (nameless, 200GB) ==="
-        openstack volume list -f json | jq -r '.[] | select(.Name == "" and .Size == 200) | .ID' || echo "(none)"
-      args:
-        executable: /bin/bash
-      register: cleanup_status
-
-    - name: Display cleanup status
-      pause:
-        seconds: 0
-        prompt: "{{ cleanup_status.stdout }}"
-
+    # ── Cleanup ──────────────────────────────────────────────────────
     - name: Remove ALL local inventory files
       delegate_to: localhost
       shell: |

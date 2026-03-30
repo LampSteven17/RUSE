@@ -1,0 +1,2449 @@
+{
+    "backend_config": {
+        "cloud_type": "openstack",
+        "enterprise_url": "fac99.vxn3kr-bot-project.os",
+        "external_network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+        "image_map": {
+            "Jammy-IdP": "Jammy-IdP",
+            "Jammy-SP": "Jammy-SP",
+            "jammy": "jammy-amd64",
+            "win2k22": "ws2022-cs-license"
+        },
+        "instance_size_map": {
+            "small": "m1.small"
+        },
+        "keypair": "enterprise-key",
+        "os_env_file": "cicd/cs-workflow-rc",
+        "private_key_file": "/home/ubuntu/.ssh/id_rsa",
+        "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118"
+    },
+    "deploy_end_time": "2026-03-28 11:30:26.110880",
+    "deploy_start_time": "2026-03-28 11:15:03.547303",
+    "enterprise_built": {
+        "deploy_end": "2026-03-28 11:30:26.109898",
+        "deploy_start": "2026-03-28 11:15:03.547636",
+        "deployed": {
+            "check_deploy_ok": true,
+            "create_zones": {
+                "action": "CREATE",
+                "attributes": {},
+                "created_at": "2026-03-28T15:15:11.000000",
+                "description": null,
+                "email": "root@fac99.vxn3kr-bot-project.os",
+                "id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                "links": {
+                    "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0"
+                },
+                "masters": [],
+                "name": "fac99.vxn3kr-bot-project.os.",
+                "pool_id": "794ccc2c-d751-44fe-b57f-8894c9f5c842",
+                "project_id": "2183480690a04fd385683cc4749e94ea",
+                "serial": 1774710910,
+                "shared": false,
+                "status": "PENDING",
+                "transferred_at": null,
+                "ttl": 60,
+                "type": "PRIMARY",
+                "updated_at": null,
+                "version": 1
+            },
+            "nodes": [
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:01:ec:6e",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.117.13",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:22.000000",
+                        "description": null,
+                        "id": "3b48c056-93f4-4a84-86f2-6b9a130a6161",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/3b48c056-93f4-4a84-86f2-6b9a130a6161"
+                        },
+                        "name": "e-fac99-dc1.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.117.13"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-dc1",
+                        "os": "win2k22",
+                        "roles": [
+                            "domain_controller_leader",
+                            "windows"
+                        ]
+                    },
+                    "flavor": "m1.small",
+                    "id": "eb8b8a44-bca4-4aca-960e-38c572210fee",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-dc1",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "1JF9Ll3igZirVmoWESFN",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:fb:a9:ab",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.116.10",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:22.000000",
+                        "description": null,
+                        "id": "c4eb42b8-515b-414f-96c9-04d97d761f0a",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/c4eb42b8-515b-414f-96c9-04d97d761f0a"
+                        },
+                        "name": "e-fac99-dc2.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.116.10"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-dc2",
+                        "os": "win2k22",
+                        "roles": [
+                            "domain_controller",
+                            "windows"
+                        ]
+                    },
+                    "flavor": "m1.small",
+                    "id": "fcea1de8-a588-475f-ac27-6e16f3adaeb3",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-dc2",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "bZv2bF2oH2mDvDRSbwFG",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:e3:6b:b5",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.161",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:22.000000",
+                        "description": null,
+                        "id": "bca83c65-9359-407b-b4ea-c96d9105e35a",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/bca83c65-9359-407b-b4ea-c96d9105e35a"
+                        },
+                        "name": "e-fac99-dc3.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.161"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-dc3",
+                        "os": "win2k22",
+                        "roles": [
+                            "domain_controller",
+                            "windows"
+                        ]
+                    },
+                    "flavor": "m1.small",
+                    "id": "9859a4c5-911a-4cc1-bb92-a4683abc8b32",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-dc3",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "NIdTUvnGR5qFVMOYSX9l",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:6e:ff:56",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.117.162",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:22.000000",
+                        "description": null,
+                        "id": "acdc99a6-082a-409b-91e9-961b027e498d",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/acdc99a6-082a-409b-91e9-961b027e498d"
+                        },
+                        "name": "e-fac99-winep1.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.117.162"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep1",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "bd480ebc-b452-483b-9859-23583cd4a268",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep1",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "v9411604h7xanPSJmDE4",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:6d:3a:86",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.116.16",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:23.000000",
+                        "description": null,
+                        "id": "04ffe791-c915-4b55-8375-5fa4033096bc",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/04ffe791-c915-4b55-8375-5fa4033096bc"
+                        },
+                        "name": "e-fac99-winep2.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.116.16"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep2",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "02c74a23-12c2-447d-b840-47710abf914d",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep2",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "uy9xrvjnymtpWxK5jxkT",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:fc:81:e6",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.115.214",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:23.000000",
+                        "description": null,
+                        "id": "402189df-e42c-4909-b181-398d56752140",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/402189df-e42c-4909-b181-398d56752140"
+                        },
+                        "name": "e-fac99-winep3.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.115.214"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep3",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "2fa157e2-c7ed-4cbc-8f6a-892879b6e268",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep3",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "OCPlSysjaAQq9hdUec9t",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:61:aa:56",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.182",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:23.000000",
+                        "description": null,
+                        "id": "f54b05ff-69d2-4ca7-bb9f-3cc73623d690",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/f54b05ff-69d2-4ca7-bb9f-3cc73623d690"
+                        },
+                        "name": "e-fac99-winep4.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.182"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep4",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "801f45f8-60fd-468f-bcba-ae81f461f897",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep4",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "N9w98Ud5u3WKcBCktiiF",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:2d:97:1e",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.119.94",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:23.000000",
+                        "description": null,
+                        "id": "3abcecba-121d-4104-b534-b9b169d60279",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/3abcecba-121d-4104-b534-b9b169d60279"
+                        },
+                        "name": "e-fac99-winep5.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.119.94"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep5",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "a2318933-ed2c-4a82-9954-0085a07cc31b",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep5",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "vassLmeBC4Qe8rw4X3fF",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:6e:5d:ee",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.198",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:23.000000",
+                        "description": null,
+                        "id": "26b1f200-7549-47ec-9208-e391bf2a2bf6",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/26b1f200-7549-47ec-9208-e391bf2a2bf6"
+                        },
+                        "name": "e-fac99-winep6.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.198"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep6",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "8aa41a08-400b-4e71-b0fa-184c6454fb82",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep6",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "2YYJCO7iyYdSba669CVI",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:ba:5a:ae",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.119.45",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:24.000000",
+                        "description": null,
+                        "id": "9faef68f-5ecf-427c-b516-a220517c2913",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/9faef68f-5ecf-427c-b516-a220517c2913"
+                        },
+                        "name": "e-fac99-winep7.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.119.45"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep7",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "a142a2d1-09e3-448b-b30b-872ce4b6cdad",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep7",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "iOXcajBZR1WuABcXPX8p",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:25:b7:c4",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.119.61",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:24.000000",
+                        "description": null,
+                        "id": "1b25d802-a799-48b6-8f8b-61721beab922",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/1b25d802-a799-48b6-8f8b-61721beab922"
+                        },
+                        "name": "e-fac99-winep8.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.119.61"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep8",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "09e5f639-05a2-4b6d-b952-ad4b6758b462",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep8",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "S9bJ9LVP8w4BjfGAG1y2",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:0d:9d:85",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.116.108",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:24.000000",
+                        "description": null,
+                        "id": "4987c95f-7fff-4f26-8f95-4dbbe2db4d38",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/4987c95f-7fff-4f26-8f95-4dbbe2db4d38"
+                        },
+                        "name": "e-fac99-winep9.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.116.108"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep9",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "b6e3459a-f15c-4c0a-8e36-98d3b6c5b8b9",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep9",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "YTz7j56zeqaNqtjOhy2I",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:36:9d:1b",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.120",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:24.000000",
+                        "description": null,
+                        "id": "901f1f99-39c6-4b25-a162-3a648fe04ae4",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/901f1f99-39c6-4b25-a162-3a648fe04ae4"
+                        },
+                        "name": "e-fac99-winep10.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.120"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-winep10",
+                        "os": "win2k22",
+                        "roles": [
+                            "endpoint",
+                            "windows",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "6678e2ec-9fdd-444e-8261-3d86934a505c",
+                    "image": "ws2022-cs-license",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-winep10",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "7db3bf3230128cdc6f6e25f88bd6a74d",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T13:15:12Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/file",
+                        "id": "cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/cb6fd9cb-362e-4db2-9fdc-9a61639a7a9f/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "ws2022-cs-license",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "72dee0d34d6387b78a87c30a3be5f1528c178f45976912db0be5244f6228315858a509923d1b793e78a075ea8f5e08cfb290a162c016f5c6481b3eb702653ca3",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/ws2022-cs-license",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 6712590336,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T14:24:10Z",
+                        "virtual_size": 16106127360,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "win2k22",
+                    "password": "aZZCL6X4Ub6axp4bRkaw",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:52:16:30",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.119.66",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:24.000000",
+                        "description": null,
+                        "id": "b5d1759b-9212-4291-819d-928bba152eca",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/b5d1759b-9212-4291-819d-928bba152eca"
+                        },
+                        "name": "e-fac99-linep1.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.119.66"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep1",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "shared"
+                        ]
+                    },
+                    "flavor": "m1.small",
+                    "id": "eff0c6be-2aca-4a12-aa47-67db0c14f25b",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep1",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:40:72:96",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.48",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:25.000000",
+                        "description": null,
+                        "id": "55e7f99a-3801-4bfe-99e2-d7ec0b36dc3e",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/55e7f99a-3801-4bfe-99e2-d7ec0b36dc3e"
+                        },
+                        "name": "e-fac99-linep2.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.48"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep2",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "shared"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "9d66014f-caa2-4dd4-baeb-9a50673756e5",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep2",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:06:7d:0d",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.91",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:25.000000",
+                        "description": null,
+                        "id": "06641706-96db-4c56-b029-5e7636bcf949",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/06641706-96db-4c56-b029-5e7636bcf949"
+                        },
+                        "name": "e-fac99-linep3.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.91"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep3",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "65f7a5ff-f26f-4131-81c2-1d12d903fc72",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep3",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:f3:85:53",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.180",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:25.000000",
+                        "description": null,
+                        "id": "a2a297f2-7174-4004-bbfc-ece034c7b004",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/a2a297f2-7174-4004-bbfc-ece034c7b004"
+                        },
+                        "name": "e-fac99-linep4.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.180"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep4",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "b26a0045-2f62-4d56-ac37-993eebd7b56b",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep4",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:36:bb:a3",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.116.171",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:25.000000",
+                        "description": null,
+                        "id": "a14f32d0-7112-47c9-97d9-e14e879e92cb",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/a14f32d0-7112-47c9-97d9-e14e879e92cb"
+                        },
+                        "name": "e-fac99-linep5.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.116.171"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep5",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "442c9a1b-54fd-4759-9aaf-6a63a69ab32b",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep5",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:cf:11:2c",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.74",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:25.000000",
+                        "description": null,
+                        "id": "4858b9bc-08bd-4a9c-b446-99ec13ebd8fd",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/4858b9bc-08bd-4a9c-b446-99ec13ebd8fd"
+                        },
+                        "name": "e-fac99-linep6.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.74"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep6",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "99499765-4780-49da-8fb8-bc83ea95b006",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep6",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:13:d1:de",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.118.88",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:25.000000",
+                        "description": null,
+                        "id": "d0f1b5aa-b81e-49a3-985d-14720fef4a44",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/d0f1b5aa-b81e-49a3-985d-14720fef4a44"
+                        },
+                        "name": "e-fac99-linep7.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.118.88"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep7",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "be3cfcc8-7ab8-42e6-b12d-0b1d6ac56a6b",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep7",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:71:64:04",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.117.78",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:26.000000",
+                        "description": null,
+                        "id": "b0d48f00-284d-4698-a3ed-c20848d4f9d5",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/b0d48f00-284d-4698-a3ed-c20848d4f9d5"
+                        },
+                        "name": "e-fac99-linep8.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.117.78"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep8",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "standard user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "62c4caf3-c1d0-459d-b7a1-b0b8778006f6",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep8",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:c2:75:ee",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.117.126",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:26.000000",
+                        "description": null,
+                        "id": "d1049c8a-45c3-4536-a967-19c5579720a4",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/d1049c8a-45c3-4536-a967-19c5579720a4"
+                        },
+                        "name": "e-fac99-linep9.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.117.126"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep9",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "admin user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "e9ff5f90-6b06-4279-b815-0fe2326632be",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep9",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                },
+                {
+                    "addresses": [
+                        {
+                            "OS-EXT-IPS-MAC:mac_addr": "fa:16:3e:fe:b8:14",
+                            "OS-EXT-IPS:type": "fixed",
+                            "addr": "10.246.116.121",
+                            "version": 4
+                        }
+                    ],
+                    "dns_setup": {
+                        "action": "CREATE",
+                        "created_at": "2026-03-28T15:30:26.000000",
+                        "description": null,
+                        "id": "e4d80eab-ae35-4f8d-b22e-d4817fb6ba85",
+                        "links": {
+                            "self": "https://10.246.112.108:9001/v2/zones/c4d4b70c-27cb-413e-ae32-020d6547e9d0/recordsets/e4d80eab-ae35-4f8d-b22e-d4817fb6ba85"
+                        },
+                        "name": "e-fac99-linep10.fac99.vxn3kr-bot-project.os.",
+                        "project_id": "2183480690a04fd385683cc4749e94ea",
+                        "records": [
+                            "10.246.116.121"
+                        ],
+                        "status": "PENDING",
+                        "ttl": null,
+                        "type": "A",
+                        "updated_at": null,
+                        "version": 1,
+                        "zone_id": "c4d4b70c-27cb-413e-ae32-020d6547e9d0",
+                        "zone_name": "fac99.vxn3kr-bot-project.os."
+                    },
+                    "domain": "castle",
+                    "enterprise_description": {
+                        "domain": "castle",
+                        "name": "e-fac99-linep10",
+                        "os": "jammy",
+                        "roles": [
+                            "endpoint",
+                            "linux",
+                            "personal"
+                        ],
+                        "user": "power user"
+                    },
+                    "flavor": "m1.small",
+                    "id": "6d08cf87-5080-47bd-835a-80ac43b672d4",
+                    "image": "jammy-amd64",
+                    "is_ready": true,
+                    "keypair": "enterprise-key",
+                    "name": "e-fac99-linep10",
+                    "network": "2734e108-f572-43a0-8cc3-1b51631c41ba",
+                    "nova_image": {
+                        "checksum": "0b88d22f32e3f076b0884d60dfa4753f",
+                        "container_format": "bare",
+                        "created_at": "2024-07-03T12:37:03Z",
+                        "direct_url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap",
+                        "disk_format": "qcow2",
+                        "file": "/v2/images/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/file",
+                        "id": "09cbc9d3-df9e-4d30-acd1-e242e8523e0b",
+                        "locations": [
+                            {
+                                "metadata": {
+                                    "store": "ceph"
+                                },
+                                "url": "rbd://9cbde7ea-38e5-11ef-b08c-d16b085bd47c/glance/09cbc9d3-df9e-4d30-acd1-e242e8523e0b/snap"
+                            }
+                        ],
+                        "min_disk": 0,
+                        "min_ram": 0,
+                        "name": "jammy-amd64",
+                        "os_hash_algo": "sha512",
+                        "os_hash_value": "de0f84fea85505d1b49ded1b7078efd57852b756c9ad6d0970b4c43fb95f4d532f73ea135a13be9b232a950826e00950d2e6e607fcaefb65a5e09e0794a0fcd6",
+                        "os_hidden": false,
+                        "owner": "bf59861bdd7247d0bc4ef9e02b836914",
+                        "owner_specified.openstack.md5": "",
+                        "owner_specified.openstack.object": "images/jammy-amd64",
+                        "owner_specified.openstack.sha256": "",
+                        "protected": false,
+                        "schema": "/v2/schemas/image",
+                        "size": 650969088,
+                        "status": "active",
+                        "stores": "ceph",
+                        "tags": [],
+                        "updated_at": "2024-07-03T12:37:19Z",
+                        "virtual_size": 2361393152,
+                        "visibility": "public"
+                    },
+                    "nova_nics": [
+                        {}
+                    ],
+                    "nova_status": "ACTIVE",
+                    "os": "jammy",
+                    "security_group": "7485c569-0261-4a10-95d8-5c1a92e7e118",
+                    "size": "small"
+                }
+            ]
+        }
+    },
+    "enterprise_to_build": {
+        "nodes": [
+            {
+                "domain": "castle",
+                "name": "e-fac99-dc1",
+                "os": "win2k22",
+                "roles": [
+                    "domain_controller_leader",
+                    "windows"
+                ]
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-dc2",
+                "os": "win2k22",
+                "roles": [
+                    "domain_controller",
+                    "windows"
+                ]
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-dc3",
+                "os": "win2k22",
+                "roles": [
+                    "domain_controller",
+                    "windows"
+                ]
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep1",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep2",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep3",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep4",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep5",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep6",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep7",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep8",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep9",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-winep10",
+                "os": "win2k22",
+                "roles": [
+                    "endpoint",
+                    "windows",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep1",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "shared"
+                ]
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep2",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "shared"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep3",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep4",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep5",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep6",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep7",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep8",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "standard user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep9",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "admin user"
+            },
+            {
+                "domain": "castle",
+                "name": "e-fac99-linep10",
+                "os": "jammy",
+                "roles": [
+                    "endpoint",
+                    "linux",
+                    "personal"
+                ],
+                "user": "power user"
+            }
+        ]
+    }
+}
