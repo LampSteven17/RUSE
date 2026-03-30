@@ -32,11 +32,11 @@ This document details the experimental configurations for evaluating SUP (Synthe
 | M3b.llama      | MCHP           | MCHP                   | BrowserUse               | llama3.1:8b |
 |                |                |                        |                          |           |
 | B1.llama       | BrowserUse     | BrowserUse             | BrowserUse               | llama3.1:8b |
-| B2.gemma       | BrowserUse     | BrowserUse             | BrowserUse               | gemma3:4b |
+| B2.gemma       | BrowserUse     | BrowserUse             | BrowserUse               | gemma3:1b |
 | B3.deepseek    | BrowserUse     | BrowserUse             | BrowserUse               | deepseek-r1:8b |
 |                |                |                        |                          |           |
 | S1.llama       | SmolAgents     | SmolAgents             | SmolAgents               | llama3.1:8b |
-| S2.gemma       | SmolAgents     | SmolAgents             | SmolAgents               | gemma3:4b |
+| S2.gemma       | SmolAgents     | SmolAgents             | SmolAgents               | gemma3:1b |
 | S3.deepseek    | SmolAgents     | SmolAgents             | SmolAgents               | deepseek-r1:8b |
 
 ### Limitations
@@ -92,6 +92,6 @@ The lowest-performing configuration from each series (M*, B*, S*) will be select
 |:----------------------|:-----------------------------------------|
 | Total Configurations  | 16 (13 PRE-PHASE + 3 POST-PHASE)         |
 | Brain Types           | 3 (MCHP, BrowserUse, SmolAgents)         |
-| Models                | 4 (None, llama3.1:8b, gemma3:4b, deepseek-r1:8b) |
+| Models                | 4 (None, llama3.1:8b, gemma3:1b, deepseek-r1:8b) |
 | PRE-PHASE Variants    | 13 (7 MCHP + 3 BrowserUse + 3 SmolAgents) |
 | POST-PHASE Variants   | 3 (1 per brain type, selected from lowest performers) |

@@ -11,7 +11,7 @@
 #             2 = calibrated to summer24
 #             3 = calibrated to fall24
 #             4 = calibrated to spring25
-#   Models:   llama (llama3.1:8b), gemma (gemma3:4b)
+#   Models:   llama (llama3.1:8b), gemma (gemma3:1b)
 #
 # Usage:
 #   ./INSTALL_SUP.sh --M1                    # Config key shorthand

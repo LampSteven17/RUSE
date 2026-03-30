@@ -1,139 +1,151 @@
-# RUSE Deploy TUI - System Context
+# RUSE Deploy CLI - System Context
 
-Load critical context about the RUSE deployment TUI system before working on it. Read all the files listed below, then summarize the current state for the user.
+Load critical context about the shared RUSE deployment CLI infrastructure before working on it. This covers the common CLI framework used by all three deployment types (RUSE SUPs, RAMPART Enterprise, GHOSTS NPCs). For type-specific context, use `/deploy-ruse`, `/deploy-rampart`, or `/deploy-ghosts`.
 
 ## Instructions
 
-Read the following files in order to understand the deployment system:
+Read the following files in order to understand the shared deployment infrastructure:
 
-### Core TUI Files
-1. `deployments/deploy` - Main bash TUI orchestrator (gum-based interactive menu, CLI commands, run_playbook, do_spinup/do_install/do_teardown)
-2. `deployments/lib/monitor.sh` - Event parsing, state tracking, status table rendering, monitoring_loop
+### Python CLI (the orchestrator)
+1. `deployments/cli/__main__.py` - Entry point, argparse, command routing (deploy/teardown/list as separate scripts)
+2. `deployments/cli/config.py` - DeploymentConfig dataclass (loads config.yaml, supports sup/rampart/ghosts types)
+3. `deployments/cli/openstack.py` - OpenStack CLI wrapper with caching (subprocess to `openstack` CLI, sources ~/vxn3kr-bot-rc)
+4. `deployments/cli/ansible_runner.py` - Runs Ansible playbooks, streams + parses output, stateful line parser with task whitelist
+5. `deployments/cli/output.py` - Terminal output helpers (monochrome, ASCII banners, timestamps)
+6. `deployments/cli/ssh_config.py` - SSH config block management (~/.ssh/config with RUSE markers)
 
-### Ansible Integration
-3. `deployments/playbooks/callback_plugins/ruse_events.py` - Callback plugin that emits structured JSONL events for the TUI to consume
-4. `deployments/playbooks/provision-vms.yaml` - VM provisioning playbook
-5. `deployments/playbooks/install-sups.yaml` - SUP installation playbook (stage1 → reboot → stage2)
-6. `deployments/playbooks/install-sups-with-feedback.yaml` - Installation with PHASE feedback configs
-7. `deployments/playbooks/teardown.yaml` - Per-deployment teardown
-8. `deployments/playbooks/teardown-all.yaml` - Global teardown
+### Command modules (shared)
+7. `deployments/cli/commands/teardown.py` - Teardown for all three types (SUP/enterprise/ghosts) + teardown-all
+8. `deployments/cli/commands/list_cmd.py` - List active deployments across all types
+9. `deployments/cli/commands/feedback.py` - PHASE feedback source detection, config generation, per-config-file CLI flags
 
-### Deployment Configs
-9. `deployments/exp-4/config.yaml` - Latest experiment config (25 VMs, feedback evaluation)
-10. `deployments/test/config.yaml` - Test deployment config (4 VMs)
+### Supporting libraries (imported by all command modules)
+10. `deployments/lib/vm_naming.py` - VM naming conventions, prefix generation, parsing, sorting
+11. `deployments/lib/register_experiment.py` - PHASE experiments.json registration
 
-## Architecture Summary
+### Shared Ansible playbooks
+12. `deployments/playbooks/provision-vms.yaml` - Create OpenStack VMs, wait ACTIVE, get IPs, write inventory + SSH config
+13. `deployments/playbooks/teardown.yaml` - Delete servers + volumes for a specific deployment prefix
+14. `deployments/playbooks/teardown-all.yaml` - Delete ALL r-/e-/g-/sup- VMs + volumes + orphans
 
-The deploy system has three layers:
+## Architecture
+
+The deploy system is a Python CLI with three separate entry-point scripts:
 
 ```
-┌──────────────────────────────────────────────────┐
-│  deploy (bash)                                   │
-│  - Interactive gum menu OR CLI subcommands       │
-│  - Manages run IDs (MMDD auto-increment)         │
-│  - Creates run directories with inventory/SSH    │
-│  - Launches ansible-playbook in background       │
-├──────────────────────────────────────────────────┤
-│  monitor.sh (bash, sourced by deploy)            │
-│  - State machine per VM via associative arrays   │
-│  - Incremental JSONL event parsing (dd + jq)     │
-│  - Status table rendering (printf, no ncurses)   │
-│  - 0.5s refresh monitoring_loop                  │
-├──────────────────────────────────────────────────┤
-│  ruse_events.py (Ansible callback plugin)        │
-│  - Intercepts Ansible task results               │
-│  - Parses stdout for VM names, IPs, errors       │
-│  - Writes JSON events to RUSE_EVENT_FILE         │
-│  - Bridge between Ansible and TUI                │
-└──────────────────────────────────────────────────┘
+deployments/
+  deploy                    # #!/bin/bash → exec python3 -m cli deploy "$@"
+  teardown                  # #!/bin/bash → exec python3 -m cli teardown "$@"
+  list                      # #!/bin/bash → exec python3 -m cli list "$@"
+  deploy.legacy             # Old bash script (preserved for reference)
+
+  cli/                      # Python CLI package
+    __main__.py             # argparse routing: deploy/teardown/list
+    config.py               # DeploymentConfig dataclass
+    openstack.py            # OpenStack CLI wrapper
+    ansible_runner.py       # Playbook runner + streaming parser
+    output.py               # Monochrome terminal output
+    ssh_config.py           # SSH config management
+    commands/
+      spinup.py             # ./deploy --ruse        (see /deploy-ruse)
+      rampart.py            # ./deploy --rampart     (see /deploy-rampart)
+      ghosts.py             # ./deploy --ghosts      (see /deploy-ghosts)
+      teardown.py           # ./teardown <target> | ./teardown --all
+      list_cmd.py           # ./list
+      feedback.py           # PHASE feedback resolution + config generation
+
+  playbooks/                # Ansible (infrastructure only, no display)
+    provision-vms.yaml      # Create VMs, get IPs, write inventory
+    install-sups.yaml       # Install SUP agents (see /deploy-ruse)
+    distribute-behavior-configs.yaml  # Deploy PHASE configs (see /deploy-ruse)
+    install-ghosts-api.yaml          # GHOSTS API (see /deploy-ghosts)
+    install-ghosts-clients.yaml      # GHOSTS NPC clients (see /deploy-ghosts)
+    install-rampart-emulation.yaml   # RAMPART emulation (see /deploy-rampart)
+    teardown.yaml           # Per-deployment teardown
+    teardown-all.yaml       # Nuclear teardown (all prefixes)
+
+  lib/                      # Python utilities (imported by CLI)
+    vm_naming.py            # VM naming: r-{dep_id}-{behavior}-{index}
+    register_experiment.py  # PHASE experiments.json
+    enterprise_ssh_config.py # Enterprise SSH config gen (see /deploy-rampart)
+    phase_to_timeline.py    # GHOSTS timeline gen (see /deploy-ghosts)
+    phase_to_user_roles.py  # RAMPART user roles gen (see /deploy-rampart)
 ```
 
-## Key Concepts
+## Three Deployment Types
 
-### VM State Machine
-```
-pending → creating → provisioned → installing → preparing → stage1 → rebooting → stage2 → completed
-             ↓           ↓             ↓           ↓           ↓         ↓          ↓
-           failed      failed        failed      failed      failed    failed     failed
-```
+| Type | Flag | Prefix | Config type | Skill |
+|------|------|--------|-------------|-------|
+| RUSE SUPs | `--ruse` | `r-` | `sup` | `/deploy-ruse` |
+| RAMPART Enterprise | `--rampart` | `e-` | `rampart` | `/deploy-rampart` |
+| GHOSTS NPCs | `--ghosts` | `g-` | `ghosts` | `/deploy-ghosts` |
 
-### State Arrays (bash associative arrays in monitor.sh)
-- `VM_STATUS` - Current state in the state machine
-- `VM_BEHAVIOR` - SUP config (M3, B2.llama, etc.)
-- `VM_FLAVOR` / `VM_HW` - OpenStack flavor / hardware type
-- `VM_IP` - Assigned IP address
-- `VM_ERROR` - Error message (truncated to 60 chars)
-- `VM_PROVISION_START/END` - Timing for provisioning phase
-- `VM_INSTALL_START/END` - Timing for installation phase
-- `VM_FREEZE_TS` - Wall-clock second when steps became terminal
+## CLI Usage (common operations)
 
-### Event Flow
-```
-Ansible task completes
-  → ruse_events.py intercepts via v2_runner_on_ok/failed
-  → Parses task name + stdout for context
-  → Writes JSON event to $RUSE_EVENT_FILE (JSONL)
-  → monitor.sh reads new bytes via dd + jq (incremental)
-  → Updates VM_STATUS arrays
-  → Renders status table via printf
-```
-
-### Event Types (from callback plugin)
-- **Provisioning**: `vm_creating`, `vm_exists`, `vm_active`, `vm_provisioned`, `vm_ip`, `vm_failed`
-- **Installation**: `install_preparing`, `install_stage1`, `install_stage2`, `install_feedback`, `reboot_start`, `reboot_complete`, `install_failed`
-- **Teardown**: `discovery_servers`, `discovery_volumes`, `resource_deleted`, `resource_failed`
-- **Lifecycle**: `playbook_start`, `playbook_end`, `play_start`, `task_start`, `task_ok`, `task_failed`, `recap`
-
-### Status Table Columns
-```
-SUP  #  HW   │ Prov  SSH  Prep  Deps  Boot  Agent  [Fdbk]  │ Time
-```
-Step markers: -- (not started), .. (in progress), ok (done), !! (failed)
-
-### CLI Interface
 ```bash
-./deploy                              # Interactive menu
-./deploy spinup <deployment>          # Provision + install
-./deploy spinup <deployment> --run ID # Explicit run ID
-./deploy install <deployment>/<run>   # Install on existing VMs
-./deploy teardown <deployment>/<run>  # Teardown specific run
-./deploy teardown-all                 # Delete all sup-* VMs
-./deploy list                         # List active deployments
-./deploy preview <deployment>         # Show config preview
+# Deploy (type-specific — see individual skills for details)
+./deploy --ruse                    # SUP baseline
+./deploy --rampart                 # Enterprise baseline
+./deploy --ghosts                  # GHOSTS NPCs baseline
+
+# List all active deployments
+./list
+
+# Teardown
+./teardown ruse-controls-032226210347      # Specific RUSE deployment
+./teardown rampart-controls-032726230919   # Specific RAMPART deployment
+./teardown ghosts-controls-032326180512    # Specific GHOSTS deployment
+./teardown --all                           # Everything (requires confirmation)
 ```
 
-### Run ID System
-- Auto-generated: `MMDD` (e.g., `0216`)
-- Same-day collisions: letter suffixes (`0216a`, `0216b`)
-- Directory structure: `deployments/<name>/runs/<run_id>/`
-- Contains: `inventory.ini`, `ssh_config_snippet.txt`, `phase_ips_config.py`
+## Key Design Decisions
 
-### SSH Config Management
-- ProxyJump through `axes` control node
-- Managed blocks in `~/.ssh/config` with markers:
-  ```
-  # BEGIN RUSE: <deployment>/<run_id>
-  ...
-  # END RUSE: <deployment>/<run_id>
-  ```
+- **Monochrome output** — no ANSI colors, ASCII `####` banners, `[HH:MM:SS]` wall-clock timestamps, `OK`/`FAIL`/`..` markers
+- **Ansible for infrastructure only** — all display logic in Python, playbooks stripped of pause/display tasks
+- **Stateful Ansible parser** — `_LineParser` tracks current task, only shows `changed:` for whitelisted tasks, suppresses internal Ansible noise
+- **SSH agent disabled** — `SSH_AUTH_SOCK=""` + `IdentitiesOnly=yes` everywhere (agent offers too many keys causing auth timeouts)
+- **Python SSH test** — replaced Ansible retry loop (which hangs silently) with Python `concurrent.futures` that prints each attempt in real time
+- **No teardown confirmation** — if you run `./teardown`, you mean it (except `--all`)
+- **Three separate scripts** — `./deploy`, `./teardown`, `./list` instead of subcommands under one script
 
-### Config Format (config.yaml)
-```yaml
-deployment_name: exp-4
-flavor_capacity:
-  v1.14vcpu.28g: 9
-  v100-1gpu.14vcpu.28g: 19
-deployments:
-  - behavior: B3.gemma
-    flavor: v100-1gpu.14vcpu.28g
-    count: 1
+## OpenStack / SSH Details
+
+- All runs locally on mlserv (10.246.118.30), same network as OpenStack API
+- Credentials: `~/vxn3kr-bot-rc` (OS_AUTH_URL, OS_PROJECT_ID, etc.)
+- SSL: `~/openstack_vault_ca.pem` (custom CA)
+- VM prefixes: `r-` (RUSE SUPs), `e-` (enterprise), `g-` (GHOSTS), `sup-` (legacy)
+- VM naming: `r-{dep_id}-{behavior}-{index}` where dep_id = `{name_no_hyphens}{run_id}`
+- Run IDs: `MMDDYYHHmmss` timestamps (second precision)
+- SSH config: managed blocks in `~/.ssh/config` with `# BEGIN/END RUSE:` markers
+
+### SSH Keys by Deployment Type
+
+| Type | OpenStack Keypair | Local Key |
+|------|-------------------|-----------|
+| RUSE SUPs | `bot-desktop` | `~/.ssh/id_ed25519` |
+| GHOSTS NPCs | `bot-desktop` | `~/.ssh/id_ed25519` |
+| RAMPART Enterprise | `enterprise-key` | `~/.ssh/id_rsa` |
+
+## Behavioral Config System (shared concepts)
+
+### Unified feedback flag (all deployment types)
+- `--feedback` → deploy with all PHASE behavioral configs
+
+### PHASE feedback source
+Auto-detected from `~/PHASE/feedback_engine/configs/` (most recent directory matching deploy type). Can target a specific dataset with `--source`.
+
+### Deployment naming pattern
+- `{type}-controls` — Baseline (no feedback)
+- `{type}-feedback-{preset}-{dataset}-{scope}` — Auto-generated feedback deployment
+- On teardown, `*-feedback-*` directories are cleaned up entirely
+
+### Dataset targets (in `feedback.py`)
+```python
+DATASET_TARGETS = {
+    "summer24": "summer24", "sum24": "summer24",
+    "fall24": "fall24",
+    "spring25": "spring25", "spr25": "spring25",
+}
 ```
-
-### Terminal Rendering
-- Uses raw ANSI escape codes (no ncurses/curses)
-- `gum` used only for interactive menus (with stty workaround for onlcr corruption)
-- Fixed layout: 16-line RUSE logo + scroll region below
-- `\033[K` (clear to EOL) on every line for clean refresh
-- Scroll region managed via `\033[18;${LINES}r`
 
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.

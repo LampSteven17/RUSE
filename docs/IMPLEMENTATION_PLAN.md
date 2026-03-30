@@ -29,12 +29,12 @@ This document outlines the implementation approach for the experimental configur
 │   ┌─────────┐           └──────────────┘          └────────────┘    │
 │   │ Browser │           ┌──────────────┐          ┌────────────┐    │
 │   │   Use   │ ───────►  │   Prompts    │ ──────►  │ llama3.1:8b│    │
-│   └─────────┘           │  - Content   │          │ gemma3:4b  │    │
+│   └─────────┘           │  - Content   │          │ gemma3:1b  │    │
 │                         │  - Mechanics │          │ deepseek-r1│    │
 │   ┌─────────┐           └──────────────┘          └────────────┘    │
 │   │  Smol   │           ┌──────────────┐          ┌────────────┐    │
 │   │ Agents  │ ───────►  │   Prompts    │ ──────►  │ llama3.1:8b│    │
-│   └─────────┘           │  - Content   │          │ gemma3:4b  │    │
+│   └─────────┘           │  - Content   │          │ gemma3:1b  │    │
 │                         │  - Mechanics │          │ deepseek-r1│    │
 │                         └──────────────┘          └────────────┘    │
 │                                                                      │
@@ -84,7 +84,7 @@ The only difference is file location (`brains/mchp/` instead of `MCHP/default/py
 | Config | Brain | Augmentations | Model |
 |--------|-------|---------------|-------|
 | B1.llama | BrowserUse | Default prompts | llama3.1:8b |
-| B2.gemma | BrowserUse | Default prompts | gemma3:4b |
+| B2.gemma | BrowserUse | Default prompts | gemma3:1b |
 | B3.deepseek | BrowserUse | Default prompts | deepseek-r1:8b |
 
 **Implementation**: Same prompts, different models. Model is configurable.
@@ -94,7 +94,7 @@ The only difference is file location (`brains/mchp/` instead of `MCHP/default/py
 | Config | Brain | Augmentations | Model |
 |--------|-------|---------------|-------|
 | S1.llama | SmolAgents | Default prompts | llama3.1:8b |
-| S2.gemma | SmolAgents | Default prompts | gemma3:4b |
+| S2.gemma | SmolAgents | Default prompts | gemma3:1b |
 | S3.deepseek | SmolAgents | Default prompts | deepseek-r1:8b |
 
 **Implementation**: Same prompts, different models. Model is configurable.
@@ -121,7 +121,7 @@ DEFAULT_MODEL = "llama3.1:8b"
 # Available models for experiments
 MODELS = {
     "llama": "llama3.1:8b",
-    "gemma": "gemma3:4b",
+    "gemma": "gemma3:1b",
     "deepseek": "deepseek-r1:8b",
 }
 
@@ -355,7 +355,7 @@ MCHP stays as-is. For HYBRID configurations:
 OLLAMA_MODEL=llama3.1:8b python -m BU.default.agent
 
 # B2.gemma - BrowserUse with gemma
-OLLAMA_MODEL=gemma3:4b python -m BU.default.agent
+OLLAMA_MODEL=gemma3:1b python -m BU.default.agent
 
 # B3.deepseek - BrowserUse with deepseek
 OLLAMA_MODEL=deepseek-r1:8b python -m BU.default.agent

@@ -1,0 +1,6 @@
+# Run directories contain deployment state (IPs, passwords, inventory)
+# These are ephemeral and must not be committed.
+*/runs/
+logs/
+__pycache__/
+*.pyc
