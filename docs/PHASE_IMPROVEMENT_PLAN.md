@@ -332,10 +332,10 @@ python -m runners.run_smolagents --loop --model llama --no-phase-timing
 | M3a-llama | MCHP | llama3.1:8b | Tesla | MCHP + BrowserUse content only |
 | M3b-llama | MCHP | llama3.1:8b | Tesla | MCHP + BrowserUse mechanics only |
 | B1-llama | BrowserUse | llama3.1:8b | Tesla/RTX | BrowserUse baseline |
-| B2-gemma | BrowserUse | gemma3:4b | Tesla/RTX | BrowserUse + gemma |
+| B2-gemma | BrowserUse | gemma3:1b | Tesla/RTX | BrowserUse + gemma |
 | B3-deepseek | BrowserUse | deepseek-r1:8b | Tesla/RTX | BrowserUse + deepseek |
 | S1-llama | SmolAgents | llama3.1:8b | Tesla/RTX | SmolAgents baseline |
-| S2-gemma | SmolAgents | gemma3:4b | Tesla/RTX | SmolAgents + gemma |
+| S2-gemma | SmolAgents | gemma3:1b | Tesla/RTX | SmolAgents + gemma |
 | S3-deepseek | SmolAgents | deepseek-r1:8b | Tesla/RTX | SmolAgents + deepseek |
 
 ### Planned New Configurations (Exp2)

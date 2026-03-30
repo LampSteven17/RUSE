@@ -54,7 +54,7 @@ The deepseek-r1:8b model successfully produces output in the format SmolAgents e
 
 ### Why Llama and Gemma Fail
 
-The llama3.1:8b and gemma3:4b models frequently produce responses that:
+The llama3.1:8b and gemma3:1b models frequently produce responses that:
 - Don't follow the expected Python code block format
 - Output ellipsis (`...`) instead of actual code
 - Generate malformed or incomplete code snippets

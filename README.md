@@ -35,7 +35,7 @@ cd RUSE
 # Install using config keys (creates systemd service)
 ./INSTALL_SUP.sh --M1                      # Pure MCHP (no LLM)
 ./INSTALL_SUP.sh --S1.llama                # SmolAgents + llama3.1:8b
-./INSTALL_SUP.sh --B2.gemma                # BrowserUse + gemma3:4b
+./INSTALL_SUP.sh --B2.gemma                # BrowserUse + gemma3:1b
 ./INSTALL_SUP.sh --M2.llama                # MCHP + SmolAgents augmentation
 ./INSTALL_SUP.sh --S1.llama+               # SmolAgents + PHASE timing
 
@@ -105,10 +105,10 @@ All configurations from `docs/EXPERIMENTAL_PLAN.md`:
 | `--M3a.llama` | MCHP | BrowserUse | MCHP | llama3.1:8b |
 | `--M3b.llama` | MCHP | MCHP | BrowserUse | llama3.1:8b |
 | `--B1.llama` | BrowserUse | BrowserUse | BrowserUse | llama3.1:8b |
-| `--B2.gemma` | BrowserUse | BrowserUse | BrowserUse | gemma3:4b |
+| `--B2.gemma` | BrowserUse | BrowserUse | BrowserUse | gemma3:1b |
 | `--B3.deepseek` | BrowserUse | BrowserUse | BrowserUse | deepseek-r1:8b |
 | `--S1.llama` | SmolAgents | SmolAgents | SmolAgents | llama3.1:8b |
-| `--S2.gemma` | SmolAgents | SmolAgents | SmolAgents | gemma3:4b |
+| `--S2.gemma` | SmolAgents | SmolAgents | SmolAgents | gemma3:1b |
 | `--S3.deepseek` | SmolAgents | SmolAgents | SmolAgents | deepseek-r1:8b |
 
 ### POST-PHASE (+ suffix = PHASE timing + enhanced prompts)
@@ -155,7 +155,7 @@ All configurations from `docs/EXPERIMENTAL_PLAN.md`:
 |-----|-------|---------|
 | `none` | (no LLM) | M1 |
 | `llama` | llama3.1:8b | Default for LLM configs |
-| `gemma` | gemma3:4b | B2, S2 series |
+| `gemma` | gemma3:1b | B2, S2 series |
 | `deepseek` | deepseek-r1:8b | B3, S3 series |
 
 ---
@@ -192,7 +192,7 @@ The codebase uses a **Brain → Augmentations → Model** architecture:
 
 1. **Brain**: Core execution engine (MCHP, SmolAgents, BrowserUse)
 2. **Augmentations**: Optional LLM content/mechanics controllers
-3. **Model**: LLM selection (llama3.1:8b, gemma3:4b, deepseek-r1:8b)
+3. **Model**: LLM selection (llama3.1:8b, gemma3:1b, deepseek-r1:8b)
 
 ### Configuration Keys
 

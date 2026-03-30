@@ -18,13 +18,14 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 try:
     import duckdb
@@ -34,21 +35,53 @@ except ImportError as e:
 
 
 # ============================================================================
+# Output helpers (child-mode awareness for PHASE.py pipeline)
+# ============================================================================
+
+_CHILD_MODE = bool(os.environ.get("PHASE_PIPELINE_STEP"))
+
+def _banner(msg):
+    """Top-level script banner. Suppressed in child mode."""
+    if not _CHILD_MODE:
+        print("=" * 60)
+        print(msg)
+        print("=" * 60)
+
+def _section(msg):
+    """Section header within the script."""
+    if _CHILD_MODE:
+        print(f"    {msg}")
+    else:
+        print(f"\n{'='*60}")
+        print(msg)
+        print("=" * 60)
+
+def _out(msg=""):
+    """Standard output line. Indented in child mode."""
+    if _CHILD_MODE:
+        print(f"    {msg}" if msg else "")
+    else:
+        print(msg)
+
+
+# ============================================================================
 # Configuration
 # ============================================================================
 
 BASE_OUTPUT_DIR = Path("/mnt/AXES2U1/SUP_LOGS")
 DEPLOYMENTS_DIR = Path("/home/ubuntu/RUSE/deployments")
+PHASE_EXPERIMENTS_FILE = Path("/mnt/AXES2U1/experiments.json")
 REMOTE_LOG_BASE = "/opt/ruse/deployed_sups"
-SSH_OPTIONS = "-o ProxyJump=axes -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o BatchMode=yes"
+SSH_OPTIONS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519"
 SSH_USER = "ubuntu"
 
 
 # ============================================================================
 # EXPERIMENT CONFIGURATIONS
 # ============================================================================
-# Keys MUST match deployment directory names under deployments/.
-# This is metadata only — discovery comes from inventory.ini files.
+# Loaded from shared experiment registry (/mnt/AXES2U1/experiments.json).
+# Keys in experiments.json match RUSE deployment directory names directly.
+# Only entries with SUP_ IP labels (i.e., RUSE deployments) are included.
 
 @dataclass
 class ExperimentConfig:
@@ -59,23 +92,47 @@ class ExperimentConfig:
     behaviors: List[str]
 
 
-EXPERIMENTS = {
-    "sup-controls": ExperimentConfig(
-        name="sup-controls",
-        description="Baseline controls across hardware tiers (15 VMs, V100/RTX/CPU)",
-        vm_count=15,
-        behaviors=[
-            # Controls (non-GPU)
-            "C0", "M0", "M1",
-            # V100 baselines
-            "B0.llama", "B0.gemma", "S0.llama", "S0.gemma",
-            # CPU baselines (no GPU)
-            "B0C.llama", "B0C.gemma", "S0C.llama", "S0C.gemma",
-            # RTX baselines (RTX 2080 Ti-A)
-            "B0R.llama", "B0R.gemma", "S0R.llama", "S0R.gemma",
-        ],
-    ),
-}
+def load_experiment_configs(phase_config: Path) -> dict:
+    """Load experiment configs from PHASE experiments.json.
+
+    Filters for entries with SUP_ IP labels (i.e., RUSE deployments).
+    Keys match RUSE deployment directory names.
+    """
+    if not phase_config.exists():
+        return {}
+
+    try:
+        with open(phase_config) as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+
+    configs = {}
+    for key, entry in data.items():
+        if key.startswith("_"):
+            continue
+
+        # Only include entries with agent IPs (r- RUSE, g- GHOSTS, e- Enterprise, or legacy SUP_)
+        ips = entry.get("ips", {})
+        behaviors = []
+        for label in ips.values():
+            if label.startswith("r-") or label.startswith("g-") or label.startswith("e-") or label.startswith("SUP_"):
+                # Extract behavior: strip prefix+dep_id, take everything before last -N instance
+                behaviors.append(label.rsplit("-", 1)[0])
+        if not behaviors:
+            continue
+
+        configs[key] = ExperimentConfig(
+            name=key,
+            description=entry.get("description", key),
+            vm_count=len(ips),
+            behaviors=behaviors,
+        )
+
+    return configs
+
+
+EXPERIMENTS = load_experiment_configs(PHASE_EXPERIMENTS_FILE)
 
 
 # ============================================================================
@@ -92,30 +149,17 @@ class VMInfo:
 
 
 @dataclass
-class EventMetadata:
-    """Metadata to enrich events during loading."""
-    experiment_name: str
-    vm_hostname: str
-    vm_ip: str
-    sup_behavior: str
-    sup_flavor: str
-    source_file: str
-    collection_timestamp: datetime
-
-
-@dataclass
 class CollectionResult:
     """Result of collecting logs from a single VM."""
     experiment: str
     vm: VMInfo
-    files_collected: int = 0
     events_collected: int = 0
     errors: List[str] = field(default_factory=list)
     success: bool = False
 
 
 # ============================================================================
-# DuckDB Schema - Simplified for JSONL only
+# DuckDB Schema
 # ============================================================================
 
 CREATE_EVENTS_TABLE = """
@@ -134,7 +178,6 @@ CREATE TABLE IF NOT EXISTS events (
     sup_flavor           VARCHAR,
     source_file          VARCHAR,
     collection_timestamp TIMESTAMP,
-    line_number          INTEGER,
     -- Extracted fields for fast querying
     duration_ms          INTEGER,
     success              BOOLEAN,
@@ -265,20 +308,8 @@ def parse_inventory(inventory_path: Path) -> List[VMInfo]:
 
 
 # ============================================================================
-# SSH/SCP Operations
+# SSH/Rsync Operations
 # ============================================================================
-
-def ssh_command(ip: str, remote_cmd: str, timeout: int = 60) -> Tuple[bool, str]:
-    """Execute SSH command and return (success, output)."""
-    cmd = f"ssh {SSH_OPTIONS} {SSH_USER}@{ip} '{remote_cmd}'"
-    try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        return result.returncode == 0, result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        return False, "SSH timeout"
-    except Exception as e:
-        return False, str(e)
-
 
 def collect_logs_from_vm(
     vm: VMInfo,
@@ -286,22 +317,25 @@ def collect_logs_from_vm(
     output_dir: Path,
     dry_run: bool = False
 ) -> CollectionResult:
-    """Collect JSONL logs from a VM via rsync (single SSH connection)."""
+    """Collect JSONL logs from a VM via SSH cat into a single file."""
     result = CollectionResult(experiment=experiment, vm=vm)
 
     remote_log_dir = f"{REMOTE_LOG_BASE}/{vm.sup_behavior}/logs/"
 
     if dry_run:
-        list_cmd = f"ls -1 {remote_log_dir}*.jsonl 2>/dev/null || echo ''"
-        success, output = ssh_command(vm.ip, list_cmd)
-        if not success:
-            result.success = True  # No logs dir is not an error
-            return result
-        remote_files = [
-            f for f in output.strip().split('\n')
-            if f.strip() and f.endswith('.jsonl') and 'latest.jsonl' not in f
-        ]
-        result.files_collected = len(remote_files)
+        cmd = f"ssh {SSH_OPTIONS} {SSH_USER}@{vm.ip} 'ls -1 {remote_log_dir}*.jsonl 2>/dev/null || echo \"\"'"
+        try:
+            proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+            if proc.returncode != 0:
+                result.success = True  # No logs dir is not an error
+                return result
+            remote_files = [
+                f for f in proc.stdout.strip().split('\n')
+                if f.strip() and f.endswith('.jsonl') and 'latest.jsonl' not in f
+            ]
+            result.events_collected = len(remote_files)  # approximate: 1 session file ≈ many events
+        except (subprocess.TimeoutExpired, Exception):
+            pass
         result.success = True
         return result
 
@@ -309,30 +343,37 @@ def collect_logs_from_vm(
     vm_output_dir = output_dir / experiment / vm.hostname
     vm_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Single rsync: 1 SSH connection instead of N separate SCP calls
-    rsync_cmd = (
-        f'rsync -az '
-        f'--exclude="latest.jsonl" --include="*.jsonl" --exclude="*" '
-        f'-e "ssh {SSH_OPTIONS}" '
-        f'{SSH_USER}@{vm.ip}:{remote_log_dir} {vm_output_dir}/'
+    # Single SSH, single stream: concatenate all JSONL on remote, write one file to NFS.
+    # Identical path for 5 files or 22K files — no per-file overhead on either end.
+    out_file = vm_output_dir / "events.jsonl"
+    cat_cmd = (
+        f'ssh {SSH_OPTIONS} {SSH_USER}@{vm.ip} '
+        f'"find {remote_log_dir} -maxdepth 1 -name \'*.jsonl\' ! -name \'latest.jsonl\' -print0 '
+        f'| xargs -0 cat 2>/dev/null" '
+        f'> {out_file}'
     )
 
     try:
         proc = subprocess.run(
-            rsync_cmd, shell=True, capture_output=True, text=True, timeout=300
+            cat_cmd, shell=True, capture_output=True, text=True
         )
-        if proc.returncode == 0:
-            result.files_collected = len(list(vm_output_dir.glob("*.jsonl")))
+        if proc.returncode == 0 and out_file.exists() and out_file.stat().st_size > 0:
+            # Count events (lines) in the combined file
+            with open(out_file) as f:
+                result.events_collected = sum(1 for _ in f)
             result.success = True
-        elif proc.returncode in (23, 24):
-            # 23=partial transfer (source dir may not exist), 24=files vanished
-            result.files_collected = len(list(vm_output_dir.glob("*.jsonl")))
+        elif proc.returncode == 0:
+            out_file.unlink(missing_ok=True)
             result.success = True
         else:
-            result.errors.append(f"rsync failed (rc={proc.returncode}): {proc.stderr.strip()}")
-    except subprocess.TimeoutExpired:
-        result.errors.append("rsync timeout")
+            out_file.unlink(missing_ok=True)
+            stderr = proc.stderr.strip()
+            if "No such file" in stderr or "No match" in stderr:
+                result.success = True
+            else:
+                result.errors.append(f"ssh cat failed (rc={proc.returncode}): {stderr}")
     except Exception as e:
+        out_file.unlink(missing_ok=True)
         result.errors.append(str(e))
 
     result.success = result.success or result.files_collected > 0
@@ -347,7 +388,6 @@ def init_database(db_path: Path) -> duckdb.DuckDBPyConnection:
     """Initialize DuckDB database with schema."""
     conn = duckdb.connect(str(db_path))
     conn.execute(CREATE_EVENTS_TABLE)
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS event_seq START 1")
     conn.execute(CREATE_INDEXES)
     return conn
 
@@ -380,7 +420,7 @@ def load_events_to_duckdb(
 
             jsonl_files = sorted([
                 str(f) for f in vm_dir.glob("*.jsonl")
-                if not f.is_symlink()
+                if not f.is_symlink() and f.name != "latest.jsonl"
             ])
             if not jsonl_files:
                 continue
@@ -410,9 +450,8 @@ def load_events_to_duckdb(
                     '{vm_ip}' as vm_ip,
                     '{sup_behavior}' as sup_behavior,
                     '{sup_flavor}' as sup_flavor,
-                    regexp_extract(filename, '[^/]+$') as source_file,
+                    NULL as source_file,
                     '{collection_ts}'::TIMESTAMP as collection_timestamp,
-                    NULL::INTEGER as line_number,
                     TRY_CAST(json_extract_string(details, '$.duration_ms') AS INTEGER) as duration_ms,
                     TRY_CAST(json_extract_string(details, '$.success') AS BOOLEAN) as success,
                     COALESCE(
@@ -439,7 +478,6 @@ def load_events_to_duckdb(
                         workflow: 'VARCHAR',
                         details: 'JSON'
                     }},
-                    filename=true,
                     ignore_errors=true
                 )
             """
@@ -451,25 +489,26 @@ def load_events_to_duckdb(
             event_id += loaded
             total_loaded += loaded
 
-            if loaded > 0:
+            if loaded > 0 and not _CHILD_MODE:
                 print(f"    {vm_dir.name}: {loaded:,} events")
 
-    print(f"  Total: {total_loaded:,} events")
+    if not _CHILD_MODE:
+        print(f"  Total: {total_loaded:,} events")
     return total_loaded
 
 
 def create_analysis_views(conn: duckdb.DuckDBPyConnection):
     """Create analysis views for querying."""
 
-    # Workflow analysis view
-    print("  Creating workflow_analysis view...")
+    if not _CHILD_MODE:
+        print("  Creating analysis views...")
+
     conn.execute("""
         CREATE OR REPLACE VIEW workflow_analysis AS
         SELECT
             id, timestamp, session_id, agent_type, event_type, workflow,
             details, experiment_name, vm_hostname, sup_behavior, sup_flavor,
             duration_ms, success, error_message, model,
-            -- Categorize workflows
             CASE
                 WHEN lower(workflow) LIKE '%search%' OR lower(workflow) LIKE '%google%' THEN 'web_search'
                 WHEN lower(workflow) LIKE '%youtube%' OR lower(workflow) LIKE '%video%' THEN 'youtube'
@@ -487,8 +526,6 @@ def create_analysis_views(conn: duckdb.DuckDBPyConnection):
         WHERE workflow IS NOT NULL
     """)
 
-    # LLM analysis view
-    print("  Creating llm_analysis view...")
     conn.execute("""
         CREATE OR REPLACE VIEW llm_analysis AS
         SELECT
@@ -496,7 +533,6 @@ def create_analysis_views(conn: duckdb.DuckDBPyConnection):
             experiment_name, vm_hostname, sup_behavior, model,
             duration_ms, success, error_message, action,
             input_tokens, output_tokens, total_tokens, llm_output,
-            -- Tokens per second
             CASE
                 WHEN event_type = 'llm_response' AND duration_ms > 0 AND output_tokens IS NOT NULL
                 THEN ROUND(output_tokens * 1000.0 / duration_ms, 2)
@@ -506,8 +542,6 @@ def create_analysis_views(conn: duckdb.DuckDBPyConnection):
         WHERE event_type IN ('llm_request', 'llm_response', 'llm_error')
     """)
 
-    # LLM performance summary view
-    print("  Creating llm_performance view...")
     conn.execute("""
         CREATE OR REPLACE VIEW llm_performance AS
         SELECT
@@ -533,8 +567,6 @@ def create_analysis_views(conn: duckdb.DuckDBPyConnection):
         GROUP BY experiment_name, sup_behavior, model
     """)
 
-    # Session summary view
-    print("  Creating session_summary view...")
     conn.execute("""
         CREATE OR REPLACE VIEW session_summary AS
         SELECT
@@ -559,39 +591,6 @@ def create_analysis_views(conn: duckdb.DuckDBPyConnection):
 
 
 # ============================================================================
-# Pre-flight Checks
-# ============================================================================
-
-def preflight_checks(dry_run: bool = False) -> List[str]:
-    """Run pre-flight checks. Returns list of issues."""
-    issues = []
-
-    if not dry_run:
-        if not BASE_OUTPUT_DIR.parent.exists():
-            issues.append(f"NFS mount not accessible: {BASE_OUTPUT_DIR.parent}")
-        else:
-            test_file = BASE_OUTPUT_DIR.parent / ".write_test"
-            try:
-                test_file.touch()
-                test_file.unlink()
-            except Exception as e:
-                issues.append(f"NFS mount not writable: {e}")
-
-    result = subprocess.run(
-        "ssh -o ConnectTimeout=10 -o BatchMode=yes axes echo ok",
-        shell=True, capture_output=True, timeout=15
-    )
-    if result.returncode != 0:
-        issues.append("Cannot SSH to axes jump host")
-
-    all_runs = discover_runs(DEPLOYMENTS_DIR)
-    if not all_runs:
-        issues.append(f"No deployments with inventory.ini found in {DEPLOYMENTS_DIR}")
-
-    return issues
-
-
-# ============================================================================
 # Manifest Generation
 # ============================================================================
 
@@ -610,7 +609,7 @@ def write_manifest(
         "summary": {
             "total_vms": len(results),
             "successful_vms": sum(1 for r in results if r.success),
-            "total_files": sum(r.files_collected for r in results),
+            "total_events_collected": sum(r.events_collected for r in results),
             "total_errors": sum(len(r.errors) for r in results)
         }
     }
@@ -623,7 +622,7 @@ def write_manifest(
             "hostname": result.vm.hostname,
             "ip": result.vm.ip,
             "sup_behavior": result.vm.sup_behavior,
-            "files_collected": result.files_collected,
+            "events_collected": result.events_collected,
             "success": result.success,
             "errors": result.errors
         })
@@ -666,7 +665,7 @@ def resolve_experiments(
             # Bare name — pick latest run
             candidates = runs_by_deploy[exp]
             run_id, inv_path = candidates[-1]  # sorted, so last = latest
-            if run_id:
+            if run_id and not _CHILD_MODE:
                 print(f"  Resolved {exp} -> {exp}/{run_id}")
             resolved.append((exp, run_id, inv_path))
         elif exp in EXPERIMENTS:
@@ -712,7 +711,6 @@ Examples:
     parser.add_argument('--parallel', type=int, default=8, help='Parallel SSH connections')
     parser.add_argument('--skip-load', action='store_true', help='Skip DuckDB loading')
     parser.add_argument('--db-name', type=str, default=None, help='Custom database name (overrides convention)')
-    parser.add_argument('--clean', action='store_true', default=True, help='Delete and rebuild database (default)')
     parser.add_argument('--append', action='store_true', help='Append to existing database instead of rebuilding')
     args = parser.parse_args()
 
@@ -720,19 +718,7 @@ Examples:
         list_experiments()
         return 0
 
-    print("=" * 60)
-    print("SUP Log Collection")
-    print("=" * 60)
-
-    # Pre-flight checks
-    print("\nRunning pre-flight checks...")
-    issues = preflight_checks(args.dry_run)
-    if issues:
-        print("\nPre-flight checks FAILED:")
-        for issue in issues:
-            print(f"  - {issue}")
-        return 1
-    print("  All checks passed!")
+    _banner("SUP Log Collection")
 
     # Discover all deployment runs
     all_runs = discover_runs(DEPLOYMENTS_DIR)
@@ -754,14 +740,15 @@ Examples:
         return 1
 
     # Show what we're collecting
-    print(f"\nDeployments to process:")
-    for deploy_name, run_id, _ in resolved:
-        tag = f"{deploy_name}-{run_id}" if run_id else deploy_name
-        cfg = EXPERIMENTS.get(deploy_name)
-        if cfg:
-            print(f"  {tag}: {cfg.description} ({cfg.vm_count} VMs)")
-        else:
-            print(f"  {tag}: (discovered from inventory)")
+    if not _CHILD_MODE:
+        print(f"\nDeployments to process:")
+        for deploy_name, run_id, _ in resolved:
+            tag = f"{deploy_name}-{run_id}" if run_id else deploy_name
+            cfg = EXPERIMENTS.get(deploy_name)
+            if cfg:
+                print(f"  {tag}: {cfg.description} ({cfg.vm_count} VMs)")
+            else:
+                print(f"  {tag}: (discovered from inventory)")
 
     # Setup directories
     collection_date = datetime.now().strftime("%Y-%m-%d")
@@ -784,44 +771,34 @@ Examples:
     db_path = BASE_OUTPUT_DIR / db_name
     manifest_path = BASE_OUTPUT_DIR / db_name.replace('.duckdb', '_manifest.json')
 
-    # --append disables the default --clean behavior
-    clean = args.clean and not args.append
+    rebuild = not args.append
 
-    print(f"\nDatabase: {db_path}")
-    if db_path.exists():
-        if clean:
-            print(f"  Status: EXISTS (will rebuild)")
-        else:
-            print(f"  Status: EXISTS (will append)")
-
-    # Handle --clean (default)
-    if clean and not args.dry_run:
+    if not _CHILD_MODE:
+        print(f"\nDatabase: {db_path}")
         if db_path.exists():
-            print(f"\n[--clean] Deleting: {db_path}")
-            db_path.unlink()
-        if manifest_path.exists():
-            manifest_path.unlink()
-        local_tmp = Path("/tmp") / db_name
-        if local_tmp.exists():
-            local_tmp.unlink()
+            print(f"  Status: EXISTS ({'will rebuild' if rebuild else 'will append'})")
+
+    # Clean existing DB if rebuilding
+    if rebuild and not args.dry_run:
+        for p in (db_path, manifest_path):
+            if p.exists():
+                p.unlink()
 
     if not args.dry_run:
         BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         raw_dir.mkdir(parents=True, exist_ok=True)
 
-    # Phase 1: Collect logs
+    # Collect logs from VMs
     all_results: List[CollectionResult] = []
     vm_info_map: Dict[str, VMInfo] = {}
 
-    print(f"\n{'='*60}")
-    print("Phase 1: Collecting JSONL logs from VMs")
-    print("=" * 60)
+    _section("Collecting JSONL logs from VMs")
 
     for deploy_name, run_id, inv_path in resolved:
         tag = f"{deploy_name}-{run_id}" if run_id else deploy_name
         vms = parse_inventory(inv_path)
 
-        print(f"\n[{tag}] Found {len(vms)} VMs")
+        _out(f"[{tag}] Found {len(vms)} VMs")
 
         if not vms:
             continue
@@ -840,83 +817,73 @@ Examples:
                 all_results.append(result)
 
                 status = "OK" if result.success else "FAILED"
-                files_str = f"{result.files_collected} files" if result.files_collected else "no JSONL"
-                print(f"  {result.vm.hostname}: {status} ({files_str})")
+                events_str = f"{result.events_collected:,} events" if result.events_collected else "no JSONL"
+                _out(f"  {result.vm.hostname}: {status} ({events_str})")
 
                 if result.errors:
                     for err in result.errors:
-                        print(f"    ERROR: {err}")
+                        _out(f"    ERROR: {err}")
 
     # Summary
-    total_files = sum(r.files_collected for r in all_results)
+    total_events_collected = sum(r.events_collected for r in all_results)
     successful_vms = sum(1 for r in all_results if r.success)
 
-    print(f"\n{'='*60}")
-    print("Collection Summary")
-    print("=" * 60)
-    print(f"  VMs processed: {len(all_results)}")
-    print(f"  VMs successful: {successful_vms}")
-    print(f"  JSONL files collected: {total_files}")
+    if _CHILD_MODE:
+        _out(f"{successful_vms}/{len(all_results)} VMs, {total_events_collected:,} events collected")
+    else:
+        _section("Collection Summary")
+        print(f"  VMs processed: {len(all_results)}")
+        print(f"  VMs successful: {successful_vms}")
+        print(f"  Events collected: {total_events_collected:,}")
 
     if args.dry_run:
         print("\n[DRY RUN] No files were actually collected.")
         return 0
 
-    if total_files == 0:
-        print("\nNo JSONL files found. Nothing to load.")
+    if total_events_collected == 0:
+        print("\nNo JSONL events found. Nothing to load.")
         return 0
 
     if args.skip_load:
         print("\n[--skip-load] Skipping DuckDB loading.")
         return 0
 
-    # Phase 2: Load into DuckDB
-    print(f"\n{'='*60}")
-    print("Phase 2: Loading into DuckDB")
-    print("=" * 60)
+    # Load into DuckDB (directly on NFS)
+    _section("Loading into DuckDB")
 
-    import shutil
-    local_db_path = Path("/tmp") / db_name
-    print(f"  Building locally: {local_db_path}")
-    print(f"  Final destination: {db_path}")
-
-    conn = init_database(local_db_path)
+    conn = init_database(db_path)
 
     # Build experiment tags for loading
     exp_tags = [f"{d}-{r}" if r else d for d, r, _ in resolved]
 
-    print("\n  Loading JSONL events...")
+    if not _CHILD_MODE:
+        print(f"\n  Loading JSONL events...")
     total_events = load_events_to_duckdb(conn, raw_dir, exp_tags, vm_info_map)
-    print(f"  Events loaded: {total_events:,}")
+    _out(f"  Events loaded: {total_events:,}")
 
-    print("\n  Creating analysis views...")
     create_analysis_views(conn)
-
-    # Copy to NFS
     conn.close()
-    print(f"\n  Copying to NFS: {db_path}")
-    shutil.copy2(local_db_path, db_path)
-    local_db_path.unlink()
 
     # Write manifest
     write_manifest(manifest_path, all_results, collection_date, total_events)
-    print(f"  Manifest: {manifest_path}")
 
     # Final summary
-    print(f"\n{'='*60}")
-    print("Collection Complete!")
-    print("=" * 60)
-    print(f"  Database: {db_path}")
-    print(f"  Events: {total_events:,}")
-    print(f"\nViews available:")
-    print(f"  workflow_analysis  - Workflows with categories")
-    print(f"  llm_analysis       - LLM events with tokens/sec")
-    print(f"  llm_performance    - Aggregate LLM metrics by model/SUP")
-    print(f"  session_summary    - Session-level metrics")
-    print(f"\nExample queries:")
-    print(f"  duckdb {db_path}")
-    print(f"  SELECT sup_behavior, event_type, COUNT(*) FROM events GROUP BY 1, 2 ORDER BY 1, 3 DESC;")
-    print(f"  SELECT * FROM llm_performance;")
+    if _CHILD_MODE:
+        _out(f"  Database: {db_path.name} ({total_events:,} events)")
+    else:
+        _section("Collection Complete!")
+        print(f"  Database: {db_path}")
+        print(f"  Events: {total_events:,}")
+        print(f"  Manifest: {manifest_path}")
+        print(f"\nViews available:")
+        print(f"  workflow_analysis  - Workflows with categories")
+        print(f"  llm_analysis       - LLM events with tokens/sec")
+        print(f"  llm_performance    - Aggregate LLM metrics by model/SUP")
+        print(f"  session_summary    - Session-level metrics")
+        print(f"\nExample queries:")
+        print(f"  duckdb {db_path}")
+        print(f"  SELECT sup_behavior, event_type, COUNT(*) FROM events GROUP BY 1, 2 ORDER BY 1, 3 DESC;")
+        print(f"  SELECT * FROM llm_performance;")
 
     return 0
 

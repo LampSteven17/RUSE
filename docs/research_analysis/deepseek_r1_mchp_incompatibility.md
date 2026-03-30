@@ -86,7 +86,7 @@ These prompts give the reasoning model enough context to produce meaningful resp
 
 ## Model Compatibility Matrix
 
-| Brain | llama3.1:8b | gemma3:4b | deepseek-r1:8b |
+| Brain | llama3.1:8b | gemma3:1b | deepseek-r1:8b |
 |-------|-------------|-----------|----------------|
 | MCHP (M1/M2) | Working | Working | **FAILS** |
 | BrowserUse (B1/B2) | Working | Working | Working |
