@@ -1,0 +1,769 @@
+"""RAMPART enterprise deployment command."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+from .. import output
+from ..ansible_runner import AnsibleRunner, default_event_handler
+from ..config import DeploymentConfig
+from ..ssh_config import install_ssh_config
+
+
+def run_rampart_spinup(
+    config_name: str | None,
+    deploy_dir: Path,
+    behavior_source: str | None = None,
+    configs_spec: str | None = None,
+) -> int:
+    """Deploy RAMPART enterprise network."""
+    # If feedback args given but config is rampart-controls, generate feedback config
+    config_name = config_name or "rampart-controls"
+    if behavior_source and config_name == "rampart-controls":
+        from .feedback import generate_rampart_feedback_config
+        config_name = generate_rampart_feedback_config(
+            Path(behavior_source), configs_spec or "all", deploy_dir,
+        )
+
+    config_dir = _find_rampart_config(config_name, deploy_dir)
+    if not config_dir:
+        output.error("ERROR: No RAMPART deployment config found")
+        return 1
+
+    deployment = config_dir.name
+    config = DeploymentConfig.load(config_dir / "config.yaml")
+    wdir = config.enterprise_workflow_dir()
+
+    run_id = time.strftime("%m%d%y%H%M%S")
+    run_dir = config_dir / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    ent_log = run_dir / "enterprise.log"
+
+    # Build hash-based VM prefix (5-char MD5 for NetBIOS limit)
+    dep_id = _make_dep_id(deployment, run_id)
+    ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
+    ent_prefix = f"e-{ent_hash}-"
+
+    # Header
+    output.banner(f"DEPLOY: RAMPART ({deployment})")
+    output.info(f"  Workflow:  {wdir}")
+    output.info(f"  Run ID:    {run_id}")
+    output.info(f"  VM prefix: {ent_prefix}*")
+    if behavior_source:
+        output.info(f"  Feedback:  {behavior_source}")
+    output.info("")
+
+    # Snapshot config
+    shutil.copy2(config_dir / "config.yaml", run_dir / "config.yaml")
+
+    # Create prefixed enterprise config + per-deployment cloud config
+    _create_prefixed_config(config, ent_prefix, wdir, run_dir)
+    enterprise_url = _create_prefixed_cloud_config(config, ent_hash, wdir, run_dir)
+    output.info(f"  DNS zone:  {enterprise_url}")
+
+    # Save zone name for scoped teardown
+    (run_dir / "dns_zone.txt").write_text(enterprise_url)
+
+    rc_file = Path.home() / "vxn3kr-bot-rc"
+
+    # Step 1: venv
+    output.info("[1/5] Setting up environment...")
+    if not _ensure_venv(wdir):
+        output.error("FAIL: could not set up venv")
+        return 1
+    output.info("  venv ready")
+
+    # Step 2: Provision VMs
+    output.info("[2/5] Provisioning VMs (deploy-nodes.py)...")
+    ok = _ent_run(
+        wdir, rc_file,
+        ["python3", "deploy-nodes.py",
+         "-c", str(run_dir / "cloud-config-prefixed.json"),
+         "-e", str(run_dir / "enterprise-config-prefixed.json")],
+        log_file=ent_log,
+    )
+    if not ok:
+        output.error("FAIL: VM provisioning failed")
+        return 1
+
+    # Copy deploy output + generate SSH config
+    _copy_if_exists(wdir / "deploy-output.json", run_dir / "deploy-output.json")
+    deploy_output = run_dir / "deploy-output.json"
+    if deploy_output.exists():
+        _generate_ssh_config(deploy_output, deployment, run_id, run_dir, deploy_dir)
+
+    # Step 3: Configure VMs
+    output.info("[3/5] Configuring VMs (post-deploy.py)...")
+    ok = _ent_run(
+        wdir, rc_file,
+        ["python3", "post-deploy.py", "deploy-output.json"],
+        log_file=ent_log,
+    )
+    if not ok:
+        output.error("FAIL: VM configuration failed")
+        return 1
+
+    # Generate PHASE-informed user roles if feedback source provided
+    user_roles_file = config.enterprise_user_roles()
+    enterprise_config_file = config.enterprise_config_file()
+
+    if behavior_source:
+        output.info("  Generating PHASE-informed user roles...")
+        feedback_result = _generate_feedback_user_roles(
+            behavior_source=Path(behavior_source),
+            baseline_user_roles=wdir / config.enterprise_user_roles(),
+            enterprise_config=run_dir / "enterprise-config-prefixed.json",
+            output_dir=run_dir,
+        )
+        if feedback_result:
+            # Use absolute paths (simulate-logins runs from wdir, not run_dir)
+            user_roles_file = str(feedback_result["user_roles_path"])
+            enterprise_config_file = str(feedback_result["enterprise_config_path"])
+            output.info(f"  Generated {feedback_result['role_count']} per-node roles")
+        else:
+            output.info("  WARNING: Could not generate feedback roles, using baseline")
+
+    # Step 4: Generate login schedule
+    output.info("[4/5] Generating login schedule (simulate-logins.py)...")
+    ok = _ent_run(
+        wdir, rc_file,
+        ["python3", "simulate-logins.py",
+         user_roles_file,
+         enterprise_config_file,
+         "post-deploy-output.json"],
+        log_file=ent_log,
+    )
+    if not ok:
+        output.error("FAIL: Login schedule generation failed")
+        return 1
+
+    # Copy outputs before step 5 (needed for inventory generation)
+    _copy_if_exists(wdir / "post-deploy-output.json", run_dir / "post-deploy-output.json")
+    _copy_if_exists(wdir / "logins.json", run_dir / "logins.json")
+    (run_dir / "deployment_type").write_text("rampart")
+
+    # Step 5: Deploy autonomous emulation services on endpoint VMs
+    output.info("[5/5] Deploying emulation services...")
+    emulation_inventory = run_dir / "rampart-emulation-inventory.ini"
+    endpoint_count = _generate_emulation_inventory(
+        run_dir, ent_prefix, emulation_inventory,
+    )
+
+    if endpoint_count > 0 and emulation_inventory.exists():
+        # Linux endpoints: Ansible playbook (systemd service)
+        runner = AnsibleRunner(deploy_dir / "playbooks", deploy_dir / "logs")
+        emu_result = runner.run_playbook(
+            "install-rampart-emulation.yaml",
+            emulation_inventory,
+            on_event=default_event_handler,
+        )
+        if emu_result.rc != 0:
+            output.info(f"  WARNING: Some Linux emulation services may have failed")
+            output.info(f"  Log: {emu_result.log_path}")
+
+        # Windows endpoints: direct SSH (Ansible mangles PowerShell $ variables)
+        win_ok, win_total = _deploy_windows_emulation(run_dir, ent_prefix)
+        if win_total > 0:
+            if win_ok < win_total:
+                output.info(f"  WARNING: Windows emulation started on {win_ok}/{win_total} VMs")
+            else:
+                output.info(f"  Windows emulation started on all {win_ok} VMs")
+    else:
+        output.info("  WARNING: No endpoint VMs with users found, skipping emulation")
+
+    # Register in PHASE experiments.json
+    snippet_path = run_dir / "ssh_config_snippet.txt"
+    if snippet_path.exists():
+        _register_phase(snippet_path, deployment, run_id, deploy_dir)
+
+    output.info("")
+    output.info(f"DONE: RAMPART deployment {deployment}/{run_id}")
+    output.info(f"  {endpoint_count} endpoints running autonomous emulation")
+    output.info(f"  Service: rampart-human (systemd on Linux, scheduled task on Windows)")
+    output.info(f"  Check:   ssh {ent_prefix}<node> \"systemctl status rampart-human\"")
+    output.info(f"  Log:     {ent_log}")
+    return 0
+
+
+# --- Helpers ---
+
+def _find_rampart_config(config_name: str | None, deploy_dir: Path) -> Path | None:
+    """Find RAMPART config directory."""
+    if config_name:
+        d = deploy_dir / config_name
+        if (d / "config.yaml").exists():
+            return d
+        return None
+
+    # Auto-detect first rampart config
+    for d in sorted(deploy_dir.iterdir()):
+        if d.is_dir() and (d / "config.yaml").exists():
+            try:
+                cfg = DeploymentConfig.load(d / "config.yaml")
+                if cfg.is_rampart():
+                    return d
+            except Exception:
+                continue
+    return None
+
+
+def _make_dep_id(deployment_name: str, run_id: str) -> str:
+    dep = deployment_name
+    for prefix in ("ruse-", "sup-", "rampart-", "enterprise-"):
+        if dep.startswith(prefix):
+            dep = dep[len(prefix):]
+    dep = dep.replace("-", "")
+    return f"{dep}{run_id}"
+
+
+def _ensure_venv(wdir: Path) -> bool:
+    """Ensure venv exists in workflow directory."""
+    venv_activate = wdir / ".venv" / "bin" / "activate"
+    if venv_activate.exists():
+        return True
+
+    try:
+        subprocess.run(
+            ["python3", "-m", "venv", str(wdir / ".venv")],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            [str(wdir / ".venv" / "bin" / "pip"), "install", "-r", str(wdir / "requirements.txt")],
+            check=True, capture_output=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+# Lines matching any of these patterns are suppressed from terminal output
+# but still written to the log file.
+_NOISE_PATTERNS = [
+    "is deprecated in favor of",
+    "DeprecationWarning",
+    "InsecureRequestWarning",
+    "CryptographyDeprecationWarning",
+    "warnings.warn(",
+]
+
+
+def _is_noise(line: str) -> bool:
+    """Return True if a line should be suppressed from terminal output."""
+    if not line.strip():
+        return False
+    return any(pat in line for pat in _NOISE_PATTERNS)
+
+
+def _ent_run(
+    wdir: Path,
+    rc_file: Path,
+    cmd: list[str],
+    log_file: Path | None = None,
+) -> bool:
+    """Run a command in the enterprise venv with OpenStack credentials.
+    Streams filtered output to terminal, full output to log file."""
+    shell_cmd = (
+        f"cd {wdir} && source .venv/bin/activate && source {rc_file} && "
+        + " ".join(cmd)
+    )
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONWARNINGS"] = "ignore"
+
+    try:
+        proc = subprocess.Popen(
+            ["bash", "-c", shell_cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+            bufsize=1,
+        )
+
+        log_fh = open(log_file, "a") if log_file else None
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if log_fh:
+                    log_fh.write(line)
+                    log_fh.flush()
+                if not _is_noise(line):
+                    output.info(f"    {line.rstrip()}")
+        finally:
+            if log_fh:
+                log_fh.close()
+
+        proc.wait()
+        return proc.returncode == 0
+
+    except Exception as e:
+        output.info(f"  Command failed: {e}")
+        return False
+
+
+def _create_prefixed_config(
+    config: DeploymentConfig, ent_prefix: str, wdir: Path, run_dir: Path,
+) -> None:
+    """Create enterprise config with hash-based VM name prefix."""
+    ent_config_path = wdir / config.enterprise_config_file()
+    if not ent_config_path.exists():
+        return
+
+    data = json.loads(ent_config_path.read_text())
+    for node in data.get("nodes", data.get("servers", [])):
+        if "name" in node:
+            node["name"] = ent_prefix + node["name"]
+
+    with open(run_dir / "enterprise-config-prefixed.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _create_prefixed_cloud_config(
+    config: DeploymentConfig, ent_hash: str, wdir: Path, run_dir: Path,
+) -> str:
+    """Create cloud config with per-deployment enterprise_url for DNS isolation.
+
+    Removes any stale enterprise_url from the original config and injects a
+    per-deployment URL derived from the OpenStack project name + hash.
+
+    Returns the enterprise_url that will be used for DNS zone creation.
+    """
+    cloud_config_path = wdir / config.enterprise_cloud_config()
+    if not cloud_config_path.exists():
+        return f"{ent_hash}.os"
+
+    data = json.loads(cloud_config_path.read_text())
+
+    # Derive base URL from OpenStack project name (always authoritative)
+    project_name = os.environ.get("OS_PROJECT_NAME", "")
+    if not project_name:
+        # Try sourcing the RC file referenced in cloud config
+        rc_file = data.get("os_env_file", "")
+        if rc_file:
+            project_name = "vxn3kr-bot-project"  # known default
+    base_url = f"{project_name.lower()}.os" if project_name else "openstack.os"
+
+    enterprise_url = f"{ent_hash}.{base_url}"
+    data["enterprise_url"] = enterprise_url
+
+    with open(run_dir / "cloud-config-prefixed.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+    return enterprise_url
+
+
+def _generate_ssh_config(
+    deploy_output: Path, deployment: str, run_id: str, run_dir: Path, deploy_dir: Path,
+) -> None:
+    """Generate and install SSH config from enterprise deploy output."""
+    lib_dir = deploy_dir / "lib"
+    ssh_script = lib_dir / "enterprise_ssh_config.py"
+    if not ssh_script.exists():
+        return
+
+    snippet_path = run_dir / "ssh_config_snippet.txt"
+    try:
+        subprocess.run(
+            ["python3", str(ssh_script), str(deploy_output), deployment, run_id,
+             "-o", str(snippet_path)],
+            check=True, capture_output=True,
+        )
+        install_ssh_config(snippet_path, f"{deployment}/{run_id}")
+    except subprocess.CalledProcessError:
+        pass
+
+
+def _start_emulation(
+    wdir: Path, rc_file: Path, config: DeploymentConfig, run_dir: Path,
+) -> int | None:
+    """Start emulation in background, save PID."""
+    shell_cmd = (
+        f"cd {wdir} && source .venv/bin/activate && source {rc_file} && "
+        f"nohup python3 emulate-logins.py "
+        f"post-deploy-output.json logins.json "
+        f"--seed {config.emulate_seed()} "
+        f"--logfile enterprise.ndjson "
+        f"> emulate.log 2>&1 & echo $!"
+    )
+
+    try:
+        result = subprocess.run(
+            ["bash", "-c", shell_cmd],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            pid = int(result.stdout.strip())
+            (run_dir / "emulate.pid").write_text(str(pid))
+            return pid
+    except (ValueError, subprocess.CalledProcessError):
+        pass
+    return None
+
+
+def _register_phase(
+    snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path,
+) -> None:
+    """Register RAMPART deployment in PHASE experiments.json."""
+    lib_dir = deploy_dir / "lib"
+    register_script = lib_dir / "register_experiment.py"
+    if not register_script.exists():
+        return
+
+    inventory_path = snippet_path.parent / "inventory.ini"
+
+    try:
+        cmd = [
+            "python3", str(register_script),
+            "--name", config_name,
+            "--snippet", str(snippet_path),
+            "--run-id", run_id,
+            "--start-date", time.strftime("%Y-%m-%d"),
+        ]
+        if inventory_path.exists():
+            cmd.extend(["--inventory", str(inventory_path)])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            output.info("  Registered in PHASE experiments.json")
+        else:
+            output.info(f"  PHASE registration skipped: {result.stderr[:80]}")
+    except Exception:
+        pass  # Non-critical
+
+
+def _generate_emulation_inventory(
+    run_dir: Path, ent_prefix: str, inventory_path: Path,
+) -> int:
+    """Generate Ansible inventory for emulation service deployment.
+
+    Reads logins.json (user credentials) and post-deploy-output.json (VM IPs)
+    to produce an inventory with per-host variables for the emulation playbook.
+
+    Returns the number of endpoint VMs with assigned users.
+    """
+    logins_path = run_dir / "logins.json"
+    post_deploy_path = run_dir / "post-deploy-output.json"
+
+    if not logins_path.exists() or not post_deploy_path.exists():
+        output.info("  Missing logins.json or post-deploy-output.json")
+        return 0
+
+    logins_data = json.loads(logins_path.read_text())
+    post_deploy = json.loads(post_deploy_path.read_text())
+
+    # Build user map: bare node name → user info
+    user_map = {}
+    for user in logins_data.get("users", []):
+        home_node = user["home_node"]["name"]
+        # Strip e-{hash}- prefix if present (enterprise config uses prefixed names)
+        if home_node.startswith(ent_prefix):
+            home_node = home_node[len(ent_prefix):]
+        user_map[home_node] = {
+            "username": user["user_profile"]["username"],
+            "password": user["user_profile"]["password"],
+            "domain": user["domain"],
+            "workflows": " ".join(user["login_profile"]["workflows"]),
+        }
+
+    # Extract domain admin password (needed for Windows SSH)
+    domain_leaders = (
+        post_deploy
+        .get("enterprise_built", {})
+        .get("setup", {})
+        .get("setup_domains", {})
+        .get("domain_leaders", {})
+    )
+    # Use the first domain's admin password + build FQDN for auth
+    domain_admin_pass = ""
+    enterprise_url = post_deploy.get("backend_config", {}).get("enterprise_url", "")
+    domain_fqdn = ""
+    for domain, info in domain_leaders.items():
+        domain_admin_pass = info.get("admin_pass", "")
+        domain_fqdn = f"{domain}.{enterprise_url}" if enterprise_url else domain
+        break
+
+    # Build node map: bare name → {ip, is_windows}
+    node_map = {}
+    nodes = post_deploy.get("enterprise_built", {}).get("deployed", {}).get("nodes", [])
+    for node in nodes:
+        prefixed_name = node["name"]
+        # Strip the e-{hash}- prefix to get bare name
+        bare_name = prefixed_name
+        if bare_name.startswith(ent_prefix):
+            bare_name = bare_name[len(ent_prefix):]
+
+        ip = node["addresses"][0]["addr"] if node.get("addresses") else None
+        roles = node.get("enterprise_description", {}).get("roles", [])
+        is_windows = "windows" in roles
+        is_endpoint = "endpoint" in roles
+
+        if ip and is_endpoint:
+            node_map[bare_name] = {
+                "prefixed_name": prefixed_name,
+                "ip": ip,
+                "is_windows": is_windows,
+            }
+
+    # Generate inventory
+    seed = logins_data.get("seed", 42)
+    linux_lines = []
+    windows_lines = []
+    count = 0
+
+    for bare_name, node_info in sorted(node_map.items()):
+        if bare_name not in user_map:
+            continue
+
+        user = user_map[bare_name]
+        vm_seed = seed + count
+        count += 1
+
+        host_line = (
+            f"{node_info['prefixed_name']} "
+            f"ansible_host={node_info['ip']} "
+            f"rampart_username={user['username']} "
+            f"rampart_password={user['password']} "
+            f"rampart_domain={user['domain']} "
+            f"rampart_workflows=\"{user['workflows']}\" "
+            f"rampart_seed={vm_seed}"
+        )
+
+        if node_info["is_windows"]:
+            windows_lines.append(host_line)
+        else:
+            linux_lines.append(host_line)
+
+    lines = [
+        f"# Auto-generated Rampart emulation inventory",
+        f"# Generated: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+        "",
+    ]
+
+    lines.append("[rampart_linux]")
+    lines.extend(linux_lines)
+    lines.append("")
+
+    lines.append("[rampart_windows]")
+    lines.extend(windows_lines)
+    lines.append("")
+
+    lines.extend([
+        "[rampart_linux:vars]",
+        "ansible_user=ubuntu",
+        "ansible_python_interpreter=/usr/bin/python3",
+        "ansible_ssh_private_key_file=~/.ssh/id_rsa",
+        "ansible_ssh_common_args=-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes",
+        "",
+        "[rampart_windows:vars]",
+        f"ansible_user=Administrator@{domain_fqdn}" if domain_fqdn else "ansible_user=Administrator",
+        f"ansible_ssh_pass={domain_admin_pass}" if domain_admin_pass else "",
+        "ansible_ssh_common_args=-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PreferredAuthentications=password",
+        "",
+    ])
+
+    inventory_path.write_text("\n".join(lines))
+    output.info(f"  {count} endpoints ({len(linux_lines)} linux, {len(windows_lines)} windows)")
+    return count
+
+
+def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]:
+    """Deploy emulation on Windows endpoints via direct SSH.
+
+    Uses sshpass for password auth — Ansible raw module can't handle
+    PowerShell $ variables without mangling them.
+
+    Returns (ok_count, total_count).
+    """
+    import concurrent.futures
+
+    logins_data = json.loads((run_dir / "logins.json").read_text())
+    post_deploy = json.loads((run_dir / "post-deploy-output.json").read_text())
+
+    # Get domain admin password + FQDN for auth
+    domain_leaders = (
+        post_deploy.get("enterprise_built", {})
+        .get("setup", {}).get("setup_domains", {}).get("domain_leaders", {})
+    )
+    enterprise_url = post_deploy.get("backend_config", {}).get("enterprise_url", "")
+    domain_name = ""
+    admin_pass = ""
+    for d, info in domain_leaders.items():
+        domain_name = f"{d}.{enterprise_url}" if enterprise_url else d
+        admin_pass = info.get("admin_pass", "")
+        break
+
+    if not admin_pass:
+        return 0, 0
+
+    # Build per-VM configs (strip prefix from node names in logins.json)
+    user_map = {}
+    for user in logins_data.get("users", []):
+        node_name = user["home_node"]["name"]
+        if node_name.startswith(ent_prefix):
+            node_name = node_name[len(ent_prefix):]
+        user_map[node_name] = user
+
+    nodes = post_deploy.get("enterprise_built", {}).get("deployed", {}).get("nodes", [])
+    seed = logins_data.get("seed", 42)
+
+    win_vms = []
+    idx = 0
+    for node in nodes:
+        prefixed = node["name"]
+        bare = prefixed.removeprefix(ent_prefix)
+        roles = node.get("enterprise_description", {}).get("roles", [])
+        if "windows" not in roles or "endpoint" not in roles:
+            continue
+        if bare not in user_map:
+            continue
+        ip = node["addresses"][0]["addr"] if node.get("addresses") else None
+        if not ip:
+            continue
+        u = user_map[bare]
+        win_vms.append({
+            "name": prefixed,
+            "ip": ip,
+            "username": u["user_profile"]["username"],
+            "password": u["user_profile"]["password"],
+            "workflows": " ".join(u["login_profile"]["workflows"]),
+            "seed": seed + idx,
+        })
+        idx += 1
+
+    if not win_vms:
+        return 0, 0
+
+    ssh_base = [
+        "sshpass", "-p", admin_pass,
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "PreferredAuthentications=password",
+        "-o", "ConnectTimeout=15",
+    ]
+    ssh_user = f"Administrator@{domain_name}"
+
+    def _setup_one(vm: dict) -> bool:
+        ts = time.strftime("%H:%M:%S")
+        try:
+            # 1) Write passfile
+            subprocess.run(
+                ssh_base + [f"{ssh_user}@{vm['ip']}",
+                    f'powershell -Command "New-Item -Path C:\\tmp -ItemType Directory -Force | Out-Null; '
+                    f"Set-Content -Path C:\\tmp\\shib_login.{vm['username']} "
+                    f"-Value '{vm['username']}`n{vm['password']}' -Encoding ASCII\""
+                ],
+                capture_output=True, timeout=30,
+                env={**os.environ, "SSH_AUTH_SOCK": ""},
+            )
+
+            # 2) Write run-emulation.ps1 using $l array
+            script_cmd = (
+                f'powershell -Command "'
+                f"$l = @(); "
+                f"$l += '$env:PYTHONUNBUFFERED = 1'; "
+                f"$l += 'while ($true) {{'; "
+                f"$l += '    try {{'; "
+                f"$l += '        & C:\\Python\\python.exe -u C:\\human\\human.py "
+                f"--clustersize 5 --taskinterval 10 --taskgroupinterval 500 "
+                f"--seed {vm['seed']} --workflows {vm['workflows']} "
+                f"--extra passfile C:\\tmp\\shib_login.{vm['username']}'; "
+                f"$l += '    }} catch {{'; "
+                f"$l += '        Write-Host human.py_crashed_restarting'; "
+                f"$l += '    }}'; "
+                f"$l += '    Start-Sleep -Seconds 30'; "
+                f"$l += '}}'; "
+                f'$l | Set-Content C:\\tmp\\run-emulation.ps1 -Encoding ASCII"'
+            )
+            subprocess.run(
+                ssh_base + [f"{ssh_user}@{vm['ip']}", script_cmd],
+                capture_output=True, timeout=30,
+                env={**os.environ, "SSH_AUTH_SOCK": ""},
+            )
+
+            # 3) Create + start scheduled task
+            task_cmd = (
+                f'powershell -ExecutionPolicy Bypass -Command "'
+                f"Unregister-ScheduledTask -TaskName RampartHuman -Confirm:$false -ErrorAction SilentlyContinue; "
+                f"$a = New-ScheduledTaskAction -Execute powershell.exe "
+                f"-Argument '-ExecutionPolicy Bypass -WindowStyle Hidden -File C:\\tmp\\run-emulation.ps1'; "
+                f"$t = New-ScheduledTaskTrigger -AtStartup; "
+                f"$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+                f"-RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1); "
+                f"Register-ScheduledTask -TaskName RampartHuman -Action $a -Trigger $t -Settings $s "
+                f'-User SYSTEM -RunLevel Highest -Force"'
+            )
+            subprocess.run(
+                ssh_base + [f"{ssh_user}@{vm['ip']}", task_cmd],
+                capture_output=True, timeout=30,
+                env={**os.environ, "SSH_AUTH_SOCK": ""},
+            )
+
+            # 4) Start
+            subprocess.run(
+                ssh_base + [f"{ssh_user}@{vm['ip']}",
+                    'powershell -Command "Start-ScheduledTask -TaskName RampartHuman"'],
+                capture_output=True, timeout=30,
+                env={**os.environ, "SSH_AUTH_SOCK": ""},
+            )
+
+            output.info(f"  [{ts}]    OK  {vm['name']} (Windows)")
+            return True
+        except Exception as e:
+            output.info(f"  [{ts}]    FAIL  {vm['name']}  {e}")
+            return False
+
+    ok = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(_setup_one, vm): vm for vm in win_vms}
+        for f in concurrent.futures.as_completed(futures):
+            if f.result():
+                ok += 1
+
+    return ok, len(win_vms)
+
+
+def _generate_feedback_user_roles(
+    behavior_source: Path,
+    baseline_user_roles: Path,
+    enterprise_config: Path,
+    output_dir: Path,
+) -> dict | None:
+    """Generate per-node user roles from PHASE feedback configs."""
+    import importlib.util
+
+    lib_dir = Path(__file__).resolve().parent.parent.parent / "lib"
+    spec = importlib.util.spec_from_file_location(
+        "phase_to_user_roles", lib_dir / "phase_to_user_roles.py",
+    )
+    if not spec or not spec.loader:
+        return None
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    try:
+        return mod.generate_user_roles(
+            behavior_source, baseline_user_roles, enterprise_config, output_dir,
+        )
+    except Exception as e:
+        output.info(f"  Feedback translation error: {e}")
+        return None
+
+
+def _copy_if_exists(src: Path, dst: Path) -> None:
+    if src.exists():
+        shutil.copy2(src, dst)

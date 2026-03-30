@@ -1,0 +1,1052 @@
+#!/bin/bash
+#
+# RUSE Deploy — Flag-based CLI for deploying SUP agents and enterprise networks.
+#
+# Usage:
+#   deploy --ruse [--timing] [--all] [--configs x,y] [--source path]
+#   deploy --rampart
+#   deploy --list
+#   deploy --teardown <name-runid>
+#   deploy --teardown-all
+#   deploy --help
+
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Constants + setup
+# ─────────────────────────────────────────────────────────────────────────────
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLAYBOOKS_DIR="$SCRIPT_DIR/playbooks"
+LOGS_DIR="$SCRIPT_DIR/logs"
+LIB_DIR="$SCRIPT_DIR/lib"
+SSH_CONFIG="${SSH_CONFIG:-$HOME/.ssh/config}"
+OS_RC_FILE="$HOME/vxn3kr-bot-rc"
+
+SUP_VM_PREFIX=$(python3 "$LIB_DIR/vm_naming.py" sup_prefix)
+ENT_VM_PREFIX="e-"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Utilities: logging, duration, OpenStack helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Source the monitoring library (ANSI helpers, _run_ansible, SSH config, etc.)
+source "$LIB_DIR/monitor.sh"
+
+mkdir -p "$LOGS_DIR"
+ANSIBLE_LOG=""
+
+setup_ansible_log() {
+    ANSIBLE_LOG="$LOGS_DIR/ansible-${1}-$(date +%Y%m%d-%H%M%S).log"
+}
+
+cleanup_old_logs() {
+    find "$LOGS_DIR" -name "ansible-*.log" -mtime +30 -delete 2>/dev/null || true
+}
+
+generate_run_id() {
+    date +%m%d%y%H%M%S
+}
+
+_ANSIBLE_PID=""
+
+cleanup() {
+    if [[ -n "$_ANSIBLE_PID" ]]; then
+        kill "$_ANSIBLE_PID" 2>/dev/null || true
+        wait "$_ANSIBLE_PID" 2>/dev/null || true
+    fi
+    stty sane 2>/dev/null || true
+}
+
+trap cleanup EXIT
+trap 'exit 0' INT TERM
+
+_openstack() {
+    ( source "$OS_RC_FILE" && openstack "$@" )
+}
+
+_OPENSTACK_SERVER_CACHE=""
+_OPENSTACK_SERVER_CACHE_LOADED=false
+
+_ensure_openstack_cache() {
+    if ! $_OPENSTACK_SERVER_CACHE_LOADED; then
+        _OPENSTACK_SERVER_CACHE=$(_openstack server list -f value -c Name 2>/dev/null || true)
+        _OPENSTACK_SERVER_CACHE_LOADED=true
+    fi
+}
+
+_has_vms_on_openstack() {
+    local prefix="$1"
+    _ensure_openstack_cache
+    echo "$_OPENSTACK_SERVER_CACHE" | grep -q "^${prefix}" 2>/dev/null
+}
+
+die() { _red "ERROR: $1"; exit 1; }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Config loading: yaml parsing, vm_naming calls
+# ─────────────────────────────────────────────────────────────────────────────
+
+get_dep_id() {
+    python3 "$LIB_DIR/vm_naming.py" dep_id "$1"
+}
+
+get_run_dep_id() {
+    python3 "$LIB_DIR/vm_naming.py" run_dep_id "$1" "$2"
+}
+
+get_hosts_ini() {
+    local deploy_dir="$1"
+    if [[ -f "$deploy_dir/hosts.ini" ]]; then
+        echo "$deploy_dir/hosts.ini"
+    elif [[ -f "$SCRIPT_DIR/hosts.ini" ]]; then
+        echo "$SCRIPT_DIR/hosts.ini"
+    fi
+}
+
+get_vm_count() {
+    python3 -c "
+import yaml
+with open('$1') as f:
+    cfg = yaml.safe_load(f)
+total = sum(d.get('count', 1) for d in cfg.get('deployments', []))
+print(total)
+" 2>/dev/null || echo "?"
+}
+
+get_deployment_type() {
+    python3 -c "
+import yaml
+with open('$1/config.yaml') as f:
+    c = yaml.safe_load(f)
+print(c.get('type', 'sup'))
+" 2>/dev/null || echo "sup"
+}
+
+has_behavior_configs() {
+    grep -qE "^behavior_source:" "$1/config.yaml" 2>/dev/null
+}
+
+parse_enterprise_config() {
+    local deploy_dir="$1"
+    eval "$(python3 -c "
+import os, yaml, shlex
+with open('$deploy_dir/config.yaml') as f:
+    c = yaml.safe_load(f)
+ent = c.get('enterprise', {})
+emu = c.get('emulate', {})
+wdir = os.path.expanduser(ent.get('workflow_dir', '~/uva-cs-workflow'))
+print(f'ENT_WORKFLOW_DIR={shlex.quote(wdir)}')
+print(f'ENT_CLOUD_CONFIG={shlex.quote(ent.get(\"cloud_config\", \"\"))}')
+print(f'ENT_ENTERPRISE_CONFIG={shlex.quote(ent.get(\"enterprise_config\", \"\"))}')
+print(f'ENT_USER_ROLES={shlex.quote(ent.get(\"user_roles\", \"\"))}')
+print(f'ENT_SEED={emu.get(\"seed\", 42)}')
+print(f'ENT_DURATION_DAYS={emu.get(\"duration_days\", 7)}')
+")"
+}
+
+check_prereqs() {
+    command -v ansible-playbook &>/dev/null || die "ansible-playbook not found"
+    [[ -d "$PLAYBOOKS_DIR" ]] || die "Playbooks directory not found at $PLAYBOOKS_DIR"
+    command -v jq &>/dev/null || die "jq not found. Install: sudo apt-get install jq"
+    command -v python3 &>/dev/null || die "python3 not found"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Ansible runner: run playbook, stream output
+# ─────────────────────────────────────────────────────────────────────────────
+
+_run_playbook() {
+    # Usage: _run_playbook <playbook> <inventory> <deploy_dir> <dep_id> [<run_dir>]
+    local playbook="$1"
+    local inventory="$2"
+    local deploy_dir="$3"
+    local dep_id="$4"
+    local run_dir="${5:-}"
+
+    local extra_vars=(-e "deployment_dir=$deploy_dir" -e "deployment_id=$dep_id")
+    [[ -n "$run_dir" ]] && extra_vars+=(-e "run_dir=$run_dir")
+    [[ -n "${BEHAVIOR_SOURCE_OVERRIDE:-}" ]] && extra_vars+=(-e "behavior_source=$BEHAVIOR_SOURCE_OVERRIDE")
+    [[ -n "${VM_PREFIX_OVERRIDE:-}" ]] && extra_vars+=(-e "vm_prefix=$VM_PREFIX_OVERRIDE")
+
+    _run_ansible "$playbook" "$inventory" "${extra_vars[@]}"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Core operations: do_ruse_spinup, do_teardown, do_teardown_all
+# ─────────────────────────────────────────────────────────────────────────────
+
+do_ruse_spinup() {
+    # Deploy RUSE SUP agents.
+    # Args: deployment_name [behavior_source] [behavior_configs_yaml]
+    local deployment="$1"
+    local behavior_source="${2:-}"
+    local behavior_configs_yaml="${3:-}"
+    local deploy_dir="$SCRIPT_DIR/$deployment"
+
+    [[ -f "$deploy_dir/config.yaml" ]] || die "No config.yaml found for: $deployment"
+
+    local hosts_ini
+    hosts_ini=$(get_hosts_ini "$deploy_dir")
+    [[ -n "$hosts_ini" ]] || die "No hosts.ini found for: $deployment"
+
+    local run_id
+    run_id=$(generate_run_id)
+    local run_dir="$deploy_dir/runs/$run_id"
+    local dep_id
+    dep_id=$(get_run_dep_id "$deployment" "$run_id")
+
+    local vm_count
+    vm_count=$(get_vm_count "$deploy_dir/config.yaml")
+
+    echo ""
+    _bold 39 "RUSE Deploy — $deployment"
+    _faint "  Config: $deployment"
+    [[ -n "$behavior_source" ]] && _faint "  Source: $behavior_source"
+    _faint "  VMs: $vm_count"
+    _faint "  Run ID: $run_id"
+    _faint "  VM prefix: ${SUP_VM_PREFIX}${dep_id}-*"
+    echo ""
+
+    mkdir -p "$run_dir"
+    cp "$deploy_dir/config.yaml" "$run_dir/config.yaml"
+
+    setup_ansible_log "${deployment}-${run_id}"
+    cleanup_old_logs
+
+    # Phase 1: Provision
+    _bold 39 "[Provisioning]"
+    local provision_rc=0
+    _run_playbook "provision-vms.yaml" "$hosts_ini" "$deploy_dir" "$dep_id" "$run_dir" || provision_rc=$?
+
+    if [[ ! -f "$run_dir/inventory.ini" ]]; then
+        echo ""
+        _red "Provisioning failed — no VMs were created successfully."
+        _faint "See: $ANSIBLE_LOG"
+        return 1
+    fi
+
+    if [[ $provision_rc -ne 0 ]]; then
+        echo ""
+        _yellow "Provisioning completed with failures. Continuing install for successful VMs."
+    fi
+
+    # Phase 2: Install
+    _bold 39 "[Installing]"
+    local install_playbook="install-sups.yaml"
+    BEHAVIOR_SOURCE_OVERRIDE=""
+
+    if has_behavior_configs "$deploy_dir" || [[ -n "$behavior_source" ]]; then
+        install_playbook="install-sups-with-behavior-configs.yaml"
+        [[ -n "$behavior_source" ]] && BEHAVIOR_SOURCE_OVERRIDE="$behavior_source"
+    fi
+
+    local install_rc=0
+    _run_playbook "$install_playbook" "$run_dir/inventory.ini" "$deploy_dir" "$dep_id" "$run_dir" || install_rc=$?
+
+    install_ssh_config "$run_dir/ssh_config_snippet.txt" "$deployment/$run_id"
+    generate_phase_config "$run_dir/ssh_config_snippet.txt" "$deployment" "$run_id"
+
+    # Final count
+    local deployed_count
+    deployed_count=$(grep -c 'ansible_host=' "$run_dir/inventory.ini" 2>/dev/null || echo "0")
+    local elapsed_total
+    elapsed_total=$(format_duration "$(( $(date +%s) - $(stat -c %Y "$run_dir" 2>/dev/null || date +%s) ))")
+
+    echo ""
+    _bold 46 "Done. ${deployed_count}/${vm_count} VMs deployed"
+    _faint "SSH config installed to $SSH_CONFIG"
+    _faint "Log: $ANSIBLE_LOG"
+
+    return $install_rc
+}
+
+do_teardown() {
+    # Teardown a specific deployment run.
+    # Target format: name-runid (e.g., ruse-controls-032226111616)
+    local target="$1"
+
+    # Parse target: split on the 12-digit run ID pattern
+    local config_name="" run_id=""
+    if [[ "$target" =~ ^(.+)-([0-9]{12})$ ]]; then
+        config_name="${BASH_REMATCH[1]}"
+        run_id="${BASH_REMATCH[2]}"
+    else
+        die "Invalid teardown target: $target (expected: name-MMDDYYHHMMSS)"
+    fi
+
+    local deploy_dir="$SCRIPT_DIR/$config_name"
+    [[ -f "$deploy_dir/config.yaml" ]] || die "No config.yaml found for: $config_name"
+
+    local dep_type
+    dep_type=$(get_deployment_type "$deploy_dir")
+
+    if [[ "$dep_type" == "enterprise" ]]; then
+        do_enterprise_teardown "$deploy_dir" "$run_id"
+        return $?
+    fi
+
+    local run_dir="$deploy_dir/runs/$run_id"
+    local dep_id
+    dep_id=$(get_run_dep_id "$config_name" "$run_id")
+
+    [[ -d "$run_dir" ]] || die "No run directory found for: $target"
+
+    _bold 196 "Teardown: $config_name/$run_id"
+    echo ""
+
+    read -p "  Confirm teardown? [y/N] " confirm
+    [[ "$confirm" =~ ^[yY]$ ]] || { echo "Teardown cancelled."; return 0; }
+
+    setup_ansible_log "${config_name}-${run_id}"
+
+    local hosts_ini
+    hosts_ini=$(get_hosts_ini "$deploy_dir")
+    [[ -n "$hosts_ini" ]] || die "No hosts.ini found for: $config_name"
+
+    echo ""
+    _bold 39 "[Teardown]"
+    local rc=0
+    _run_playbook "teardown.yaml" "$hosts_ini" "$deploy_dir" "$dep_id" "$run_dir" || rc=$?
+
+    remove_ssh_config "$config_name/$run_id"
+
+    # Verify via OpenStack
+    local remaining
+    remaining=$(_openstack server list -f value -c Name 2>/dev/null \
+        | grep -c "^${SUP_VM_PREFIX}${dep_id}-" || true)
+
+    if [[ "$remaining" -gt 0 ]]; then
+        echo ""
+        _bold 196 "WARNING: $remaining VMs still exist on OpenStack (prefix: ${SUP_VM_PREFIX}${dep_id}-)"
+        _faint "Local state preserved. Re-run teardown or use --teardown-all."
+        rc=1
+    else
+        _bold 46 "Verified: 0 VMs remaining on OpenStack"
+        # Clean up
+        if [[ "$config_name" == ruse-feedback-* ]]; then
+            rm -rf "$deploy_dir" 2>/dev/null || true
+        elif [[ -d "$run_dir" ]]; then
+            rm -f "$run_dir/inventory.ini" "$run_dir/ssh_config_snippet.txt" "$run_dir/config.yaml"
+            rmdir "$run_dir" 2>/dev/null || true
+        fi
+    fi
+
+    return $rc
+}
+
+do_teardown_all() {
+    local hosts_ini=""
+    if [[ -f "$SCRIPT_DIR/hosts.ini" ]]; then
+        hosts_ini="$SCRIPT_DIR/hosts.ini"
+    else
+        local dir
+        for dir in "$SCRIPT_DIR"/*/; do
+            if [[ -f "${dir}hosts.ini" ]]; then
+                hosts_ini="${dir}hosts.ini"
+                break
+            fi
+        done
+    fi
+    [[ -n "$hosts_ini" ]] || die "No hosts.ini found in any deployment."
+
+    _bold 196 "TEARDOWN ALL"
+    echo ""
+    _color 196 "This will DELETE ALL RUSE (r-*) and Enterprise (e-*) servers and volumes!"
+    _color 196 "This also catches legacy sup-* VMs."
+    echo ""
+
+    read -p "  Confirm teardown-all? [y/N] " confirm
+    [[ "$confirm" =~ ^[yY]$ ]] || { echo "Teardown cancelled."; return 0; }
+
+    read -p "  Type DELETE ALL to confirm: " confirm2
+    [[ "$confirm2" == "DELETE ALL" ]] || { echo "Teardown cancelled."; return 0; }
+
+    setup_ansible_log "teardown-all"
+
+    echo ""
+    _bold 39 "[Teardown]"
+    local rc=0
+    _run_playbook "teardown-all.yaml" "$hosts_ini" "$(dirname "$hosts_ini")" "" || rc=$?
+
+    # Remove all RUSE SSH config blocks
+    local ssh_config="${SSH_CONFIG:-$HOME/.ssh/config}"
+    if [[ -f "$ssh_config" ]]; then
+        local ruse_name
+        while IFS= read -r ruse_name; do
+            remove_ssh_config "$ruse_name"
+        done < <(grep -oP '(?<=^# BEGIN RUSE: ).*' "$ssh_config")
+    fi
+
+    # Clean up all inventory files
+    for dir in "$SCRIPT_DIR"/*/; do
+        rm -f "${dir}inventory.ini" 2>/dev/null || true
+        if [[ -d "${dir}runs" ]]; then
+            find "${dir}runs" -name "inventory.ini" -type f -delete 2>/dev/null || true
+            find "${dir}runs" -name "ssh_config_snippet.txt" -type f -delete 2>/dev/null || true
+        fi
+    done
+
+    echo ""
+    _bold 46 "Done."
+
+    return $rc
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Enterprise operations
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ent_ensure_venv() {
+    local wdir="$1"
+    if [[ ! -f "$wdir/.venv/bin/activate" ]]; then
+        _faint "  Creating venv in $wdir/.venv..."
+        python3 -m venv "$wdir/.venv"
+        _faint "  Installing dependencies..."
+        "$wdir/.venv/bin/pip" install -r "$wdir/requirements.txt"
+    fi
+}
+
+_ent_run() {
+    local wdir="$1"; shift
+    (
+        cd "$wdir"
+        source .venv/bin/activate
+        source "$OS_RC_FILE"
+        "$@"
+    )
+}
+
+do_rampart_spinup() {
+    # Deploy RAMPART enterprise network.
+    local deploy_dir="$1"
+    local deployment
+    deployment=$(basename "$deploy_dir")
+
+    [[ -f "$deploy_dir/config.yaml" ]] || die "No config.yaml found for: $deployment"
+
+    local run_id
+    run_id=$(generate_run_id)
+    local run_dir="$deploy_dir/runs/$run_id"
+    mkdir -p "$run_dir"
+
+    local ent_log="$run_dir/enterprise.log"
+
+    parse_enterprise_config "$deploy_dir"
+
+    echo ""
+    _bold 39 "RUSE Deploy — RAMPART Enterprise"
+    _faint "  Config: $deployment"
+    _faint "  Workflow: $ENT_WORKFLOW_DIR"
+    _faint "  Run ID: $run_id"
+    echo ""
+
+    cp "$deploy_dir/config.yaml" "$run_dir/config.yaml"
+
+    # Create prefixed enterprise config (5-char hash for NetBIOS limit)
+    local dep_id
+    dep_id=$(get_run_dep_id "$deployment" "$run_id")
+    local ent_hash
+    ent_hash=$(echo -n "$dep_id" | md5sum | head -c 5)
+    local ent_prefix="${ENT_VM_PREFIX}${ent_hash}-"
+
+    python3 -c "
+import json, sys
+prefix = sys.argv[1]
+with open(sys.argv[2]) as f:
+    cfg = json.load(f)
+for node in cfg.get('nodes', cfg.get('servers', [])):
+    if 'name' in node:
+        node['name'] = prefix + node['name']
+json.dump(cfg, sys.stdout, indent=2)
+" "$ent_prefix" "$ENT_WORKFLOW_DIR/$ENT_ENTERPRISE_CONFIG" > "$run_dir/enterprise-config-prefixed.json"
+
+    # Step 1: venv
+    _color 39 "[1/5] Setting up environment..."
+    _ent_ensure_venv "$ENT_WORKFLOW_DIR"
+    _faint "  venv ready"
+
+    # Step 2: Provision VMs
+    _color 39 "[2/5] Provisioning VMs (deploy-nodes.py)..."
+    if ! _ent_run "$ENT_WORKFLOW_DIR" \
+        python3 deploy-nodes.py \
+            -c "$ENT_CLOUD_CONFIG" \
+            -e "$run_dir/enterprise-config-prefixed.json" \
+        > >(tee -a "$ent_log") 2>&1; then
+        _red "VM provisioning failed"
+        return 1
+    fi
+
+    cp "$ENT_WORKFLOW_DIR/deploy-output.json" "$run_dir/" 2>/dev/null || true
+    if [[ -f "$run_dir/deploy-output.json" ]]; then
+        python3 "$LIB_DIR/enterprise_ssh_config.py" \
+            "$run_dir/deploy-output.json" \
+            "$deployment" "$run_id" \
+            -o "$run_dir/ssh_config_snippet.txt"
+        install_ssh_config "$run_dir/ssh_config_snippet.txt" "$deployment/$run_id"
+    fi
+
+    # Step 3: Configure VMs
+    _color 39 "[3/5] Configuring VMs (post-deploy.py)..."
+    if ! _ent_run "$ENT_WORKFLOW_DIR" \
+        python3 post-deploy.py deploy-output.json \
+        > >(tee -a "$ent_log") 2>&1; then
+        _red "VM configuration failed"
+        return 1
+    fi
+
+    # Step 4: Generate login schedule
+    _color 39 "[4/5] Generating login schedule (simulate-logins.py)..."
+    if ! _ent_run "$ENT_WORKFLOW_DIR" \
+        python3 simulate-logins.py \
+            "$ENT_USER_ROLES" \
+            "$ENT_ENTERPRISE_CONFIG" \
+            post-deploy-output.json \
+        > >(tee -a "$ent_log") 2>&1; then
+        _red "Login schedule generation failed"
+        return 1
+    fi
+
+    # Step 5: Start login emulation (backgrounded)
+    _color 39 "[5/5] Starting login emulation (emulate-logins.py)..."
+    (
+        cd "$ENT_WORKFLOW_DIR"
+        source .venv/bin/activate
+        source "$OS_RC_FILE"
+        nohup python3 emulate-logins.py \
+            post-deploy-output.json \
+            logins.json \
+            --seed "$ENT_SEED" \
+            --logfile enterprise.ndjson \
+            > emulate.log 2>&1 &
+        echo $! > "$run_dir/emulate.pid"
+    )
+
+    [[ -f "$run_dir/emulate.pid" ]] && _faint "  Emulation PID: $(cat "$run_dir/emulate.pid")"
+
+    cp "$ENT_WORKFLOW_DIR/post-deploy-output.json" "$run_dir/" 2>/dev/null || true
+    echo "enterprise" > "$run_dir/deployment_type"
+
+    echo ""
+    _bold 46 "Enterprise deployment $deployment/$run_id is running."
+    _faint "Log: $ent_log"
+}
+
+do_enterprise_teardown() {
+    local deploy_dir="$1"
+    local run_id="$2"
+    local deployment
+    deployment=$(basename "$deploy_dir")
+    local run_dir="$deploy_dir/runs/$run_id"
+    local ent_log="$run_dir/enterprise-teardown.log"
+
+    parse_enterprise_config "$deploy_dir"
+
+    _bold 196 "Enterprise Teardown: $deployment/$run_id"
+    echo ""
+
+    read -p "  Confirm teardown? [y/N] " confirm
+    [[ "$confirm" =~ ^[yY]$ ]] || { echo "Teardown cancelled."; return 0; }
+
+    # Step 1: Kill emulation
+    _color 39 "[1/4] Stopping emulation..."
+    if [[ -f "$run_dir/emulate.pid" ]]; then
+        local pid
+        pid=$(cat "$run_dir/emulate.pid")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            _faint "  Killed emulation PID $pid"
+        else
+            _faint "  Emulation PID $pid already stopped"
+        fi
+    else
+        _faint "  No emulate.pid found — skipping"
+    fi
+
+    # Step 2: Cleanup VMs
+    _color 39 "[2/4] Cleaning up VMs..."
+    local dep_id
+    dep_id=$(get_run_dep_id "$deployment" "$run_id")
+    local ent_hash
+    ent_hash=$(echo -n "$dep_id" | md5sum | head -c 5)
+    local ent_vm_prefix="${ENT_VM_PREFIX}${ent_hash}-"
+
+    local _cleanup_ok=false
+    local _post_deploy=""
+    if [[ -f "$run_dir/post-deploy-output.json" ]]; then
+        _post_deploy="$run_dir/post-deploy-output.json"
+    elif [[ -f "$ENT_WORKFLOW_DIR/post-deploy-output.json" ]]; then
+        _post_deploy="$ENT_WORKFLOW_DIR/post-deploy-output.json"
+    fi
+
+    if [[ -n "$_post_deploy" ]]; then
+        if _ent_run "$ENT_WORKFLOW_DIR" \
+            python3 cleanup-nodes.py "$_post_deploy" > >(tee -a "$ent_log") 2>&1; then
+            _cleanup_ok=true
+        fi
+    fi
+
+    if ! $_cleanup_ok; then
+        _yellow "  cleanup-nodes.py failed — falling back to direct OpenStack delete"
+        local _ent_ids
+        _ent_ids=$(_openstack server list -f value -c ID -c Name 2>/dev/null | awk "\$2 ~ /^${ent_vm_prefix}/{print \$1}" || true)
+        if [[ -n "$_ent_ids" ]]; then
+            local _count _ent_ids_inline
+            _count=$(echo "$_ent_ids" | wc -l)
+            _ent_ids_inline=$(echo "$_ent_ids" | tr '\n' ' ')
+            _faint "  Deleting $_count VMs in batch..."
+            _openstack server delete $_ent_ids_inline 2>/dev/null || true
+        else
+            _faint "  No enterprise VMs found"
+        fi
+    fi
+
+    # Step 3: DNS cleanup
+    _color 39 "[3/4] Cleaning up DNS zones..."
+    local zone_ids
+    zone_ids=$(_openstack zone list -f value -c id 2>/dev/null || true)
+    if [[ -n "$zone_ids" ]]; then
+        local zid
+        while IFS= read -r zid; do
+            [[ -z "$zid" ]] && continue
+            local zname
+            zname=$(_openstack zone show "$zid" -f value -c name 2>/dev/null || true)
+            _openstack zone delete "$zid" 2>/dev/null || true
+            _faint "  Deleted DNS zone: ${zname:-$zid}"
+        done <<< "$zone_ids"
+    else
+        _faint "  No DNS zones found"
+    fi
+
+    # Step 4: Verify + cleanup
+    _color 39 "[4/4] Verifying and cleaning up..."
+    remove_ssh_config "$deployment/$run_id"
+
+    local _wait_attempt
+    for _wait_attempt in {1..20}; do
+        local remaining
+        remaining=$(_openstack server list -f value -c Name 2>/dev/null \
+            | grep -c "^${ent_vm_prefix}" || true)
+        [[ "$remaining" -eq 0 ]] && break
+        _faint "  Waiting for $remaining VMs to delete... (${_wait_attempt}/20)"
+        sleep 5
+    done
+
+    local remaining
+    remaining=$(_openstack server list -f value -c Name 2>/dev/null \
+        | grep -c "^${ent_vm_prefix}" || true)
+
+    if [[ "$remaining" -gt 0 ]]; then
+        echo ""
+        _bold 196 "WARNING: $remaining enterprise VMs still exist on OpenStack"
+        return 1
+    fi
+
+    [[ -d "$run_dir" ]] && rm -rf "$run_dir" && _faint "  Removed local run directory"
+
+    echo ""
+    _bold 46 "Verified: all enterprise VMs deleted on OpenStack"
+    _faint "Enterprise teardown log: $ent_log"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. List command
+# ─────────────────────────────────────────────────────────────────────────────
+
+get_enterprise_vm_count() {
+    local run_dir="$1"
+    if [[ -f "$run_dir/deploy-output.json" ]]; then
+        python3 -c "
+import json
+with open('$run_dir/deploy-output.json') as f:
+    data = json.load(f)
+nodes = data if isinstance(data, list) else data.get('nodes', data.get('servers', []))
+print(len(nodes))
+" 2>/dev/null || echo "?"
+    elif [[ -f "$run_dir/enterprise-config-prefixed.json" ]]; then
+        python3 -c "
+import json
+with open('$run_dir/enterprise-config-prefixed.json') as f:
+    data = json.load(f)
+nodes = data if isinstance(data, list) else data.get('nodes', data.get('servers', []))
+print(len(nodes))
+" 2>/dev/null || echo "?"
+    else
+        echo "?"
+    fi
+}
+
+_count_brains() {
+    # Count VMs by brain category from inventory.ini or config.yaml.
+    # Sets: _BC_C _BC_M _BC_B _BC_S _BC_TOTAL
+    # Output: compact string like "3c 1m 4b 4s" (only non-zero)
+    local rid_dir="$1" dep_type="$2"
+    _BC_C=0; _BC_M=0; _BC_B=0; _BC_S=0; _BC_TOTAL=0
+
+    if [[ "$dep_type" == "enterprise" ]]; then
+        _BC_TOTAL=$(get_enterprise_vm_count "$rid_dir")
+        echo "${_BC_TOTAL} ent"
+        return
+    fi
+
+    # Source: inventory.ini (actual deployed) or config.yaml (planned)
+    local behaviors=""
+    if [[ -f "$rid_dir/inventory.ini" ]]; then
+        behaviors=$(grep -oP 'sup_behavior=\K\S+' "$rid_dir/inventory.ini" 2>/dev/null)
+    elif [[ -f "$rid_dir/config.yaml" ]]; then
+        behaviors=$(python3 -c "
+import yaml
+with open('$rid_dir/config.yaml') as f:
+    cfg = yaml.safe_load(f)
+for d in cfg.get('deployments', []):
+    for _ in range(d.get('count', 1)):
+        print(d['behavior'])
+" 2>/dev/null)
+    fi
+
+    [[ -z "$behaviors" ]] && { echo "?"; return; }
+
+    while IFS= read -r b; do
+        [[ -z "$b" ]] && continue
+        _BC_TOTAL=$((_BC_TOTAL + 1))
+        case "$b" in
+            C*)  _BC_C=$((_BC_C + 1)) ;;
+            M*)  _BC_M=$((_BC_M + 1)) ;;
+            B*)  _BC_B=$((_BC_B + 1)) ;;
+            S*)  _BC_S=$((_BC_S + 1)) ;;
+        esac
+    done <<< "$behaviors"
+
+    local parts=""
+    (( _BC_C > 0 )) && parts+="${_BC_C}c "
+    (( _BC_M > 0 )) && parts+="${_BC_M}m "
+    (( _BC_B > 0 )) && parts+="${_BC_B}b "
+    (( _BC_S > 0 )) && parts+="${_BC_S}s "
+    echo "${_BC_TOTAL} (${parts% })"
+}
+
+do_list() {
+    echo ""
+    _bold 39 "RUSE Deploy — Active Deployments"
+    echo ""
+
+    _faint "  Querying OpenStack..."
+    _ensure_openstack_cache
+
+    local -a rows=()
+    local has_any=false
+
+    local dir name
+    for dir in "$SCRIPT_DIR"/*/; do
+        [[ -f "${dir}config.yaml" ]] || continue
+        name=$(basename "$dir")
+        local deploy_dir="$SCRIPT_DIR/$name"
+
+        local dep_type
+        dep_type=$(get_deployment_type "$deploy_dir")
+
+        [[ -d "$deploy_dir/runs" ]] || continue
+
+        local rid_dir rid
+        for rid_dir in "$deploy_dir/runs"/*/; do
+            [[ -d "$rid_dir" ]] || continue
+            rid=$(basename "$rid_dir")
+
+            # Check if active
+            local is_active=false
+            if [[ -f "$rid_dir/inventory.ini" || -f "$rid_dir/deployment_type" ]]; then
+                is_active=true
+            else
+                local dep_id
+                dep_id=$(get_run_dep_id "$name" "$rid")
+                if [[ "$dep_type" == "enterprise" ]]; then
+                    local _eh
+                    _eh=$(echo -n "$dep_id" | md5sum | head -c 5)
+                    _has_vms_on_openstack "${ENT_VM_PREFIX}${_eh}-" && is_active=true
+                elif _has_vms_on_openstack "${SUP_VM_PREFIX}${dep_id}-"; then
+                    is_active=true
+                fi
+            fi
+
+            $is_active || continue
+            has_any=true
+
+            # Brain counts
+            local vm_summary
+            vm_summary=$(_count_brains "$rid_dir" "$dep_type")
+
+            # Date from run_id
+            local date_col="-"
+            if [[ ${#rid} -ge 12 ]]; then
+                date_col="${rid:0:2}/${rid:2:2} ${rid:6:2}:${rid:8:2}"
+            fi
+
+            local target="${name}-${rid}"
+
+            rows+=("$(printf '  %-44s %-20s %s' "$target" "$vm_summary" "$date_col")")
+        done
+    done
+
+    if ! $has_any; then
+        _faint "  No active deployments."
+        echo ""
+        return 0
+    fi
+
+    printf '  %-44s %-20s %s\n' "Target" "VMs" "Date"
+    _dim "  $(printf '%.0s─' {1..75})"
+    printf '%s\n' "${rows[@]}"
+    echo ""
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Feedback auto-detect + config generation
+# ─────────────────────────────────────────────────────────────────────────────
+
+auto_detect_feedback_source() {
+    # Find the most recent PHASE feedback config directory.
+    local configs_base="$HOME/PHASE/feedback_engine/configs"
+    [[ -d "$configs_base" ]] || return 1
+
+    local -a dirs=()
+    local dir
+    for dir in "$configs_base"/*/; do
+        [[ -d "$dir" ]] && dirs+=("$dir")
+    done
+    [[ ${#dirs[@]} -gt 0 ]] || return 1
+
+    # Return the most recently modified
+    local latest=""
+    local latest_mtime=0
+    for dir in "${dirs[@]}"; do
+        local mtime
+        mtime=$(stat -c %Y "$dir" 2>/dev/null || echo 0)
+        if (( mtime > latest_mtime )); then
+            latest_mtime=$mtime
+            latest="${dir%/}"
+        fi
+    done
+    echo "$latest"
+}
+
+generate_feedback_config() {
+    # Generate a feedback deployment config.yaml.
+    # Args: source_dir selected_configs ("all" or comma-separated filenames)
+    local source_dir="$1"
+    local configs_spec="$2"
+
+    local manifest="$source_dir/manifest.json"
+    [[ -f "$manifest" ]] || die "No manifest.json in $source_dir"
+
+    local preset_name dataset
+    eval "$(python3 -c "
+import json, shlex
+m = json.load(open('$manifest'))
+print(f'preset_name={shlex.quote(m.get(\"preset_name\", \"unknown\"))}')
+print(f'dataset={shlex.quote(m.get(\"dataset\", \"unknown\"))}')
+")"
+
+    # Abbreviate dataset
+    local dataset_abbrev
+    case "$dataset" in
+        *summer24*|*sum24*) dataset_abbrev="sum24" ;;
+        *fall24*)           dataset_abbrev="fall24" ;;
+        *spring25*|*spr25*) dataset_abbrev="spr25" ;;
+        *)                  dataset_abbrev="${dataset:0:6}" ;;
+    esac
+
+    # Scope label
+    local scope_label
+    if [[ "$configs_spec" == "all" ]]; then
+        scope_label="all"
+    else
+        # Use first config name as scope
+        local first="${configs_spec%%,*}"
+        scope_label="${first%.json}"
+        scope_label="${scope_label%%_*}"
+    fi
+
+    local preset_clean="${preset_name//-/}"
+    local dep_name="ruse-feedback-${preset_clean}-${dataset_abbrev}-${scope_label}"
+    local dep_dir="$SCRIPT_DIR/$dep_name"
+    mkdir -p "$dep_dir"
+
+    local behavior_configs_yaml
+    if [[ "$configs_spec" == "all" ]]; then
+        behavior_configs_yaml="behavior_configs: all"
+    else
+        behavior_configs_yaml="behavior_configs:"
+        IFS=',' read -ra config_files <<< "$configs_spec"
+        for _cf in "${config_files[@]}"; do
+            behavior_configs_yaml+=$'\n'"  - $_cf"
+        done
+    fi
+
+    cat > "$dep_dir/config.yaml" <<YAML
+---
+# Auto-generated feedback deployment: $dep_name
+# Feedback source: $source_dir
+# Preset: $preset_name | Dataset: $dataset | Scope: $scope_label
+
+deployment_name: $dep_name
+behavior_source: $source_dir
+$behavior_configs_yaml
+
+flavor_capacity:
+  v1.14vcpu.28g: 5
+  v100-1gpu.14vcpu.28g: 4
+  rtx2080ti-1gpu.14vcpu.28g: 2
+
+deployments:
+  - behavior: M2
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: B2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S2.llama
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S2.gemma
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: B2C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: S2C.llama
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: S2C.gemma
+    flavor: v1.14vcpu.28g
+    count: 1
+  - behavior: B2R.llama
+    flavor: rtx2080ti-1gpu.14vcpu.28g
+    count: 1
+  - behavior: B2R.gemma
+    flavor: rtx2080ti-1gpu.14vcpu.28g
+    count: 1
+YAML
+
+    echo "$dep_name"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Arg parsing + main
+# ─────────────────────────────────────────────────────────────────────────────
+
+show_help() {
+    cat <<'HELP'
+RUSE Deploy — Flag-based deployment CLI
+
+Usage:
+  deploy --ruse                           Deploy baseline controls (ruse-controls)
+  deploy --ruse --timing                  + timing feedback (auto-detect PHASE source)
+  deploy --ruse --all                     + all behavioral configs
+  deploy --ruse --configs x.json,y.json   + specific behavioral configs
+  deploy --ruse --source <path>           Explicit feedback source directory
+
+  deploy --rampart                        Deploy RAMPART enterprise network
+
+  deploy --list                           Show active deployments
+  deploy --teardown <name-runid>          Teardown a specific deployment
+  deploy --teardown-all                   Delete ALL RUSE/Enterprise VMs
+  deploy --help                           Show this help
+
+Teardown target format:
+  deploy --teardown ruse-controls-032226111616
+  deploy --teardown enterprise-csdept-031626163609
+
+Environment:
+  SSH_CONFIG    Path to SSH config (default: ~/.ssh/config)
+HELP
+}
+
+main() {
+    check_prereqs
+
+    local mode="" timing=false all_configs=false configs="" source_dir=""
+    local teardown_target=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)      show_help; exit 0 ;;
+            --ruse)         mode="ruse"; shift ;;
+            --rampart)      mode="rampart"; shift ;;
+            --list)         mode="list"; shift ;;
+            --teardown-all) mode="teardown-all"; shift ;;
+            --teardown)     mode="teardown"; teardown_target="${2:-}"; shift 2 || die "--teardown requires a target" ;;
+            --timing)       timing=true; shift ;;
+            --all)          all_configs=true; shift ;;
+            --configs)      configs="${2:-}"; shift 2 || die "--configs requires a value" ;;
+            --source)       source_dir="${2:-}"; shift 2 || die "--source requires a path" ;;
+            *)              die "Unknown flag: $1. Run 'deploy --help' for usage." ;;
+        esac
+    done
+
+    [[ -z "$mode" ]] && { show_help; exit 1; }
+
+    case "$mode" in
+        list)
+            do_list
+            ;;
+
+        teardown)
+            [[ -z "$teardown_target" ]] && die "--teardown requires a target"
+            do_teardown "$teardown_target"
+            ;;
+
+        teardown-all)
+            do_teardown_all
+            ;;
+
+        rampart)
+            local ent_dir=""
+            local dir
+            for dir in "$SCRIPT_DIR"/*/; do
+                [[ -f "${dir}config.yaml" ]] || continue
+                local dt
+                dt=$(get_deployment_type "$(dirname "${dir}config.yaml")")
+                if [[ "$dt" == "enterprise" ]]; then
+                    ent_dir="${dir%/}"
+                    break
+                fi
+            done
+            [[ -n "$ent_dir" ]] || die "No enterprise deployment found"
+            do_rampart_spinup "$ent_dir"
+            ;;
+
+        ruse)
+            if $timing || $all_configs || [[ -n "$configs" ]]; then
+                # Feedback deployment
+                if [[ -z "$source_dir" ]]; then
+                    source_dir=$(auto_detect_feedback_source) || die "No PHASE feedback configs found. Use --source <path>"
+                fi
+                [[ -d "$source_dir" ]] || die "Feedback source not found: $source_dir"
+
+                local configs_spec="all"
+                if $timing; then
+                    configs_spec="timing_profile.json"
+                elif [[ -n "$configs" ]]; then
+                    configs_spec="$configs"
+                fi
+
+                _faint "  Feedback source: $source_dir"
+
+                local dep_name
+                dep_name=$(generate_feedback_config "$source_dir" "$configs_spec")
+                do_ruse_spinup "$dep_name" "$source_dir"
+            else
+                # Baseline controls
+                do_ruse_spinup "ruse-controls"
+            fi
+            ;;
+    esac
+}
+
+main "$@"
