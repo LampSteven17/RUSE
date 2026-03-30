@@ -11,14 +11,11 @@ Configurations (exp-3):
 - M3: MCHP + fall24 calibrated timing
 - M4: MCHP + spring25 calibrated timing
 """
-import signal
 import os
-import random
-import sys
-from datetime import datetime
 from importlib import import_module
-from time import sleep
 from typing import Optional, TYPE_CHECKING
+
+from common.emulation_loop import BaseEmulationLoop
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -37,7 +34,7 @@ WINDOWS_ONLY_WORKFLOWS = {
 }
 
 
-class MCHPAgent:
+class MCHPAgent(BaseEmulationLoop):
     """
     MCHP (Human Emulation) Agent.
 
@@ -64,144 +61,28 @@ class MCHPAgent:
         behavior_config_dir: Optional[str] = None,
         config_key: Optional[str] = None,
     ):
-        self.seed = seed
-        self.cluster_size = cluster_size
-        self.task_interval = task_interval
-        self.group_interval = group_interval
         self.extra = extra or []
-        self.workflows = []
-        self._running = False
-        self.logger = logger
-        self.calibration_profile = calibration_profile
-        self.use_phase_timing = use_phase_timing or (calibration_profile is not None)
-        self._phase_timing = None
-        self._phase_config = phase_config
-        self._tasks_completed = 0
         self.exclude_windows_workflows = exclude_windows_workflows
-        self._behavior_config_dir = behavior_config_dir
-        self._config_key = config_key
-        self._workflow_weights = None
 
-        if self.calibration_profile:
-            self._init_calibrated_timing()
-        elif self.use_phase_timing:
-            self._init_phase_timing()
-
-    def _init_calibrated_timing(self):
-        """Initialize calibrated timing from an empirical profile."""
-        from common.timing.phase_timing import CalibratedTiming, load_calibration_profile
-        config = load_calibration_profile(self.calibration_profile)
-        self._phase_timing = CalibratedTiming(config)
-        print(f"Calibrated timing ({self.calibration_profile}) - activity level: {self._phase_timing.get_activity_level()}")
-
-    def _init_phase_timing(self):
-        """Initialize legacy PHASE timing module."""
-        from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
-
-        if self._phase_config is None:
-            self._phase_config = PhaseTimingConfig(
-                min_cluster_size=3,
-                max_cluster_size=8,
-                min_task_delay=5.0,
-                max_task_delay=30.0,
-                min_cluster_delay=120.0,
-                max_cluster_delay=600.0,
-                enable_hourly_adjustment=True,
-            )
-
-        self._phase_timing = PhaseTiming(self._phase_config)
-        print(f"PHASE timing enabled - current activity level: {self._phase_timing.get_activity_level()}")
-
-    def _reload_behavioral_config(self):
-        """Reload behavioral config from disk (hot-swap support)."""
-        if not self._behavior_config_dir or not self._config_key:
-            self._workflow_weights = None
-            return
-
-        from pathlib import Path
-        from common.behavioral_config import (
-            load_behavioral_config, build_workflow_weights, build_site_weights,
-            build_calibrated_timing_config,
+        super().__init__(
+            cluster_size=cluster_size,
+            task_interval=task_interval,
+            group_interval=group_interval,
+            logger=logger,
+            calibration_profile=calibration_profile,
+            use_phase_timing=use_phase_timing,
+            phase_config=phase_config,
+            seed=seed,
+            behavior_config_dir=behavior_config_dir,
+            config_key=config_key,
         )
 
-        fc = load_behavioral_config(Path(self._behavior_config_dir), self._config_key)
+    # ── Brain-specific implementations ───────────────────────────────
 
-        if fc.is_empty():
-            self._workflow_weights = None
-            return
+    def _agent_type_label(self) -> str:
+        return "mchp"
 
-        # Workflow weights
-        self._workflow_weights = build_workflow_weights(self.workflows, fc)
-        if self._workflow_weights and self.logger:
-            self.logger.info(f"[behavior] Loaded workflow_weights for {self._config_key}",
-                             details={"weights": fc.workflow_weights})
-
-        # Behavior modifiers - apply to BrowseWeb workflow
-        if fc.behavior_modifiers:
-            for w in self.workflows:
-                if getattr(w, 'name', '') == 'BrowseWeb':
-                    page_dwell = fc.behavior_modifiers.get("page_dwell", {})
-                    if "max_seconds" in page_dwell:
-                        w.max_sleep_time = int(page_dwell["max_seconds"])
-                    if "min_seconds" in page_dwell:
-                        w.min_sleep_time = int(page_dwell["min_seconds"])
-                    nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
-                    if "max" in nav_clicks:
-                        w.max_navigation_clicks = int(nav_clicks["max"])
-                    if self.logger:
-                        self.logger.info("[behavior] Applied behavior_modifiers to BrowseWeb",
-                                         details=fc.behavior_modifiers)
-                    break
-
-        # Site config - apply site weights to BrowseWeb workflow
-        if fc.site_config:
-            for w in self.workflows:
-                if getattr(w, 'name', '') == 'BrowseWeb':
-                    site_weights = build_site_weights(w.website_list, fc.site_config)
-                    w.site_weights = site_weights
-                    if site_weights and self.logger:
-                        self.logger.info("[behavior] Applied site_weights to BrowseWeb")
-                    break
-
-        # Timing profile — hot-swap calibrated timing
-        if fc.timing_profile:
-            from common.timing.phase_timing import CalibratedTiming
-            old_last_activity = (self._phase_timing._last_activity_time
-                                 if self._phase_timing else None)
-            config = build_calibrated_timing_config(fc.timing_profile)
-            self._phase_timing = CalibratedTiming(config)
-            self._phase_timing._last_activity_time = old_last_activity
-            self.use_phase_timing = True
-            if self.logger:
-                self.logger.info("[behavior] Hot-swapped timing_profile",
-                                 details={"dataset": config.dataset})
-
-    def _get_cluster_size(self) -> int:
-        """Get cluster size based on timing mode."""
-        if self.use_phase_timing and self._phase_timing:
-            return self._phase_timing.get_cluster_size()
-        return random.randint(1, self.cluster_size)
-
-    def _get_task_delay(self) -> float:
-        """Get inter-task delay based on timing mode."""
-        if self.use_phase_timing and self._phase_timing:
-            return self._phase_timing.get_task_delay()
-        return random.randrange(self.task_interval)
-
-    def _get_cluster_delay(self) -> float:
-        """Get inter-cluster delay based on timing mode."""
-        if self.use_phase_timing and self._phase_timing:
-            # Check if we should take a longer break
-            if self._phase_timing.should_take_break(self._tasks_completed):
-                self._tasks_completed = 0  # Reset counter
-                delay = self._phase_timing.get_break_duration()
-                if self.logger:
-                    self.logger.timing_delay(delay, reason="extended_break")
-                return delay
-            return self._phase_timing.get_cluster_delay()
-        return random.randrange(self.group_interval)
-
-    def _import_workflows(self):
+    def _load_workflows(self) -> list:
         """Dynamically load all workflow modules."""
         extensions = []
         workflows_dir = os.path.join(
@@ -213,7 +94,6 @@ class MCHPAgent:
             dirs[:] = [d for d in dirs if not d[0] == '.' and not d[0] == "_"]
 
             for file in files:
-                # Skip Windows-only workflows for M2+ configs (LLM-augmented, run on Linux)
                 if self.exclude_windows_workflows and file in WINDOWS_ONLY_WORKFLOWS:
                     print(f"Skipping Windows-only workflow: {file}")
                     continue
@@ -232,129 +112,48 @@ class MCHPAgent:
         workflow_module = import_module(full_module)
         return getattr(workflow_module, 'load')()
 
-    def _emulation_loop(self):
-        """Main emulation loop - runs workflows in clusters."""
-        while self._running:
-            # Hot-reload behavioral config at each cluster boundary
-            self._reload_behavioral_config()
-
-            # Log activity level if using PHASE timing
-            if self.use_phase_timing and self._phase_timing:
-                activity_level = self._phase_timing.get_activity_level()
-                current_hour = datetime.now().hour
-                print(f"[{datetime.now().strftime('%H:%M')}] Activity level: {activity_level}")
-                if self.logger:
-                    self.logger.info(f"Activity level: {activity_level}", details={
-                        "hour": current_hour,
-                        "level": activity_level
-                    })
-
-            cluster_size = self._get_cluster_size()
-
-            # Log cluster size decision
-            if self.logger:
-                self.logger.decision(
-                    choice="cluster_size",
-                    selected=str(cluster_size),
-                    context=f"Tasks to run in this cluster",
-                    method="phase" if self.use_phase_timing else "random"
-                )
-
-            for _ in range(cluster_size):
-                # Inter-task delay
-                task_delay = self._get_task_delay()
-                if self.logger:
-                    self.logger.timing_delay(task_delay, reason="inter_task")
-                sleep(task_delay)
-
-                # Select and run workflow
-                if self._workflow_weights:
-                    workflow = random.choices(self.workflows, weights=self._workflow_weights, k=1)[0]
-                else:
-                    index = random.randrange(len(self.workflows))
-                    workflow = self.workflows[index]
-                # Use description for consistency with S/B agents (they use task as workflow name)
-                workflow_name = workflow.description
-
-                # Log workflow selection decision
-                if self.logger:
-                    workflow_options = [w.name for w in self.workflows]
-                    self.logger.decision(
-                        choice="workflow_selection",
-                        options=workflow_options,
-                        selected=workflow.name,
-                        context=workflow_name,
-                        method="behavior_weighted" if self._workflow_weights else "random"
-                    )
-
-                print(workflow.display)
-
-                if self.logger:
-                    self.logger.workflow_start(workflow_name, params={
-                        "agent_type": "mchp",
-                        "workflow_class": workflow.__class__.__name__,
-                        "phase_timing": self.use_phase_timing
-                    })
-
-                try:
-                    workflow.action(self.extra, logger=self.logger)
-                    self._tasks_completed += 1
-                    if self._phase_timing:
-                        self._phase_timing.record_activity()
-                    if self.logger:
-                        self.logger.workflow_end(workflow_name, success=True)
-                except Exception as e:
-                    if self.logger:
-                        self.logger.workflow_end(workflow_name, success=False, error=str(e))
-                    # Don't re-raise - continue with next workflow
-
-            # Inter-cluster delay
-            group_delay = self._get_cluster_delay()
-            if self.logger:
-                self.logger.timing_delay(group_delay, reason="inter_cluster")
-            sleep(group_delay)
-
-    def _signal_handler(self, sig, frame):
-        """Handle shutdown signals gracefully."""
-        self.stop()
-        sys.exit(0)
-
-    def run(self):
-        """Start the MCHP emulation loop."""
-        if self.seed != 0:
-            random.seed(self.seed)
-        else:
-            random.seed()
-        self.workflows = self._import_workflows()
-        self._reload_behavioral_config()
-        self._running = True
-
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-
-        print(f"\nStarting MCHP agent with {len(self.workflows)} workflows")
-        print(f"PHASE timing: {self.use_phase_timing}")
-        if not self.use_phase_timing:
-            print(f"Timing: cluster_size={self.cluster_size}, task_interval={self.task_interval}, group_interval={self.group_interval}")
-        print("-" * 60)
-
+    def _execute_workflow(self, workflow) -> bool:
+        """Execute a single MCHP workflow."""
         try:
-            self._emulation_loop()
-        except KeyboardInterrupt:
-            self.stop()
-            sys.exit(0)
+            workflow.action(self.extra, logger=self.logger)
+            if self.logger:
+                self.logger.workflow_end(workflow.description, success=True)
+            return True
+        except Exception as e:
+            if self.logger:
+                self.logger.workflow_end(workflow.description, success=False, error=str(e))
+            return False
 
-    def stop(self):
-        """Stop the emulation and cleanup workflows."""
-        if not self._running:
-            return  # Already stopped
-        self._running = False
-        print("\nTerminating MCHP agent...")
-        for workflow in self.workflows:
-            try:
-                workflow.cleanup()
-            except Exception:
-                pass  # Ignore cleanup errors on shutdown
+    def _apply_brain_specific_config(self, fc) -> None:
+        """Apply MCHP-specific behavioral config: page_dwell, nav_clicks, site_weights."""
+        from common.behavioral_config import build_site_weights
+
+        # Behavior modifiers — apply to BrowseWeb workflow
+        if fc.behavior_modifiers:
+            for w in self.workflows:
+                if getattr(w, 'name', '') == 'BrowseWeb':
+                    page_dwell = fc.behavior_modifiers.get("page_dwell", {})
+                    if "max_seconds" in page_dwell:
+                        w.max_sleep_time = int(page_dwell["max_seconds"])
+                    if "min_seconds" in page_dwell:
+                        w.min_sleep_time = int(page_dwell["min_seconds"])
+                    nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
+                    if "max" in nav_clicks:
+                        w.max_navigation_clicks = int(nav_clicks["max"])
+                    if self.logger:
+                        self.logger.info("[behavior] Applied behavior_modifiers to BrowseWeb",
+                                         details=fc.behavior_modifiers)
+                    break
+
+        # Site config — apply site weights to BrowseWeb workflow
+        if fc.site_config:
+            for w in self.workflows:
+                if getattr(w, 'name', '') == 'BrowseWeb':
+                    site_weights = build_site_weights(w.website_list, fc.site_config)
+                    w.site_weights = site_weights
+                    if site_weights and self.logger:
+                        self.logger.info("[behavior] Applied site_weights to BrowseWeb")
+                    break
 
 
 def run(cluster_size=DEFAULT_CLUSTER_SIZE, task_interval=DEFAULT_TASK_INTERVAL,

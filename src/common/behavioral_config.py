@@ -36,12 +36,18 @@ class BehavioralConfig:
     site_config: Optional[dict] = None          # {"site_categories": {...}}
     prompt_augmentation: Optional[dict] = None  # {"prompt_content": "..."}
     timing_profile: Optional[dict] = None       # calibrated timing profile
+    # Feedback engine v2 configs
+    variance_injection: Optional[dict] = None   # volume/timing variance targets
+    diversity_injection: Optional[dict] = None   # service entropy + workflow rotation
+    activity_pattern: Optional[dict] = None      # daily activity shape
 
     def is_empty(self) -> bool:
         return all(v is None for v in
                    [self.workflow_weights, self.behavior_modifiers,
                     self.site_config, self.prompt_augmentation,
-                    self.timing_profile])
+                    self.timing_profile,
+                    self.variance_injection, self.diversity_injection,
+                    self.activity_pattern])
 
 
 def config_key_to_behavior_dir(config_key: str) -> str:
@@ -144,6 +150,9 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         "site_config": f"{config_key}_site_config.json",
         "prompt_augmentation": f"{config_key}_prompt_augmentation.json",
         "timing_profile": f"{config_key}_timing_profile.json",
+        "variance_injection": f"{config_key}_variance_injection.json",
+        "diversity_injection": f"{config_key}_diversity_injection.json",
+        "activity_pattern": f"{config_key}_activity_pattern.json",
     }
 
     for attr, legacy_filename in file_map.items():

@@ -3,7 +3,7 @@ BrowserUse Brain - AI-powered browser automation.
 
 Single-Task Configurations:
 - B1.llama: DEFAULT_PROMPTS + llama3.1:8b
-- B2.gemma: DEFAULT_PROMPTS + gemma3:4b
+- B2.gemma: DEFAULT_PROMPTS + gemma3:1b
 - B3.deepseek: DEFAULT_PROMPTS + deepseek-r1:8b
 
 Loop Mode Configurations (continuous execution with native workflows):

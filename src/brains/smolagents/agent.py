@@ -37,7 +37,7 @@ class SmolAgent:
 
     Configurations:
     - S1.llama: DEFAULT_PROMPTS + llama3.1:8b
-    - S2.gemma: DEFAULT_PROMPTS + gemma3:4b
+    - S2.gemma: DEFAULT_PROMPTS + gemma3:1b
     - S3.deepseek: DEFAULT_PROMPTS + deepseek-r1:8b
     - S?.model+: PHASE_PROMPTS + any model (POST-PHASE)
     """
