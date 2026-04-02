@@ -25,13 +25,63 @@ FEEDBACK_TEMPLATE = [
     {"behavior": "B2R.gemma", "flavor": "rtx2080ti-1gpu.14vcpu.28g", "count": 1},
 ]
 
+# Maps PHASE manifest dataset names → short abbreviations for deployment directory names.
+# Used by generate_feedback_config() to abbreviate "axes-summer24" → "sum24" etc.
+# Lookup: try exact match on full dataset name first, then substring (longest key first).
 DATASET_ABBREVIATIONS = {
+    # PHASE canonical names (exact match from manifest "dataset" field)
+    "axes-summer24": "sum24",
+    "axes-fall24": "fall24",
+    "axes-spring25": "spr25",
+    "axes-summer25": "sum25",
+    "axes-fall25": "fall25",
+    "axes-2025": "2025",
+    "axes-all": "axall",
+    "axes-year": "axyear",
+    "cptc8-23": "cptc8",
+    "cptc9-24": "cptc9",
+    "vt-fall22-1gb": "vt1g",
+    "vt-fall22-10gb": "vt10g",
+    "vt-fall22-50gb": "vt50g",
+    # Short aliases (for CLI --target convenience and substring fallback)
     "summer24": "sum24",
     "sum24": "sum24",
     "fall24": "fall24",
     "spring25": "spr25",
     "spr25": "spr25",
+    "summer25": "sum25",
+    "sum25": "sum25",
+    "fall25": "fall25",
+    "cptc8": "cptc8",
+    "cptc9": "cptc9",
+    "vt-1gb": "vt1g",
+    "vt1g": "vt1g",
+    "vt-10gb": "vt10g",
+    "vt10g": "vt10g",
+    "vt-50gb": "vt50g",
+    "vt50g": "vt50g",
 }
+
+
+def _abbreviate_dataset(dataset: str) -> str:
+    """Abbreviate a PHASE dataset name for use in deployment directory names.
+
+    Tries exact match first, then longest substring match to avoid
+    false positives (e.g., "all" matching "vt-fall22-1gb").
+    """
+    # Exact match
+    if dataset in DATASET_ABBREVIATIONS:
+        return DATASET_ABBREVIATIONS[dataset]
+
+    # Longest substring match (avoids "all" matching "fall22")
+    best_key = ""
+    best_abbrev = ""
+    for key, abbrev in DATASET_ABBREVIATIONS.items():
+        if key in dataset and len(key) > len(best_key):
+            best_key = key
+            best_abbrev = abbrev
+
+    return best_abbrev if best_abbrev else dataset[:6]
 
 
 def resolve_feedback_args(
@@ -106,13 +156,38 @@ def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
     return best_typed or best_any
 
 
-# Known dataset targets — maps short names to search strings
+# Known dataset targets — maps short/friendly names to search strings
+# used against PHASE feedback directory names in ~/PHASE/feedback_engine/configs/.
+# The search string must appear somewhere in the directory name.
 DATASET_TARGETS = {
+    # AXES seasonal
     "summer24": "summer24",
     "sum24": "summer24",
     "fall24": "fall24",
     "spring25": "spring25",
     "spr25": "spring25",
+    "summer25": "summer25",
+    "sum25": "summer25",
+    "fall25": "fall25",
+    # AXES aggregate
+    "2025": "axes-2025",
+    "all": "axes-all",
+    "year": "axes-year",
+    # CPTC
+    "cptc8-23": "cptc8-23",
+    "cptc8": "cptc8-23",
+    "cptc9-24": "cptc9-24",
+    "cptc9": "cptc9-24",
+    # VirusTotal
+    "vt-fall22-1gb": "vt-fall22-1gb",
+    "vt-1gb": "vt-fall22-1gb",
+    "vt1g": "vt-fall22-1gb",
+    "vt-fall22-10gb": "vt-fall22-10gb",
+    "vt-10gb": "vt-fall22-10gb",
+    "vt10g": "vt-fall22-10gb",
+    "vt-fall22-50gb": "vt-fall22-50gb",
+    "vt-50gb": "vt-fall22-50gb",
+    "vt50g": "vt-fall22-50gb",
 }
 
 
@@ -182,14 +257,8 @@ def generate_feedback_config(
     preset_name = manifest.get("preset_name", "unknown")
     dataset = manifest.get("dataset", "unknown")
 
-    # Abbreviate dataset
-    dataset_abbrev = dataset
-    for key, abbrev in DATASET_ABBREVIATIONS.items():
-        if key in dataset:
-            dataset_abbrev = abbrev
-            break
-    if dataset_abbrev == dataset:
-        dataset_abbrev = dataset[:6]
+    # Abbreviate dataset (exact match first, then longest substring match)
+    dataset_abbrev = _abbreviate_dataset(dataset)
 
     # Scope label
     if configs_spec == "all":
@@ -250,14 +319,8 @@ def generate_rampart_feedback_config(
     preset_name = manifest.get("preset_name", "unknown")
     dataset = manifest.get("dataset", "unknown")
 
-    # Abbreviate dataset
-    dataset_abbrev = dataset
-    for key, abbrev in DATASET_ABBREVIATIONS.items():
-        if key in dataset:
-            dataset_abbrev = abbrev
-            break
-    if dataset_abbrev == dataset:
-        dataset_abbrev = dataset[:6]
+    # Abbreviate dataset (exact match first, then longest substring match)
+    dataset_abbrev = _abbreviate_dataset(dataset)
 
     # Scope label
     if configs_spec == "all":
@@ -309,14 +372,8 @@ def generate_ghosts_feedback_config(
     preset_name = manifest.get("preset_name", "unknown")
     dataset = manifest.get("dataset", "unknown")
 
-    # Abbreviate dataset
-    dataset_abbrev = dataset
-    for key, abbrev in DATASET_ABBREVIATIONS.items():
-        if key in dataset:
-            dataset_abbrev = abbrev
-            break
-    if dataset_abbrev == dataset:
-        dataset_abbrev = dataset[:6]
+    # Abbreviate dataset (exact match first, then longest substring match)
+    dataset_abbrev = _abbreviate_dataset(dataset)
 
     # Scope label
     if configs_spec == "all":

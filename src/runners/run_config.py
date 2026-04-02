@@ -232,8 +232,17 @@ def build_config(brain: BrainType, content: ContentType = "none",
                defaults to calibration="summer24" (exp-2 behavior).
         seed: Random seed for deterministic behavior (0 = non-deterministic).
     """
+    import os
+
     # Backward compat: --phase without --calibration means summer24
     if phase and calibration is None:
         calibration = "summer24"
+
+    # Use SUP_CONFIG_KEY env var as key override when set (e.g., M2, B2.llama).
+    # This is set by run_agent.sh and determines which deployed_sups/<key>/
+    # directory the agent reads behavioral configs from.
+    key_override = os.environ.get("SUP_CONFIG_KEY")
+
     return SUPConfig(brain=brain, content=content, model=model,
-                     calibration=calibration, cpu_only=cpu_only, seed=seed)
+                     calibration=calibration, cpu_only=cpu_only, seed=seed,
+                     _key_override=key_override)
