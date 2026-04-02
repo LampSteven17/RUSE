@@ -16,10 +16,33 @@ Missing configs are handled gracefully — each mapping falls back to baseline v
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import sys
 from pathlib import Path
+
+
+# ── PHASE → pyhuman workflow name mapping ────────────────────────────────
+
+PHASE_TO_PYHUMAN = {
+    "BrowseWeb": "browse_web",
+    "GoogleSearch": "google_search",
+    "WebSearch": "google_search",       # pyhuman has no separate web search
+    "BrowseYoutube": "browse_youtube",
+    "DownloadFiles": "download_files",
+    "SpawnShell": "spawn_shell",
+    "ExecuteCommand": "spawn_shell",
+}
+
+# Enterprise-only pyhuman workflows with no PHASE equivalent.
+# Always retained regardless of PHASE weights.
+ENTERPRISE_ONLY_WORKFLOWS = {"browse_iis", "browse_shibboleth", "moodle", "build_software"}
+
+# Default pyhuman timing parameters (matching current hardcoded values)
+DEFAULT_CLUSTERSIZE = "5"
+DEFAULT_TASKINTERVAL = "10"
+DEFAULT_TASKGROUPINTERVAL = "500"
 
 
 # ── Config loading ──────────────────────────────────────────────────────
@@ -152,6 +175,112 @@ def _extract_login_length(
     return session_min, session_max
 
 
+def _extract_workflows(
+    workflow_weights: dict | None, baseline_role: dict,
+) -> list[str]:
+    """Extract filtered workflow list from workflow_weights.json.
+
+    Maps PHASE CamelCase names to pyhuman snake_case. Drops workflows
+    with weight == 0. Enterprise-only workflows (no PHASE equivalent)
+    are always retained.
+    """
+    baseline_workflows = list(baseline_role.get("workflows", []))
+    if not workflow_weights:
+        return baseline_workflows
+
+    raw = workflow_weights.get("workflow_weights", {})
+    if not raw or not isinstance(raw, dict):
+        return baseline_workflows
+
+    # Determine which pyhuman workflows PHASE wants to keep vs drop
+    phase_keep: set[str] = set()
+    phase_drop: set[str] = set()
+    for phase_name, weight in raw.items():
+        if not isinstance(weight, (int, float)):
+            continue
+        pyhuman_name = PHASE_TO_PYHUMAN.get(phase_name)
+        if not pyhuman_name:
+            continue  # Unknown PHASE workflow (e.g. OpenOfficeWriter)
+        if weight > 0:
+            phase_keep.add(pyhuman_name)
+        else:
+            phase_drop.add(pyhuman_name)
+
+    # Build result: start from baseline, drop zero-weight PHASE-mapped workflows
+    result = []
+    for wf in baseline_workflows:
+        if wf in ENTERPRISE_ONLY_WORKFLOWS:
+            result.append(wf)  # Always keep enterprise-only
+        elif wf in phase_drop and wf not in phase_keep:
+            continue  # PHASE says weight=0 for this one
+        else:
+            result.append(wf)
+
+    return result if result else baseline_workflows
+
+
+def _extract_timing_params(
+    timing: dict | None, variance: dict | None, baseline_role: dict,
+) -> tuple[str, str, str]:
+    """Extract clustersize/taskinterval/taskgroupinterval from timing_profile.json.
+
+    Maps:
+      connections_per_burst p50 → clustersize
+      idle_gap_minutes p50 → taskgroupinterval (minutes → seconds)
+    taskinterval is scaled proportionally from clustersize.
+
+    If variance_injection.json provides cluster_size_cv, applies deterministic
+    per-node jitter to clustersize using a hash of the role name.
+
+    Returns (clustersize, taskinterval, taskgroupinterval) as strings.
+    """
+    fallback = (
+        baseline_role.get("clustersize", DEFAULT_CLUSTERSIZE),
+        baseline_role.get("taskinterval", DEFAULT_TASKINTERVAL),
+        baseline_role.get("taskgroupinterval", DEFAULT_TASKGROUPINTERVAL),
+    )
+    if not timing:
+        return fallback
+
+    burst = timing.get("burst_characteristics", {})
+    cpb = burst.get("connections_per_burst", {}).get("percentiles", {})
+    idle = burst.get("idle_gap_minutes", {}).get("percentiles", {})
+
+    cpb_p50 = cpb.get("50")
+    idle_p50 = idle.get("50")
+
+    if cpb_p50 is None and idle_p50 is None:
+        return fallback
+
+    # clustersize: connections_per_burst p50, clamped [1, 50]
+    if cpb_p50 is not None:
+        cs = max(1, min(50, int(round(float(cpb_p50)))))
+    else:
+        cs = int(fallback[0])
+
+    # taskgroupinterval: idle_gap_minutes p50 → seconds, clamped [10, 3600]
+    if idle_p50 is not None:
+        tgi = max(10, min(3600, int(round(float(idle_p50) * 60))))
+    else:
+        tgi = int(fallback[2])
+
+    # Apply variance jitter to clustersize if available
+    if variance:
+        cv = variance.get("volume_variance", {}).get("cluster_size_cv")
+        if cv is not None and float(cv) > 0:
+            # Deterministic per-node jitter using hash of role name
+            node_hash = int(hashlib.md5(
+                baseline_role.get("name", "").encode()
+            ).hexdigest()[:8], 16)
+            direction = (node_hash % 200 - 100) / 100.0  # [-1.0, 1.0)
+            cs = max(1, min(50, int(round(cs * (1 + float(cv) * 0.5 * direction)))))
+
+    # taskinterval: scale relative to clustersize (2s per task), clamped [1, 120]
+    ti = max(1, min(120, cs * 2))
+
+    return str(cs), str(ti), str(tgi)
+
+
 # ── Main generator ──────────────────────────────────────────────────────
 
 def generate_user_roles(
@@ -206,6 +335,9 @@ def generate_user_roles(
         # Load PHASE configs
         activity = _load(node_feedback_dir, "activity_pattern.json")
         modifiers = _load(node_feedback_dir, "behavior_modifiers.json")
+        workflow_weights = _load(node_feedback_dir, "workflow_weights.json")
+        timing = _load(node_feedback_dir, "timing_profile.json")
+        variance = _load(node_feedback_dir, "variance_injection.json")
 
         # Clone baseline and override with PHASE values
         role = copy.deepcopy(baseline_role)
@@ -222,6 +354,11 @@ def generate_user_roles(
 
         role["min_login_length"], role["max_login_length"] = \
             _extract_login_length(modifiers, baseline_role)
+
+        role["workflows"] = _extract_workflows(workflow_weights, baseline_role)
+
+        role["clustersize"], role["taskinterval"], role["taskgroupinterval"] = \
+            _extract_timing_params(timing, variance, baseline_role)
 
         per_node_roles.append(role)
         nodes_processed.append(node_name)

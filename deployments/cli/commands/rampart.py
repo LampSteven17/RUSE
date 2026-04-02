@@ -477,6 +477,9 @@ def _generate_emulation_inventory(
             "password": user["user_profile"]["password"],
             "domain": user["domain"],
             "workflows": " ".join(user["login_profile"]["workflows"]),
+            "clustersize": user["login_profile"].get("clustersize", "5"),
+            "taskinterval": user["login_profile"].get("taskinterval", "10"),
+            "taskgroupinterval": user["login_profile"].get("taskgroupinterval", "500"),
         }
 
     # Extract domain admin password (needed for Windows SSH)
@@ -539,7 +542,10 @@ def _generate_emulation_inventory(
             f"rampart_password={user['password']} "
             f"rampart_domain={user['domain']} "
             f"rampart_workflows=\"{user['workflows']}\" "
-            f"rampart_seed={vm_seed}"
+            f"rampart_seed={vm_seed} "
+            f"rampart_clustersize={user['clustersize']} "
+            f"rampart_taskinterval={user['taskinterval']} "
+            f"rampart_taskgroupinterval={user['taskgroupinterval']}"
         )
 
         if node_info["is_windows"]:
@@ -641,6 +647,9 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
             "password": u["user_profile"]["password"],
             "workflows": " ".join(u["login_profile"]["workflows"]),
             "seed": seed + idx,
+            "clustersize": u["login_profile"].get("clustersize", "5"),
+            "taskinterval": u["login_profile"].get("taskinterval", "10"),
+            "taskgroupinterval": u["login_profile"].get("taskgroupinterval", "500"),
         })
         idx += 1
 
@@ -678,7 +687,7 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
                 f"$l += 'while ($true) {{'; "
                 f"$l += '    try {{'; "
                 f"$l += '        & C:\\Python\\python.exe -u C:\\human\\human.py "
-                f"--clustersize 5 --taskinterval 10 --taskgroupinterval 500 "
+                f"--clustersize {vm['clustersize']} --taskinterval {vm['taskinterval']} --taskgroupinterval {vm['taskgroupinterval']} "
                 f"--seed {vm['seed']} --workflows {vm['workflows']} "
                 f"--extra passfile C:\\tmp\\shib_login.{vm['username']}'; "
                 f"$l += '    }} catch {{'; "

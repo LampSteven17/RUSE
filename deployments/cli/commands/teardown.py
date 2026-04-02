@@ -85,16 +85,15 @@ def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: P
 
     output.info("Verified: 0 VMs remaining on OpenStack")
 
-    # Cleanup local state
+    # Cleanup local state — remove this run, then remove feedback config dir if empty
+    if run_dir.is_dir():
+        _safe_rmtree(run_dir)
+
     if config_name.startswith("ruse-feedback-"):
-        _safe_rmtree(config_dir)
-    elif run_dir.is_dir():
-        for f in ("inventory.ini", "ssh_config_snippet.txt", "config.yaml"):
-            (run_dir / f).unlink(missing_ok=True)
-        try:
-            run_dir.rmdir()
-        except OSError:
-            pass
+        runs_dir = config_dir / "runs"
+        remaining_runs = [d for d in runs_dir.iterdir() if d.is_dir()] if runs_dir.is_dir() else []
+        if not remaining_runs:
+            _safe_rmtree(config_dir)
 
     return result.rc
 
@@ -185,6 +184,13 @@ def _rampart_teardown(
         _safe_rmtree(run_dir)
         output.info("  Removed local run directory")
 
+    if config_name.startswith("rampart-feedback-"):
+        runs_dir = config_dir / "runs"
+        remaining_runs = [d for d in runs_dir.iterdir() if d.is_dir()] if runs_dir.is_dir() else []
+        if not remaining_runs:
+            _safe_rmtree(config_dir)
+            output.info("  Removed feedback config directory")
+
     output.info("")
     output.info("DONE: all RAMPART VMs deleted")
     return 0
@@ -237,13 +243,17 @@ def _ghosts_teardown(
         output.info(f"WARNING: {remaining} GHOSTS VMs still exist on OpenStack")
         return 1
 
-    # Cleanup local state
-    if config_name.startswith("ghosts-feedback-"):
-        _safe_rmtree(config_dir)
-        output.info("  Removed feedback config directory")
-    elif run_dir.is_dir():
+    # Cleanup local state — remove this run, then remove feedback config dir if empty
+    if run_dir.is_dir():
         _safe_rmtree(run_dir)
         output.info("  Removed local run directory")
+
+    if config_name.startswith("ghosts-feedback-"):
+        runs_dir = config_dir / "runs"
+        remaining_runs = [d for d in runs_dir.iterdir() if d.is_dir()] if runs_dir.is_dir() else []
+        if not remaining_runs:
+            _safe_rmtree(config_dir)
+            output.info("  Removed feedback config directory")
 
     output.info("")
     output.info("DONE: all GHOSTS VMs deleted")

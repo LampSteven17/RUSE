@@ -70,7 +70,7 @@ examples:
     p.add_argument("--all-feedback", action="store_true", dest="all_configs", help="All behavioral configs (same as --feedback)")
 
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory")
-    p.add_argument("--target", type=str, help="Dataset target (e.g., summer24, fall24, spring25)")
+    p.add_argument("--target", type=str, help="Dataset target (e.g., summer24, fall24, vt-50gb, cptc8)")
     return p
 
 
@@ -131,13 +131,16 @@ def _cmd_deploy(argv: list[str]) -> int:
     parser = _deploy_parser()
     args = parser.parse_args(argv)
 
-    # --feedback is the unified flag; --all-feedback is a RUSE synonym
-    # Build configs_spec from --feedback or individual granular flags
-    if args.feedback or args.all_configs:
+    # Build configs_spec: granular flags always win when present.
+    # --feedback alone = "all", --feedback --timing = timing only,
+    # --all-feedback = "all" regardless of granular flags.
+    selected = [fname for flag, fname in _CONFIG_FLAGS.items() if getattr(args, flag, False)]
+    if selected:
+        configs_spec = ",".join(selected)
+    elif args.feedback or args.all_configs:
         configs_spec = "all"
     else:
-        selected = [fname for flag, fname in _CONFIG_FLAGS.items() if getattr(args, flag, False)]
-        configs_spec = ",".join(selected) if selected else None
+        configs_spec = None
 
     if args.rampart:
         from .commands.rampart import run_rampart_spinup
