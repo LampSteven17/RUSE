@@ -64,10 +64,13 @@ def run_list(deploy_dir: Path) -> int:
                 continue
 
             vm_summary = _get_vm_summary(run_dir, config)
+            expected = _get_expected_count(run_dir, config)
+            live = _count_live_vms(name, rid, config, os_client)
+            active_col = f"{live}/{expected}" if expected > 0 else "?"
             date_col = _format_run_date(rid)
             target = f"{name}-{rid}"
 
-            groups[group].append([target, vm_summary, date_col])
+            groups[group].append([target, vm_summary, active_col, date_col])
 
     total = sum(len(rows) for rows in groups.values())
     if total == 0:
@@ -82,12 +85,21 @@ def run_list(deploy_dir: Path) -> int:
         "other": "Other",
     }
 
+    # Compute global column widths across all groups for alignment
+    headers = ["Target", "VMs", "Active", "Date"]
+    all_rows = [row for rows in groups.values() for row in rows]
+    col_widths = [len(h) for h in headers]
+    for row in all_rows:
+        for i, cell in enumerate(row):
+            if i < len(col_widths):
+                col_widths[i] = max(col_widths[i], len(cell))
+
     for key in ("ruse", "rampart", "ghosts", "other"):
         rows = groups[key]
         if not rows:
             continue
         output.header(GROUP_LABELS[key])
-        output.table(["Target", "VMs", "Date"], rows)
+        output.table(headers, rows, col_widths=col_widths)
         output.info("")
 
     return 0
@@ -118,6 +130,42 @@ def _check_active(
         return os_client.has_vms_with_prefix(f"g-{g_hash}-")
     else:
         return os_client.has_vms_with_prefix(f"r-{dep_id}-")
+
+
+def _get_expected_count(run_dir: Path, config: DeploymentConfig) -> int:
+    """Get expected VM count from inventory or config."""
+    if config.is_rampart():
+        summary = _get_enterprise_vm_count(run_dir)
+        # Parse "23 (3 infra + 20 ep)" → 23
+        try:
+            return int(summary.split()[0])
+        except (ValueError, IndexError):
+            return 0
+
+    if config.is_ghosts():
+        return 1 + config.ghosts_client_count()
+
+    # SUP: count from inventory or config
+    inv_path = run_dir / "inventory.ini"
+    if inv_path.exists():
+        return sum(1 for line in inv_path.read_text().splitlines()
+                   if re.search(r"sup_behavior=\S+", line))
+    return config.vm_count()
+
+
+def _count_live_vms(
+    name: str, rid: str, config: DeploymentConfig, os_client: OpenStack,
+) -> int:
+    """Count VMs currently on OpenStack for this deployment."""
+    dep_id = _make_dep_id(name, rid)
+    if config.is_rampart():
+        ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
+        return os_client.count_vms_with_prefix(f"e-{ent_hash}-")
+    elif config.is_ghosts():
+        g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
+        return os_client.count_vms_with_prefix(f"g-{g_hash}-")
+    else:
+        return os_client.count_vms_with_prefix(f"r-{dep_id}-")
 
 
 def _get_vm_summary(run_dir: Path, config: DeploymentConfig) -> str:
