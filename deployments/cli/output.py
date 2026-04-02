@@ -95,18 +95,25 @@ def timestamp() -> str:
     return time.strftime("%H:%M:%S")
 
 
-def table(headers: list[str], rows: list[list[str]], indent: int = 2) -> None:
-    """Print a formatted table with auto-width columns."""
+def table(
+    headers: list[str],
+    rows: list[list[str]],
+    indent: int = 2,
+    col_widths: list[int] | None = None,
+) -> None:
+    """Print a formatted table with auto-width or pre-computed column widths."""
     if not rows:
         return
-    all_rows = [headers] + rows
-    col_widths = []
-    for col_idx in range(len(headers)):
-        max_width = 0
-        for row in all_rows:
-            if col_idx < len(row):
-                max_width = max(max_width, len(row[col_idx]))
-        col_widths.append(max_width)
+
+    if col_widths is None:
+        all_rows = [headers] + rows
+        col_widths = []
+        for col_idx in range(len(headers)):
+            max_width = 0
+            for row in all_rows:
+                if col_idx < len(row):
+                    max_width = max(max_width, len(row[col_idx]))
+            col_widths.append(max_width)
 
     prefix = " " * indent
 
