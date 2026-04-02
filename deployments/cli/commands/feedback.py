@@ -21,8 +21,8 @@ FEEDBACK_TEMPLATE = [
     {"behavior": "B2C.gemma", "flavor": "v1.14vcpu.28g", "count": 1},
     {"behavior": "S2C.llama", "flavor": "v1.14vcpu.28g", "count": 1},
     {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g", "count": 1},
-    {"behavior": "B2R.llama", "flavor": "rtx2080ti-A-1gpu.14vcpu.28g", "count": 1},
-    {"behavior": "B2R.gemma", "flavor": "rtx2080ti-A-1gpu.14vcpu.28g", "count": 1},
+    {"behavior": "B2R.llama", "flavor": "rtx2080ti-1gpu.14vcpu.28g", "count": 1},
+    {"behavior": "B2R.gemma", "flavor": "rtx2080ti-1gpu.14vcpu.28g", "count": 1},
 ]
 
 # Maps PHASE manifest dataset names → short abbreviations for deployment directory names.
@@ -285,7 +285,7 @@ def generate_feedback_config(
         "flavor_capacity": {
             "v1.14vcpu.28g": 5,
             "v100-1gpu.14vcpu.28g": 4,
-            "rtx2080ti-A-1gpu.14vcpu.28g": 2,
+            "rtx2080ti-1gpu.14vcpu.28g": 2,
         },
         "deployments": FEEDBACK_TEMPLATE,
     }
