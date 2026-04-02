@@ -200,6 +200,20 @@ def build_workflow_weights(workflows, behavioral_config: BehavioralConfig) -> Op
     return None
 
 
+def _category_weight(categories: dict, category: str, default: float = 1.0) -> float:
+    """Extract a numeric weight from a category entry.
+
+    Handles both flat format (category: 0.5) and PHASE dict format
+    (category: {"weight": 0.5, "description": "..."}).
+    """
+    val = categories.get(category)
+    if val is None:
+        return default
+    if isinstance(val, dict):
+        return float(val.get("weight", default))
+    return float(val)
+
+
 def build_site_weights(website_list: list, site_config: dict) -> Optional[List[float]]:
     """
     Build weights for website selection based on site_config categories.
@@ -224,7 +238,7 @@ def build_site_weights(website_list: list, site_config: dict) -> Optional[List[f
     if not categories:
         return None
 
-    default_weight = categories.get("default", 1.0)
+    default_weight = _category_weight(categories, "default", 1.0)
     result = []
 
     for site in website_list:
@@ -234,10 +248,10 @@ def build_site_weights(website_list: list, site_config: dict) -> Optional[List[f
         # Check domain_categories for explicit mapping
         for domain_substr, category in domain_map.items():
             if domain_substr.lower() in site_lower:
-                weight = categories.get(category, default_weight)
+                weight = _category_weight(categories, category, default_weight)
                 break
 
-        result.append(float(weight))
+        result.append(weight)
 
     return result
 
@@ -291,7 +305,7 @@ def build_task_weights(task_list: list, site_config: dict) -> Optional[List[floa
     if not categories:
         return None
 
-    default_weight = categories.get("default", 1.0)
+    default_weight = _category_weight(categories, "default", 1.0)
     result = []
 
     for task in task_list:
@@ -301,9 +315,9 @@ def build_task_weights(task_list: list, site_config: dict) -> Optional[List[floa
         # Check task_categories for keyword matching
         for keyword, category in task_categories.items():
             if keyword.lower() in task_lower:
-                weight = categories.get(category, default_weight)
+                weight = _category_weight(categories, category, default_weight)
                 break
 
-        result.append(float(weight))
+        result.append(weight)
 
     return result
