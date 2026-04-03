@@ -70,7 +70,7 @@ def run_smolagents(config: SUPConfig, task: str = None, behavior_config_dir: str
         logger.session_end()
 
 
-def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True, behavior_config_dir: str = None):
+def run_smolagents_loop(config: SUPConfig, behavior_config_dir: str = None):
     """Run SmolAgents in loop mode (continuous execution)."""
     calibration_profile = config.calibration
 
@@ -113,8 +113,6 @@ def run_smolagents_loop(config: SUPConfig, use_phase_timing: bool = True, behavi
             prompts=prompts,
             logger=logger,
             calibration_profile=calibration_profile,
-            # Legacy compat: fall back to use_phase_timing if no calibration
-            use_phase_timing=use_phase_timing if not calibration_profile else False,
             seed=config.seed,
             behavior_config_dir=str(resolved_behavior_config_dir),
             config_key=config.config_key,
@@ -141,7 +139,6 @@ if __name__ == "__main__":
     parser.add_argument("--phase", action="store_true", help="Legacy: use summer24 calibration")
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--cpu", action="store_true")
-    parser.add_argument("--no-phase-timing", action="store_true")
     parser.add_argument("--behavior-config-dir", type=str, default=None,
                         help="Override behavioral config directory")
     args = parser.parse_args()
@@ -154,7 +151,6 @@ if __name__ == "__main__":
                           calibration=calibration, cpu_only=args.cpu)
 
     if args.loop:
-        run_smolagents_loop(config, use_phase_timing=not args.no_phase_timing,
-                            behavior_config_dir=args.behavior_config_dir)
+        run_smolagents_loop(config, behavior_config_dir=args.behavior_config_dir)
     else:
         run_smolagents(config, task=args.task, behavior_config_dir=args.behavior_config_dir)

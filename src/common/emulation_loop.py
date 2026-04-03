@@ -30,8 +30,6 @@ class BaseEmulationLoop(ABC):
         group_interval: int = 600,
         logger=None,
         calibration_profile: Optional[str] = None,
-        use_phase_timing: bool = False,
-        phase_config=None,
         seed: int = 42,
         behavior_config_dir: Optional[str] = None,
         config_key: Optional[str] = None,
@@ -42,9 +40,7 @@ class BaseEmulationLoop(ABC):
         self.group_interval = group_interval
         self.logger = logger
         self.calibration_profile = calibration_profile
-        self.use_phase_timing = use_phase_timing or (calibration_profile is not None)
-        self._phase_timing = None
-        self._phase_config = phase_config
+        self._phase_timing = None  # CalibratedTiming instance, or None for baselines
         self._tasks_completed = 0
         self._behavior_config_dir = behavior_config_dir
         self._config_key = config_key
@@ -58,8 +54,6 @@ class BaseEmulationLoop(ABC):
 
         if self.calibration_profile:
             self._init_calibrated_timing()
-        elif self.use_phase_timing:
-            self._init_phase_timing()
 
     # ── Abstract methods (subclasses must implement) ─────────────────
 
@@ -92,38 +86,20 @@ class BaseEmulationLoop(ABC):
         self._phase_timing = CalibratedTiming(config)
         print(f"Calibrated timing ({self.calibration_profile}) - activity level: {self._phase_timing.get_activity_level()}")
 
-    def _init_phase_timing(self):
-        """Initialize legacy PHASE timing module."""
-        from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
-
-        if self._phase_config is None:
-            self._phase_config = PhaseTimingConfig(
-                min_cluster_size=3,
-                max_cluster_size=8,
-                min_task_delay=5.0,
-                max_task_delay=30.0,
-                min_cluster_delay=120.0,
-                max_cluster_delay=600.0,
-                enable_hourly_adjustment=True,
-            )
-
-        self._phase_timing = PhaseTiming(self._phase_config)
-        print(f"PHASE timing enabled - current activity level: {self._phase_timing.get_activity_level()}")
-
     # ── Timing helpers ───────────────────────────────────────────────
 
     def _get_cluster_size(self) -> int:
-        if self.use_phase_timing and self._phase_timing:
+        if self._phase_timing:
             return self._phase_timing.get_cluster_size()
         return random.randint(1, self.cluster_size)
 
     def _get_task_delay(self) -> float:
-        if self.use_phase_timing and self._phase_timing:
+        if self._phase_timing:
             return self._phase_timing.get_task_delay()
         return random.randrange(self.task_interval)
 
     def _get_cluster_delay(self) -> float:
-        if self.use_phase_timing and self._phase_timing:
+        if self._phase_timing:
             if self._phase_timing.should_take_break(self._tasks_completed):
                 self._tasks_completed = 0
                 return self._phase_timing.get_break_duration()
@@ -187,17 +163,16 @@ class BaseEmulationLoop(ABC):
                 activity_config=fc.activity_pattern,
             )
             self._phase_timing._last_activity_time = old_last_activity
-            self.use_phase_timing = True
             if self.logger:
                 self.logger.info("[behavior] Hot-swapped timing_profile",
                                  details={"dataset": config.dataset})
         elif self._phase_timing:
-            if fc.variance_injection and hasattr(self._phase_timing, 'update_variance_config'):
+            if fc.variance_injection:
                 self._phase_timing.update_variance_config(fc.variance_injection)
                 if self.logger:
                     self.logger.info("[behavior] Applied variance_injection",
                                      details=fc.variance_injection)
-            if fc.activity_pattern and hasattr(self._phase_timing, 'update_activity_config'):
+            if fc.activity_pattern:
                 self._phase_timing.update_activity_config(fc.activity_pattern)
                 if self.logger:
                     self.logger.info("[behavior] Applied activity_pattern",
@@ -255,9 +230,8 @@ class BaseEmulationLoop(ABC):
         while self._running:
             self._reload_behavioral_config()
 
-            # Activity pattern: skip low-activity hours (CalibratedTiming only)
-            if self._phase_timing and hasattr(self._phase_timing, 'should_skip_hour'):
-                if self._phase_timing.should_skip_hour():
+            # Activity pattern: skip low-activity hours
+            if self._phase_timing and self._phase_timing.should_skip_hour():
                     now = datetime.now()
                     seconds_until_next_hour = (60 - now.minute) * 60 - now.second
                     skip_time = seconds_until_next_hour + random.uniform(0, 300)
@@ -266,8 +240,8 @@ class BaseEmulationLoop(ABC):
                     sleep(skip_time)
                     continue
 
-            # Activity pattern: long idle injection (CalibratedTiming only)
-            if self._phase_timing and hasattr(self._phase_timing, 'should_take_long_idle'):
+            # Activity pattern: long idle injection
+            if self._phase_timing:
                 should_idle, idle_duration = self._phase_timing.should_take_long_idle()
                 if should_idle:
                     if self.logger:
@@ -275,7 +249,7 @@ class BaseEmulationLoop(ABC):
                     sleep(idle_duration)
 
             # Log activity level
-            if self.use_phase_timing and self._phase_timing:
+            if self._phase_timing:
                 activity_level = self._phase_timing.get_activity_level()
                 current_hour = datetime.now().hour
                 print(f"[{datetime.now().strftime('%H:%M')}] Activity level: {activity_level}")
@@ -291,7 +265,7 @@ class BaseEmulationLoop(ABC):
                     choice="cluster_size",
                     selected=str(cluster_size),
                     context="Tasks to run in this cluster",
-                    method="phase" if self.use_phase_timing else "random"
+                    method="calibrated" if self._phase_timing else "random"
                 )
 
             for _ in range(cluster_size):
@@ -324,7 +298,7 @@ class BaseEmulationLoop(ABC):
                     params = {
                         "agent_type": self._agent_type_label(),
                         "workflow_class": workflow.__class__.__name__,
-                        "phase_timing": self.use_phase_timing,
+                        "phase_timing": self._phase_timing is not None,
                     }
                     if hasattr(workflow, 'category'):
                         params["category"] = workflow.category
@@ -334,7 +308,7 @@ class BaseEmulationLoop(ABC):
 
                 if success:
                     self._tasks_completed += 1
-                    if self._phase_timing and hasattr(self._phase_timing, 'record_activity'):
+                    if self._phase_timing:
                         self._phase_timing.record_activity()
 
             # Inter-cluster delay
@@ -367,15 +341,15 @@ class BaseEmulationLoop(ABC):
 
         label = self._agent_type_label()
         print(f"\nStarting {label} with {len(self.workflows)} workflows")
-        print(f"PHASE timing: {self.use_phase_timing}")
-        if not self.use_phase_timing:
+        print(f"PHASE timing: {self._phase_timing is not None}")
+        if not self._phase_timing is not None:
             print(f"Timing: cluster_size={self.cluster_size}, task_interval={self.task_interval}, group_interval={self.group_interval}")
         print("-" * 60)
 
         if self.logger:
             self.logger.info(f"{label} started", details={
                 "workflow_count": len(self.workflows),
-                "phase_timing": self.use_phase_timing,
+                "phase_timing": self._phase_timing is not None,
             })
 
         try:

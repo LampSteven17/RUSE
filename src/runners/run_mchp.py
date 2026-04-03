@@ -19,13 +19,12 @@ def log(msg: str):
     print(f"[{ts}] {msg}")
 
 
-def run_mchp(config: SUPConfig, use_phase_timing: bool = False, behavior_config_dir: str = None):
+def run_mchp(config: SUPConfig, behavior_config_dir: str = None):
     """
     Run MCHP brain with optional calibrated timing.
 
     Args:
         config: SUP configuration
-        use_phase_timing: Legacy flag, ignored if config.calibration is set.
         behavior_config_dir: Optional override for behavioral config directory.
     """
     # Determine calibration profile (config.calibration takes precedence)
@@ -73,8 +72,6 @@ def run_mchp(config: SUPConfig, use_phase_timing: bool = False, behavior_config_
         agent = MCHPAgent(
             logger=logger,
             calibration_profile=calibration_profile,
-            # Legacy compat: fall back to use_phase_timing if no calibration
-            use_phase_timing=use_phase_timing if not calibration_profile else False,
             exclude_windows_workflows=is_augmented,
             seed=config.seed,
             behavior_config_dir=str(resolved_behavior_config_dir),
