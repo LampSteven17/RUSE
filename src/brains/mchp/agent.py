@@ -19,7 +19,7 @@ from common.emulation_loop import BaseEmulationLoop
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
-    from common.timing.phase_timing import PhaseTiming, PhaseTimingConfig
+    from common.timing.phase_timing import CalibratedTiming
 
 # Default timing parameters (original MCHP)
 DEFAULT_CLUSTER_SIZE = 5
@@ -43,7 +43,6 @@ class MCHPAgent(BaseEmulationLoop):
     Timing Modes:
     - No timing: Original random timing (M1 baseline)
     - calibration_profile: Calibrated timing from empirical profile (M2-M4)
-    - use_phase_timing: Legacy PHASE timing (exp-2 compat)
     """
 
     def __init__(
@@ -54,8 +53,6 @@ class MCHPAgent(BaseEmulationLoop):
         extra: list = None,
         logger: Optional["AgentLogger"] = None,
         calibration_profile: Optional[str] = None,
-        use_phase_timing: bool = False,
-        phase_config: Optional["PhaseTimingConfig"] = None,
         exclude_windows_workflows: bool = False,
         seed: int = 42,
         behavior_config_dir: Optional[str] = None,
@@ -70,8 +67,6 @@ class MCHPAgent(BaseEmulationLoop):
             group_interval=group_interval,
             logger=logger,
             calibration_profile=calibration_profile,
-            use_phase_timing=use_phase_timing,
-            phase_config=phase_config,
             seed=seed,
             behavior_config_dir=behavior_config_dir,
             config_key=config_key,
@@ -157,14 +152,13 @@ class MCHPAgent(BaseEmulationLoop):
 
 
 def run(cluster_size=DEFAULT_CLUSTER_SIZE, task_interval=DEFAULT_TASK_INTERVAL,
-        group_interval=DEFAULT_GROUP_INTERVAL, extra=None, use_phase_timing=False):
+        group_interval=DEFAULT_GROUP_INTERVAL, extra=None):
     """Convenience function to run MCHP agent."""
     agent = MCHPAgent(
         cluster_size=cluster_size,
         task_interval=task_interval,
         group_interval=group_interval,
         extra=extra,
-        use_phase_timing=use_phase_timing,
     )
     agent.run()
 
@@ -177,8 +171,6 @@ if __name__ == '__main__':
     parser.add_argument('--taskinterval', type=int, default=DEFAULT_TASK_INTERVAL)
     parser.add_argument('--taskgroupinterval', type=int, default=DEFAULT_GROUP_INTERVAL)
     parser.add_argument('--extra', nargs='*', default=[])
-    parser.add_argument('--phase-timing', action='store_true',
-                        help='Enable PHASE timing with time-of-day awareness')
     args = parser.parse_args()
 
     run(
@@ -186,5 +178,4 @@ if __name__ == '__main__':
         task_interval=args.taskinterval,
         group_interval=args.taskgroupinterval,
         extra=args.extra,
-        use_phase_timing=args.phase_timing,
     )
