@@ -192,12 +192,12 @@ class BaseEmulationLoop(ABC):
                 self.logger.info("[behavior] Hot-swapped timing_profile",
                                  details={"dataset": config.dataset})
         elif self._phase_timing:
-            if fc.variance_injection:
+            if fc.variance_injection and hasattr(self._phase_timing, 'update_variance_config'):
                 self._phase_timing.update_variance_config(fc.variance_injection)
                 if self.logger:
                     self.logger.info("[behavior] Applied variance_injection",
                                      details=fc.variance_injection)
-            if fc.activity_pattern:
+            if fc.activity_pattern and hasattr(self._phase_timing, 'update_activity_config'):
                 self._phase_timing.update_activity_config(fc.activity_pattern)
                 if self.logger:
                     self.logger.info("[behavior] Applied activity_pattern",
@@ -255,18 +255,19 @@ class BaseEmulationLoop(ABC):
         while self._running:
             self._reload_behavioral_config()
 
-            # Activity pattern: skip low-activity hours
-            if self._phase_timing and self._phase_timing.should_skip_hour():
-                now = datetime.now()
-                seconds_until_next_hour = (60 - now.minute) * 60 - now.second
-                skip_time = seconds_until_next_hour + random.uniform(0, 300)
-                if self.logger:
-                    self.logger.info(f"[activity] Skipping low-activity hour {now.hour}, sleeping {skip_time/60:.0f}min")
-                sleep(skip_time)
-                continue
+            # Activity pattern: skip low-activity hours (CalibratedTiming only)
+            if self._phase_timing and hasattr(self._phase_timing, 'should_skip_hour'):
+                if self._phase_timing.should_skip_hour():
+                    now = datetime.now()
+                    seconds_until_next_hour = (60 - now.minute) * 60 - now.second
+                    skip_time = seconds_until_next_hour + random.uniform(0, 300)
+                    if self.logger:
+                        self.logger.info(f"[activity] Skipping low-activity hour {now.hour}, sleeping {skip_time/60:.0f}min")
+                    sleep(skip_time)
+                    continue
 
-            # Activity pattern: long idle injection
-            if self._phase_timing:
+            # Activity pattern: long idle injection (CalibratedTiming only)
+            if self._phase_timing and hasattr(self._phase_timing, 'should_take_long_idle'):
                 should_idle, idle_duration = self._phase_timing.should_take_long_idle()
                 if should_idle:
                     if self.logger:
@@ -333,7 +334,7 @@ class BaseEmulationLoop(ABC):
 
                 if success:
                     self._tasks_completed += 1
-                    if self._phase_timing:
+                    if self._phase_timing and hasattr(self._phase_timing, 'record_activity'):
                         self._phase_timing.record_activity()
 
             # Inter-cluster delay
