@@ -12,7 +12,8 @@ DEFAULT_MODEL = "llama3.1:8b"
 MODELS = {
     # GPU-optimized models
     "llama": "llama3.1:8b",
-    "gemma": "gemma3:1b",
+    "gemma": "gemma4:26b",        # V100 32GB sweet spot (MoE: 25.2B params, 3.8B active)
+    "gemmac": "gemma4:e2b",       # CPU edge-optimized (2.3B effective params)
     "deepseek": "deepseek-r1:8b",
     # CPU-friendly models
     "lfm": "lfm2.5-thinking:latest",

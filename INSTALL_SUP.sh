@@ -186,17 +186,17 @@ CONFIGS=(
     ["S4.llama"]="smolagents:none:llama:spring25"
     ["S4.gemma"]="smolagents:none:gemma:spring25"
 
-    # CPU baselines (no GPU)
+    # CPU baselines (no GPU) — gemma uses gemmac (gemma4:e2b, edge-optimized)
     ["B0C.llama"]="browseruse:none:llama:none"
-    ["B0C.gemma"]="browseruse:none:gemma:none"
+    ["B0C.gemma"]="browseruse:none:gemmac:none"
     ["S0C.llama"]="smolagents:none:llama:none"
-    ["S0C.gemma"]="smolagents:none:gemma:none"
+    ["S0C.gemma"]="smolagents:none:gemmac:none"
 
     # CPU calibrated (no GPU, summer24 timing)
     ["B2C.llama"]="browseruse:none:llama:summer24"
-    ["B2C.gemma"]="browseruse:none:gemma:summer24"
+    ["B2C.gemma"]="browseruse:none:gemmac:summer24"
     ["S2C.llama"]="smolagents:none:llama:summer24"
-    ["S2C.gemma"]="smolagents:none:gemma:summer24"
+    ["S2C.gemma"]="smolagents:none:gemmac:summer24"
 
     # RTX baselines (RTX 2080 Ti)
     ["B0R.llama"]="browseruse:none:llama:none"
@@ -272,7 +272,8 @@ MODEL_NAMES=(
     ["none"]=""
     # GPU-optimized models
     ["llama"]="llama3.1:8b"
-    ["gemma"]="gemma3:1b"
+    ["gemma"]="gemma4:26b"        # V100 32GB sweet spot (MoE: 25.2B params, 3.8B active)
+    ["gemmac"]="gemma4:e2b"       # CPU edge-optimized (2.3B effective params)
     # Legacy (exp-2 compat)
     ["deepseek"]="deepseek-r1:8b"
     ["lfm"]="lfm2.5-thinking:latest"
