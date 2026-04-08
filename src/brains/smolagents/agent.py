@@ -59,9 +59,12 @@ class SmolAgent:
             setup_litellm_callbacks(self.logger)
 
         # Build the LiteLLM model ID (Ollama format)
-        # Use 5 minute timeout for CPU models
+        # Use 5 minute timeout for CPU models.
+        # num_ctx=16384 matches the BrowserUse setting so both brains use the
+        # same context window across CPU and GPU (Ollama otherwise defaults to
+        # 4096 on CPU which is too small for tool-use prompts + observations).
         model_id = f"ollama/{self.model_name}"
-        llm_kwargs = {"model_id": model_id, "timeout": 300}
+        llm_kwargs = {"model_id": model_id, "timeout": 300, "num_ctx": 16384}
         ollama_seed = get_ollama_seed()
         if ollama_seed is not None:
             llm_kwargs["seed"] = ollama_seed

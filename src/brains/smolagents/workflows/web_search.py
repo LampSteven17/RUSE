@@ -69,7 +69,8 @@ class WebSearchWorkflow(SmolWorkflow):
         """Lazy-load the SmolAgents CodeAgent."""
         if self._agent is None:
             model_id = f"ollama/{self.model_name}"
-            llm_kwargs = {"model_id": model_id}
+            # num_ctx=16384 — see brains/smolagents/agent.py for rationale
+            llm_kwargs = {"model_id": model_id, "num_ctx": 16384}
             ollama_seed = get_ollama_seed()
             if ollama_seed is not None:
                 llm_kwargs["seed"] = ollama_seed
