@@ -299,6 +299,19 @@ class BrowserUseAgent:
                 task=full_prompt,
                 llm=self._get_llm(),
                 browser_session=browser_session,
+                # Token budget optimization — see browser_use Agent docs.
+                # Defaults send screenshots + 40K-char DOM dumps + unbounded
+                # history, which crushes CPU LLMs and wastes V100 cycles.
+                use_vision=False,                  # gemma family is text-only
+                use_judge=False,                   # skip LLM-based step evaluation
+                max_clickable_elements_length=8000,  # cap DOM dump (~2K tokens)
+                max_history_items=5,               # bounded conversation memory
+                include_attributes=[
+                    "id", "class", "name", "type", "value",
+                    "placeholder", "aria-label", "role", "href",
+                    "title", "alt",
+                ],
+                llm_timeout=300,                   # CPU LLMs can take 2-3 min/call
             )
             result = await agent.run(max_steps=self.max_steps)
             success = bool(result and result.is_done())
