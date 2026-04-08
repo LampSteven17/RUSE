@@ -27,7 +27,7 @@ def log(msg: str):
     ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"[{ts}] {msg}")
 
-from common.config.model_config import get_model, get_ollama_seed
+from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
 from brains.smolagents.prompts import SMOLPrompts, DEFAULT_PROMPTS
 
 
@@ -60,11 +60,10 @@ class SmolAgent:
 
         # Build the LiteLLM model ID (Ollama format)
         # Use 5 minute timeout for CPU models.
-        # num_ctx=16384 matches the BrowserUse setting so both brains use the
-        # same context window across CPU and GPU (Ollama otherwise defaults to
-        # 4096 on CPU which is too small for tool-use prompts + observations).
+        # num_ctx is tier-aware (32K on GPU, 16K on CPU) — Ollama otherwise
+        # defaults to 4096 on CPU which is too small for tool-use prompts.
         model_id = f"ollama/{self.model_name}"
-        llm_kwargs = {"model_id": model_id, "timeout": 300, "num_ctx": 16384}
+        llm_kwargs = {"model_id": model_id, "timeout": 300, "num_ctx": get_num_ctx()}
         ollama_seed = get_ollama_seed()
         if ollama_seed is not None:
             llm_kwargs["seed"] = ollama_seed

@@ -22,7 +22,7 @@ def log(msg: str):
 from browser_use import Agent, ChatOllama
 from browser_use.browser.session import BrowserSession
 
-from common.config.model_config import get_model, get_ollama_seed
+from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
 from brains.browseruse.prompts import BUPrompts, DEFAULT_PROMPTS
 
 # LLM timeout in seconds - 5 minutes for CPU models
@@ -103,9 +103,10 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
     llm = ChatOllama(model=model, timeout=timeout)
 
     # BrowserUse sends full DOMs as context; Ollama's default num_ctx (4096
-    # on CPU, ~32K auto-tuned on GPU) truncates these and the model produces
-    # garbage. Force num_ctx=16384 so DOM contexts fit on every tier.
-    BU_NUM_CTX = 16384
+    # on CPU, auto-tuned on GPU) silently truncates these and the model
+    # produces garbage. Pick a tier-aware num_ctx so V100s get headroom and
+    # CPU agents don't blow their RAM budget.
+    BU_NUM_CTX = get_num_ctx()
 
     if logger is None:
         # Even without logging, inject num_ctx + optional seed
