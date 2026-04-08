@@ -116,11 +116,14 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
             client = original_get_client_nolog()
             original_chat_nolog = client.chat
             async def configured_chat(*args, **kwargs):
-                kwargs.setdefault('options', {})
-                kwargs['options']['num_ctx'] = BU_NUM_CTX
+                # browser_use sometimes passes options=None explicitly,
+                # so setdefault won't help — must check for falsy.
+                options = kwargs.get('options') or {}
+                options['num_ctx'] = BU_NUM_CTX
                 if ollama_seed is not None:
-                    kwargs['options']['seed'] = ollama_seed
-                    kwargs['options']['temperature'] = 0
+                    options['seed'] = ollama_seed
+                    options['temperature'] = 0
+                kwargs['options'] = options
                 return await original_chat_nolog(*args, **kwargs)
             client.chat = configured_chat
             return client
@@ -138,13 +141,15 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
 
         async def logged_chat(*args, **kwargs):
             """Wrapper that logs requests/responses with token counts."""
-            # Always force num_ctx large enough for full DOM contexts
-            kwargs.setdefault('options', {})
-            kwargs['options']['num_ctx'] = BU_NUM_CTX
+            # browser_use sometimes passes options=None explicitly, so
+            # setdefault won't help — must check for falsy.
+            options = kwargs.get('options') or {}
+            options['num_ctx'] = BU_NUM_CTX
             # Inject Ollama seed for deterministic generation (if configured)
             if ollama_seed is not None:
-                kwargs['options']['seed'] = ollama_seed
-                kwargs['options']['temperature'] = 0
+                options['seed'] = ollama_seed
+                options['temperature'] = 0
+            kwargs['options'] = options
 
             # Log the request
             messages = kwargs.get('messages', args[1] if len(args) > 1 else [])
