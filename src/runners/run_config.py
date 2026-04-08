@@ -107,16 +107,17 @@ CONFIGS = {
     "S4.gemma": SUPConfig(brain="smolagents", model="gemma", _key_override="S4.gemma"),
 
     # === CPU baselines (no GPU — Ollama runs on CPU) ===
+    # CPU gemma uses gemmac (gemma4:e2b, edge-optimized) instead of the V100 gemma alias.
     "B0C.llama": SUPConfig(brain="browseruse", model="llama", cpu_only=True, _key_override="B0C.llama"),
-    "B0C.gemma": SUPConfig(brain="browseruse", model="gemma", cpu_only=True, _key_override="B0C.gemma"),
+    "B0C.gemma": SUPConfig(brain="browseruse", model="gemmac", cpu_only=True, _key_override="B0C.gemma"),
     "S0C.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True, _key_override="S0C.llama"),
-    "S0C.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True, _key_override="S0C.gemma"),
+    "S0C.gemma": SUPConfig(brain="smolagents", model="gemmac", cpu_only=True, _key_override="S0C.gemma"),
 
     # === CPU iteration 2 (no GPU) ===
     "B2C.llama": SUPConfig(brain="browseruse", model="llama", cpu_only=True, _key_override="B2C.llama"),
-    "B2C.gemma": SUPConfig(brain="browseruse", model="gemma", cpu_only=True, _key_override="B2C.gemma"),
+    "B2C.gemma": SUPConfig(brain="browseruse", model="gemmac", cpu_only=True, _key_override="B2C.gemma"),
     "S2C.llama": SUPConfig(brain="smolagents", model="llama", cpu_only=True, _key_override="S2C.llama"),
-    "S2C.gemma": SUPConfig(brain="smolagents", model="gemma", cpu_only=True, _key_override="S2C.gemma"),
+    "S2C.gemma": SUPConfig(brain="smolagents", model="gemmac", cpu_only=True, _key_override="S2C.gemma"),
 
     # === RTX baselines (same as B0/S0 but deployed on RTX 2080 Ti) ===
     "B0R.llama": SUPConfig(brain="browseruse", model="llama", _key_override="B0R.llama"),
