@@ -9,7 +9,7 @@ from typing import Optional, TYPE_CHECKING
 from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool
 
 from brains.smolagents.workflows.base import SmolWorkflow
-from common.config.model_config import get_model, get_ollama_seed
+from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
 from common.logging.llm_callbacks import setup_litellm_callbacks
 
 if TYPE_CHECKING:
@@ -69,8 +69,8 @@ class WebSearchWorkflow(SmolWorkflow):
         """Lazy-load the SmolAgents CodeAgent."""
         if self._agent is None:
             model_id = f"ollama/{self.model_name}"
-            # num_ctx=16384 — see brains/smolagents/agent.py for rationale
-            llm_kwargs = {"model_id": model_id, "num_ctx": 16384}
+            # tier-aware num_ctx — see brains/smolagents/agent.py for rationale
+            llm_kwargs = {"model_id": model_id, "num_ctx": get_num_ctx()}
             ollama_seed = get_ollama_seed()
             if ollama_seed is not None:
                 llm_kwargs["seed"] = ollama_seed
