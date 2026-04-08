@@ -102,22 +102,28 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
     """
     llm = ChatOllama(model=model, timeout=timeout)
 
+    # BrowserUse sends full DOMs as context; Ollama's default num_ctx (4096
+    # on CPU, ~32K auto-tuned on GPU) truncates these and the model produces
+    # garbage. Force num_ctx=16384 so DOM contexts fit on every tier.
+    BU_NUM_CTX = 16384
+
     if logger is None:
-        # Even without logging, inject seed if configured
+        # Even without logging, inject num_ctx + optional seed
         ollama_seed = get_ollama_seed()
-        if ollama_seed is not None:
-            original_get_client_nolog = llm.get_client
-            def get_seeded_client():
-                client = original_get_client_nolog()
-                original_chat_nolog = client.chat
-                async def seeded_chat(*args, **kwargs):
-                    kwargs.setdefault('options', {})
+        original_get_client_nolog = llm.get_client
+        def get_configured_client():
+            client = original_get_client_nolog()
+            original_chat_nolog = client.chat
+            async def configured_chat(*args, **kwargs):
+                kwargs.setdefault('options', {})
+                kwargs['options']['num_ctx'] = BU_NUM_CTX
+                if ollama_seed is not None:
                     kwargs['options']['seed'] = ollama_seed
                     kwargs['options']['temperature'] = 0
-                    return await original_chat_nolog(*args, **kwargs)
-                client.chat = seeded_chat
-                return client
-            llm.get_client = get_seeded_client
+                return await original_chat_nolog(*args, **kwargs)
+            client.chat = configured_chat
+            return client
+        llm.get_client = get_configured_client
         return llm
 
     # Store the original get_client method
@@ -131,9 +137,11 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
 
         async def logged_chat(*args, **kwargs):
             """Wrapper that logs requests/responses with token counts."""
-            # Inject Ollama seed for deterministic generation
+            # Always force num_ctx large enough for full DOM contexts
+            kwargs.setdefault('options', {})
+            kwargs['options']['num_ctx'] = BU_NUM_CTX
+            # Inject Ollama seed for deterministic generation (if configured)
             if ollama_seed is not None:
-                kwargs.setdefault('options', {})
                 kwargs['options']['seed'] = ollama_seed
                 kwargs['options']['temperature'] = 0
 
