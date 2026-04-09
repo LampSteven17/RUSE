@@ -216,7 +216,7 @@ def _find_rampart_config(config_name: str | None, deploy_dir: Path) -> Path | No
 
 def _make_dep_id(deployment_name: str, run_id: str) -> str:
     dep = deployment_name
-    for prefix in ("ruse-", "sup-", "rampart-", "enterprise-"):
+    for prefix in ("ruse-", "sup-", "ghosts-", "rampart-", "enterprise-"):
         if dep.startswith(prefix):
             dep = dep[len(prefix):]
     dep = dep.replace("-", "")
