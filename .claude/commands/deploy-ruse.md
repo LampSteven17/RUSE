@@ -232,6 +232,15 @@ deployments/ruse-controls/runs/<run_id>/
 | `gemmac` | **`gemma4:e2b`** | CPU only | Edge-optimized 2.3B effective params. Works well for SmolAgents on CPU (~7 tok/s). Times out on BrowserUse on CPU due to large prompts (documented limitation). |
 | `llama` | `llama3.1:8b` | (legacy) | Kept in MODELS dict for back-compat, no longer used in any deploy template. |
 
+**Empirical reports** (committed under `docs/`):
+- `docs/gemma_v100_benchmark.md` — raw benchmark data (6 models × 3 runs each)
+  on a V100-PCIE-32GB. Pull time, disk size, peak VRAM, generation tok/s,
+  prompt eval tok/s, run-to-run consistency.
+- `docs/gemma_model_selection.md` — presentation-ready writeup of the same
+  data with embedded matplotlib charts (`docs/images/*.png`), derived
+  metrics (capability-throughput score, speed-per-parameter), and the
+  rationale for picking gemma4:26b (V100) and gemma4:e2b (CPU).
+
 Aliases live in two places that **must agree**:
 - `INSTALL_SUP.sh::MODEL_NAMES` (install-time pull on the VM)
 - `src/common/config/model_config.py::MODELS` (runtime resolution by `get_model()`)
