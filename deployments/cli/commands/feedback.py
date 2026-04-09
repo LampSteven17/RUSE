@@ -10,19 +10,14 @@ from .. import output
 
 FEEDBACK_BASE = Path.home() / "PHASE" / "feedback_engine" / "configs"
 
-# Standard 11-VM feedback template
+# GPU-conserving 5-VM feedback template (gemma4 cutover 2026-04-08):
+# gemma only, V100 only (no RTX) — V100 uses gemma4:26b, CPU uses gemma4:e2b.
 FEEDBACK_TEMPLATE = [
-    {"behavior": "M2", "flavor": "v1.14vcpu.28g", "count": 1},
-    {"behavior": "B2.llama", "flavor": "v100-1gpu.14vcpu.28g", "count": 1},
-    {"behavior": "B2.gemma", "flavor": "v100-1gpu.14vcpu.28g", "count": 1},
-    {"behavior": "S2.llama", "flavor": "v100-1gpu.14vcpu.28g", "count": 1},
-    {"behavior": "S2.gemma", "flavor": "v100-1gpu.14vcpu.28g", "count": 1},
-    {"behavior": "B2C.llama", "flavor": "v1.14vcpu.28g", "count": 1},
-    {"behavior": "B2C.gemma", "flavor": "v1.14vcpu.28g", "count": 1},
-    {"behavior": "S2C.llama", "flavor": "v1.14vcpu.28g", "count": 1},
-    {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g", "count": 1},
-    {"behavior": "B2R.llama", "flavor": "rtx2080ti-1gpu.14vcpu.28g", "count": 1},
-    {"behavior": "B2R.gemma", "flavor": "rtx2080ti-1gpu.14vcpu.28g", "count": 1},
+    {"behavior": "M2",        "flavor": "v1.14vcpu.28g",        "count": 1},
+    {"behavior": "B2.gemma",  "flavor": "v100-1gpu.14vcpu.28g", "count": 1},
+    {"behavior": "S2.gemma",  "flavor": "v100-1gpu.14vcpu.28g", "count": 1},
+    {"behavior": "B2C.gemma", "flavor": "v1.14vcpu.28g",        "count": 1},
+    {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g",        "count": 1},
 ]
 
 # Maps PHASE manifest dataset names → short abbreviations for deployment directory names.
@@ -156,6 +151,44 @@ def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
     return best_typed or best_any
 
 
+def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
+    """Find all PHASE feedback config directories matching deploy type.
+
+    Returns list of dicts sorted by dataset name:
+        [{"path": Path, "name": str, "preset": str, "dataset": str}, ...]
+
+    Only includes directories with a valid manifest.json.
+    """
+    if not FEEDBACK_BASE.is_dir():
+        return []
+
+    type_prefix = _deploy_type_prefix(deploy_type)
+    results = []
+
+    for d in sorted(FEEDBACK_BASE.iterdir()):
+        if not d.is_dir():
+            continue
+        manifest_path = d / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        if type_prefix and type_prefix not in d.name:
+            continue
+
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        results.append({
+            "path": d,
+            "name": d.name,
+            "preset": manifest.get("preset_name", "?"),
+            "dataset": manifest.get("dataset", "?"),
+        })
+
+    return results
+
+
 # Known dataset targets — maps short/friendly names to search strings
 # used against PHASE feedback directory names in ~/PHASE/feedback_engine/configs/.
 # The search string must appear somewhere in the directory name.
@@ -283,9 +316,8 @@ def generate_feedback_config(
         "behavior_source": str(source_dir),
         "behavior_configs": behavior_configs,
         "flavor_capacity": {
-            "v1.14vcpu.28g": 5,
-            "v100-1gpu.14vcpu.28g": 4,
-            "rtx2080ti-1gpu.14vcpu.28g": 2,
+            "v1.14vcpu.28g": 3,
+            "v100-1gpu.14vcpu.28g": 2,
         },
         "deployments": FEEDBACK_TEMPLATE,
     }
@@ -343,6 +375,10 @@ def generate_rampart_feedback_config(
 
     base["deployment_name"] = dep_name
     base["behavior_source"] = str(source_dir)
+    if configs_spec == "all":
+        base["behavior_configs"] = "all"
+    else:
+        base["behavior_configs"] = [f.strip() for f in configs_spec.split(",")]
 
     config_path = dep_dir / "config.yaml"
     with open(config_path, "w") as f:
@@ -387,9 +423,17 @@ def generate_ghosts_feedback_config(
     dep_dir = deploy_dir / dep_name
     dep_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build behavior_configs field
+    if configs_spec == "all":
+        behavior_configs = "all"
+    else:
+        behavior_configs = [f.strip() for f in configs_spec.split(",")]
+
     config = {
         "deployment_name": dep_name,
         "type": "ghosts",
+        "behavior_source": str(source_dir),
+        "behavior_configs": behavior_configs,
         "ghosts": {
             "api_flavor": "v1.14vcpu.28g",
             "client_flavor": "v1.14vcpu.28g",
