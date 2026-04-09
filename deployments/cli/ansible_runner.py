@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,15 +153,27 @@ class AnsibleRunner:
                 bufsize=0,
             )
 
-            parser_thread = threading.Thread(
-                target=self._stream_and_parse,
-                args=(self._process, log_file, on_event, start_time),
-                daemon=True,
-            )
-            parser_thread.start()
+            # Stream stdout in the main thread to keep the log_file lifecycle
+            # tied to the streaming loop. The previous threaded version raced
+            # with parser_thread.join(timeout=5) — if the parser hadn't drained
+            # the pipe in 5s the file would close under it and crash the thread
+            # with "I/O operation on closed file", killing the batch loop.
+            assert self._process.stdout is not None
+            parser = _LineParser(start_time)
+            try:
+                for raw_line in self._process.stdout:
+                    line = raw_line.decode("utf-8", errors="replace")
+                    log_file.write(line)
+                    log_file.flush()
+                    if on_event:
+                        event = parser.parse(line.rstrip("\n"))
+                        if event:
+                            on_event(event)
+            except Exception as e:
+                # Never let a parsing/log-write error abort the deploy.
+                output.info(f"  WARNING: stream parser error (non-fatal): {e}")
 
             self._process.wait()
-            parser_thread.join(timeout=5)
 
         elapsed = time.time() - start_time
         rc = self._process.returncode
@@ -184,27 +195,6 @@ class AnsibleRunner:
                 self._process.wait(timeout=5)
             except (ProcessLookupError, subprocess.TimeoutExpired):
                 pass
-
-    def _stream_and_parse(
-        self,
-        proc: subprocess.Popen,
-        log_file,
-        on_event: Callable[[AnsibleEvent], None] | None,
-        start_time: float,
-    ) -> None:
-        """Read process stdout line by line, write to log, parse and emit events."""
-        assert proc.stdout is not None
-        parser = _LineParser(start_time)
-        for raw_line in proc.stdout:
-            line = raw_line.decode("utf-8", errors="replace")
-            log_file.write(line)
-            log_file.flush()
-
-            if on_event:
-                event = parser.parse(line.rstrip("\n"))
-                if event:
-                    on_event(event)
-
 
 # ── Stateful line parser ─────────────────────────────────────────────
 
