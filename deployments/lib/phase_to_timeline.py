@@ -14,6 +14,7 @@ Missing configs are handled gracefully — each mapping falls back to defaults.
 from __future__ import annotations
 
 import json
+import math
 import random
 import sys
 from pathlib import Path
@@ -90,7 +91,12 @@ def _build_time_windows(
     timing: dict | None,
     activity: dict | None,
 ) -> list[dict]:
-    """Split the day into peak and normal windows based on hourly fractions."""
+    """Split the day into peak/normal/idle windows using timing + activity probs.
+
+    Uses per_hour_activity_probability (peak-normalized 0-1 intensity values)
+    to determine which hours are active and at what intensity. Hours with
+    probability < 0.15 are excluded entirely (idle).
+    """
     if not timing:
         return [{"start": 0, "end": 24, "intensity": 1.0}]
 
@@ -98,33 +104,53 @@ def _build_time_windows(
     if len(fractions) != 24:
         return [{"start": 0, "end": 24, "intensity": 1.0}]
 
-    # Active range from activity_pattern
+    # Use per-hour activity probabilities to modulate intensity and skip idle hours.
+    # These are peak-normalized (1.0 = peak hour, 0.0 = no activity).
+    activity_probs = None
     active_start, active_end = 0, 23
     if activity:
-        rng = activity.get("daily_shape", {}).get("active_hour_range", [0, 23])
+        daily = activity.get("daily_shape", {})
+        probs = daily.get("per_hour_activity_probability", [])
+        if len(probs) == 24:
+            activity_probs = probs
+        rng = daily.get("active_hour_range", [0, 23])
         if len(rng) == 2:
-            active_start, active_end = int(rng[0]), int(rng[1])
+            active_start = max(0, min(23, int(rng[0])))
+            active_end = max(0, min(23, int(rng[1])))
 
     avg = sum(fractions) / 24
     peak_thresh = avg * 1.5
 
+    # Filter hours: skip those with very low activity probability
+    idle_threshold = 0.15
+    candidate_hours = []
+    for h in range(active_start, active_end + 1):
+        if activity_probs and activity_probs[h] < idle_threshold:
+            continue  # Skip idle hours
+        candidate_hours.append(h)
+
     peak_hours = sorted(
-        h for h in range(active_start, active_end + 1)
+        h for h in candidate_hours
         if fractions[h] > peak_thresh
     )
     normal_hours = sorted(
-        h for h in range(active_start, active_end + 1)
+        h for h in candidate_hours
         if h not in peak_hours and fractions[h] > avg * 0.3
     )
 
     windows = []
     for hours, label in [(peak_hours, "peak"), (normal_hours, "normal")]:
         for group in _consecutive_groups(hours):
-            intensity = sum(fractions[h] for h in group) / len(group) / max(avg, 0.001)
+            # Base intensity from timing fractions
+            base_intensity = sum(fractions[h] for h in group) / len(group) / max(avg, 0.001)
+            # Modulate by activity probability if available
+            if activity_probs:
+                avg_prob = sum(activity_probs[h] for h in group) / len(group)
+                base_intensity *= avg_prob
             windows.append({
                 "start": group[0],
                 "end": group[-1] + 1,
-                "intensity": intensity,
+                "intensity": base_intensity,
                 "label": label,
             })
 
@@ -148,18 +174,37 @@ def _consecutive_groups(hours: list[int]) -> list[list[int]]:
 
 # ── Delays from behavior_modifiers ──────────────────────────────────────
 
-def _build_delays(modifiers: dict | None, intensity: float = 1.0) -> tuple[int, int]:
-    """Returns (delay_after_ms, delay_before_ms)."""
+def _build_delays(
+    modifiers: dict | None,
+    intensity: float = 1.0,
+    volume_adjustment: float = 1.0,
+) -> tuple[int, int]:
+    """Returns (delay_after_ms, delay_before_ms).
+
+    Args:
+        modifiers: behavior_modifiers config with page_dwell
+        intensity: time-window intensity (higher = shorter delays)
+        volume_adjustment: from timing_profile avg_volume_adjustment.
+            Values > 1.0 mean SUP needs MORE volume (shorter delays).
+            Values < 1.0 mean SUP needs LESS volume (longer delays).
+            For GHOSTS NPCs that are 58-307x OVER, this should be << 1.0.
+    """
     if not modifiers:
-        return (DEFAULT_DELAY_MS, 0)
+        base = int(DEFAULT_DELAY_MS / max(volume_adjustment, 0.01))
+        return (base, 0)
 
     dwell = modifiers.get("page_dwell", {})
     min_s = dwell.get("min_seconds", 5)
     max_s = dwell.get("max_seconds", 30)
 
-    # Higher intensity → shorter delays
-    base = int(((min_s + max_s) / 2) * 1000 / max(intensity, 0.5))
+    # Base delay from dwell times, scaled by intensity and volume adjustment.
+    # volume_adjustment < 1.0 → need LESS volume → LONGER delays (divide).
+    # volume_adjustment > 1.0 → need MORE volume → SHORTER delays (multiply).
+    base = int(((min_s + max_s) / 2) * 1000 / max(intensity, 0.5) / max(volume_adjustment, 0.01))
     jitter = int((max_s - min_s) * 500 / max(intensity, 0.5))
+
+    # Clamp to reasonable range: 5s min, 30min max
+    base = max(5000, min(base, 1800000))
     return (base, jitter)
 
 
@@ -223,6 +268,34 @@ def _build_dns_events(diversity: dict | None, domains: list[str]) -> list[dict]:
 
 # ── Main generator ──────────────────────────────────────────────────────
 
+def _extract_volume_adjustment(timing: dict | None) -> float:
+    """Extract delay scale factor from timing_profile volume direction.
+
+    For GHOSTS, volume is controlled by delay between page loads:
+    - OVER (too much volume) → need LONGER delays → return < 1.0
+    - UNDER (too little volume) → need SHORTER delays → return > 1.0
+
+    Uses the raw volume_direction_value as a proxy for magnitude.
+    """
+    if not timing:
+        return 1.0
+    meta = timing.get("metadata", {})
+    direction = meta.get("volume_direction", "MATCH")
+    dir_val = float(meta.get("volume_direction_value", 0))
+
+    if direction == "OVER":
+        # SUP generates too much volume. Scale delays up to reduce traffic.
+        # dir_val can be very large (50-300 for extreme cases).
+        # Use sqrt to dampen: dir_val=100 → scale=0.1 (10x longer delays)
+        scale = max(0.05, 1.0 / (1.0 + math.sqrt(abs(dir_val))))
+        return scale
+    elif direction == "UNDER":
+        # SUP generates too little. Scale delays down (more volume).
+        scale = min(5.0, 1.0 + math.sqrt(abs(dir_val)) * 0.5)
+        return scale
+    return 1.0
+
+
 def generate_timeline(feedback_dir: Path) -> dict:
     """Read PHASE configs and produce a GHOSTS timeline dict."""
     timing = _load(feedback_dir, "timing_profile.json")
@@ -231,18 +304,53 @@ def generate_timeline(feedback_dir: Path) -> dict:
     ww = _load(feedback_dir, "workflow_weights.json")
     activity = _load(feedback_dir, "activity_pattern.json")
     diversity = _load(feedback_dir, "diversity_injection.json")
+    variance = _load(feedback_dir, "variance_injection.json")
 
     urls = _build_urls(site_config)
     windows = _build_time_windows(timing, activity)
     stickiness, depth_min, depth_max = _build_stickiness(modifiers)
     handler_weights = _build_handler_weights(ww)
     domains = list((site_config or {}).get("domain_categories", {}).keys())
+    volume_adj = _extract_volume_adjustment(timing)
+
+    # Extract variance sigma for delay jitter (used to create multiple
+    # timeline events with different delays, simulating lognormal variance)
+    delay_sigma = 0.0
+    if variance:
+        vol_var = variance.get("volume_variance", {})
+        delay_sigma = float(vol_var.get(
+            "cluster_size_sigma", vol_var.get("cluster_size_cv", 0)))
 
     handlers = []
 
     # ── Browser handlers (one per time window) ──────────────────────────
     for window in windows:
-        delay_after, delay_before = _build_delays(modifiers, window.get("intensity", 1.0))
+        delay_after, delay_before = _build_delays(
+            modifiers, window.get("intensity", 1.0), volume_adj)
+
+        # Generate multiple events with varied delays to simulate variance.
+        # Without this, all page loads have identical timing (a detection signal).
+        if delay_sigma > 0 and delay_after > 0:
+            events = []
+            n_variants = 5  # 5 events with different delays cycle in the loop
+            for _ in range(n_variants):
+                # Deterministic lognormal-like spread using pre-computed multipliers
+                multiplier = random.lognormvariate(0, delay_sigma)
+                varied_delay = max(3000, min(int(delay_after * multiplier), 1800000))
+                varied_jitter = max(0, int(delay_before * multiplier))
+                events.append({
+                    "Command": "random",
+                    "CommandArgs": urls,
+                    "DelayAfter": varied_delay,
+                    "DelayBefore": varied_jitter,
+                })
+        else:
+            events = [{
+                "Command": "random",
+                "CommandArgs": urls,
+                "DelayAfter": delay_after,
+                "DelayBefore": delay_before,
+            }]
 
         handlers.append({
             "HandlerType": "BrowserFirefox",
@@ -260,12 +368,7 @@ def generate_timeline(feedback_dir: Path) -> dict:
                 "stickiness-depth-min": depth_min,
                 "stickiness-depth-max": depth_max,
             },
-            "TimeLineEvents": [{
-                "Command": "random",
-                "CommandArgs": urls,
-                "DelayAfter": delay_after,
-                "DelayBefore": delay_before,
-            }],
+            "TimeLineEvents": events,
         })
 
     # ── Bash handler ────────────────────────────────────────────────────

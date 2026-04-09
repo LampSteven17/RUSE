@@ -57,6 +57,15 @@ def _load(feedback_dir: Path, name: str) -> dict | None:
     return None
 
 
+def _strip_enterprise_prefix(name: str) -> str:
+    """Strip the e-{hash}- prefix from an enterprise VM name.
+
+    e.g., 'e-14a6d-linep3' → 'linep3', 'linep3' → 'linep3'
+    """
+    import re
+    return re.sub(r'^e-[a-f0-9]+-', '', name)
+
+
 def _find_node_feedback_dir(feedback_base: Path, node_name: str) -> Path | None:
     """Find PHASE feedback directory for a node.
 
@@ -129,7 +138,11 @@ def _extract_daily_hours(
 def _extract_logins_per_hour(
     activity: dict | None, baseline_role: dict,
 ) -> tuple[str, str]:
-    """Extract activity_min/max_logins_per_hour from per-hour probabilities."""
+    """Extract activity_min/max_logins_per_hour from per-hour probabilities.
+
+    Probabilities are peak-normalized (0.0 = no activity, 1.0 = peak hour).
+    Maps to a login rate range using the baseline max as the ceiling.
+    """
     if not activity:
         return baseline_role["activity_min_logins_per_hour"], baseline_role["activity_max_logins_per_hour"]
 
@@ -138,15 +151,15 @@ def _extract_logins_per_hour(
     if not probs:
         return baseline_role["activity_min_logins_per_hour"], baseline_role["activity_max_logins_per_hour"]
 
-    # Scale probabilities to login counts (probability * scale_factor)
-    # A probability of 0.0417 (1/24, uniform) ≈ baseline login rate
-    scale = 12  # maps 0.0417 → ~0.5, 0.1 → ~1.2
     active_probs = [p for p in probs if p > 0.001]
     if not active_probs:
         return baseline_role["activity_min_logins_per_hour"], baseline_role["activity_max_logins_per_hour"]
 
-    min_rate = max(0, int(min(active_probs) * scale))
-    max_rate = max(1, int(max(active_probs) * scale) + 1)
+    # Use baseline max as the ceiling for peak-hour login rate.
+    # Peak-normalized probs (0-1) scale linearly to [0, baseline_max].
+    baseline_max = int(baseline_role.get("activity_max_logins_per_hour", 2))
+    min_rate = max(0, int(min(active_probs) * baseline_max))
+    max_rate = max(1, int(max(active_probs) * baseline_max) + 1)
     return str(min_rate), str(max_rate)
 
 
@@ -266,7 +279,8 @@ def _extract_timing_params(
 
     # Apply variance jitter to clustersize if available
     if variance:
-        cv = variance.get("volume_variance", {}).get("cluster_size_cv")
+        vol_var = variance.get("volume_variance", {})
+        cv = vol_var.get("cluster_size_sigma", vol_var.get("cluster_size_cv"))
         if cv is not None and float(cv) > 0:
             # Deterministic per-node jitter using hash of role name
             node_hash = int(hashlib.md5(
@@ -325,8 +339,11 @@ def generate_user_roles(
             needed_baseline_roles.add(user_role_name)
             continue
 
-        # Find PHASE feedback for this node
-        node_feedback_dir = _find_node_feedback_dir(feedback_dir, node_name)
+        # Find PHASE feedback for this node.
+        # Enterprise config uses prefixed names (e-{hash}-linep3) but PHASE
+        # feedback dirs use bare names (linep3). Strip the prefix for lookup.
+        bare_name = _strip_enterprise_prefix(node_name)
+        node_feedback_dir = _find_node_feedback_dir(feedback_dir, bare_name)
         if not node_feedback_dir:
             # No PHASE feedback — keep baseline role
             needed_baseline_roles.add(user_role_name)

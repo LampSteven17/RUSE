@@ -209,10 +209,12 @@ def _provision_vms(
         else:
             output.info(f"  [{ts}]    FAIL  {spec['name']}  {result.stderr[:80]}")
 
-    # Wait for ACTIVE
+    # Wait for ACTIVE — track which VMs succeed
     output.info("")
     output.info("  Waiting for VMs to reach ACTIVE state...")
+    active_specs = []
     for spec in vm_specs:
+        reached_active = False
         for attempt in range(60):
             result = _openstack_cmd(
                 rc_file,
@@ -221,15 +223,18 @@ def _provision_vms(
             )
             status = result.stdout.strip()
             if status == "ACTIVE":
+                reached_active = True
                 break
             elif status == "ERROR":
                 output.info(f"  [{time.strftime('%H:%M:%S')}]    FAIL  {spec['name']} (ERROR state)")
                 break
             time.sleep(5)
+        if reached_active:
+            active_specs.append(spec)
 
-    # Get IPs
+    # Get IPs (only for ACTIVE VMs)
     vms_with_ips = []
-    for spec in vm_specs:
+    for spec in active_specs:
         result = _openstack_cmd(
             rc_file,
             "server", "show", spec["name"],
@@ -452,7 +457,7 @@ def _find_ghosts_config(config_name: str | None, deploy_dir: Path) -> Path | Non
 def _make_dep_id(deployment_name: str, run_id: str) -> str:
     """Build dep_id from deployment name + run_id."""
     dep = deployment_name
-    for prefix in ("ruse-", "sup-", "ghosts-"):
+    for prefix in ("ruse-", "sup-", "ghosts-", "rampart-", "enterprise-"):
         if dep.startswith(prefix):
             dep = dep[len(prefix):]
     dep = dep.replace("-", "")
@@ -488,17 +493,10 @@ def _generate_feedback_timeline(behavior_source: str, run_dir: Path) -> Path | N
 def _find_feedback_subdir(source_path: Path) -> Path | None:
     """Find a behavior config subdir with JSON files.
 
-    Prefers M/M1 (broadest RUSE config set, no LLM-specific fields).
-    Then tries GHOSTS-specific paths (npc/npc).
+    Prefers GHOSTS-specific paths (npc/npc, api/api).
     Falls back to first subdir containing activity_pattern.json or timing_profile.json.
     """
-    # RUSE brain paths
-    for name in ["M/M1", "M/M2", "B.llama/B0.llama", "S.llama/S0.llama"]:
-        candidate = source_path / name
-        if candidate.is_dir() and any(candidate.glob("*.json")):
-            return candidate
-
-    # GHOSTS NPC path (double-nested)
+    # GHOSTS NPC path (double-nested) — try these first for GHOSTS deployments
     for name in ["npc/npc", "api/api"]:
         candidate = source_path / name
         if candidate.is_dir() and any(candidate.glob("*.json")):

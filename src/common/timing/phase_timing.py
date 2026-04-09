@@ -407,9 +407,9 @@ class CalibratedTiming:
         scaled = raw * self._get_hourly_scale()
         # Variance injection: lognormal noise to increase volume_std
         vol_var = self._variance_config.get("volume_variance", {})
-        cv = vol_var.get("cluster_size_cv", 0)
-        if cv > 0:
-            scaled *= random.lognormvariate(0, cv)
+        sigma = vol_var.get("cluster_size_sigma", vol_var.get("cluster_size_cv", 0))
+        if sigma > 0:
+            scaled *= random.lognormvariate(0, sigma)
         return max(1, min(int(scaled), 200))
 
     def get_task_delay(self) -> float:
@@ -427,9 +427,9 @@ class CalibratedTiming:
         gap_seconds = gap_minutes * 60.0 * scale_factor
         # Variance injection: lognormal noise to idle gaps
         vol_var = self._variance_config.get("volume_variance", {})
-        cv = vol_var.get("idle_gap_cv", 0)
-        if cv > 0:
-            gap_seconds *= random.lognormvariate(0, cv)
+        sigma = vol_var.get("idle_gap_sigma", vol_var.get("idle_gap_cv", 0))
+        if sigma > 0:
+            gap_seconds *= random.lognormvariate(0, sigma)
         return max(30.0, min(gap_seconds, 3600.0))
 
     def should_take_break(self, tasks_completed: int) -> bool:
@@ -461,7 +461,9 @@ class CalibratedTiming:
             return "peak"
 
     def should_skip_hour(self) -> bool:
-        """Check if current hour should be idle based on activity pattern."""
+        """Check if current hour should be idle based on activity pattern.
+        Probabilities are peak-normalized (1.0 = peak hour, 0.0 = no activity).
+        Low-intensity hours are probabilistically skipped."""
         if not self._activity_config:
             return False
         probs = self._activity_config.get("daily_shape", {}).get(
@@ -470,7 +472,7 @@ class CalibratedTiming:
             return False
         hour = datetime.now().hour
         if hour < len(probs):
-            return random.random() > probs[hour] * 24  # Normalize: 1/24 = baseline
+            return random.random() > probs[hour]  # 0.0 = always skip, 1.0 = never skip
         return False
 
     def should_take_long_idle(self) -> tuple:

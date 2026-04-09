@@ -376,7 +376,7 @@ def collect_logs_from_vm(
         out_file.unlink(missing_ok=True)
         result.errors.append(str(e))
 
-    result.success = result.success or result.files_collected > 0
+    result.success = result.success or result.events_collected > 0
     return result
 
 
