@@ -92,7 +92,6 @@
               find:
                 paths: "{{ config_source_dir }}"
                 patterns: "{{ resolved_behavior_configs }}"
-                excludes: ["recommendations.json", "deviation_analysis.json", "manifest.json", "*.md"]
               delegate_to: localhost
               register: behavior_config_files
 
