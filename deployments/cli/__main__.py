@@ -4,6 +4,8 @@ Entry points (via shell scripts in deployments/):
   ./deploy   → python3 -m cli deploy [--ruse|--rampart|--ghosts] [--feedback] ...
   ./teardown → python3 -m cli teardown <target> | --all
   ./list     → python3 -m cli list
+  ./shrink   → python3 -m cli shrink <target>
+  ./audit    → python3 -m cli audit
 """
 
 from __future__ import annotations
@@ -48,7 +50,13 @@ examples:
   ./deploy --ruse --feedback --source ~/p  explicit PHASE source
   ./deploy --ghosts --feedback             GHOSTS + PHASE feedback
   ./deploy --rampart                       RAMPART enterprise network
-  ./deploy --rampart --feedback            RAMPART + PHASE per-node roles""",
+  ./deploy --rampart --feedback            RAMPART + PHASE per-node roles
+
+batch deploy (all available feedback configs):
+  ./deploy --rampart --feedback --batch    deploy all RAMPART feedback configs
+  ./deploy --ghosts --feedback --batch     deploy all GHOSTS feedback configs
+  ./deploy --ruse --feedback --batch       deploy all RUSE feedback configs
+  ./deploy --ruse --timing --batch         deploy all RUSE timing-only configs""",
     )
     p.add_argument("--ruse", action="store_true", help="Deploy RUSE SUP agents (default)")
     p.add_argument("--rampart", action="store_true", help="Deploy RAMPART enterprise network")
@@ -71,13 +79,30 @@ examples:
 
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory")
     p.add_argument("--target", type=str, help="Dataset target (e.g., summer24, fall24, vt-50gb, cptc8)")
+    p.add_argument("--batch", action="store_true", help="Deploy all available PHASE feedback configs (requires --feedback)")
     return p
 
 
 def _teardown_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="teardown", description="Teardown RUSE deployments")
+    p = argparse.ArgumentParser(
+        prog="teardown",
+        description="Teardown RUSE deployments",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""examples:
+  ./teardown ruse-controls-040226205037   teardown a specific deployment
+  ./teardown --ruse --feedback            teardown all active RUSE feedback deployments
+  ./teardown --rampart                    teardown all active RAMPART deployments
+  ./teardown --ghosts --feedback          teardown all active GHOSTS feedback deployments
+  ./teardown --all                        nuclear: delete ALL VMs""",
+    )
     p.add_argument("target", nargs="?", help="Teardown target: name-MMDDYYHHMMSS")
     p.add_argument("--all", action="store_true", dest="teardown_all", help="Delete ALL RUSE, Enterprise, and GHOSTS VMs")
+
+    # Filter flags for batch teardown
+    p.add_argument("--ruse", action="store_true", help="Filter: RUSE SUP deployments")
+    p.add_argument("--rampart", action="store_true", help="Filter: RAMPART enterprise deployments")
+    p.add_argument("--ghosts", action="store_true", help="Filter: GHOSTS NPC deployments")
+    p.add_argument("--feedback", action="store_true", help="Filter: only feedback-enabled deployments")
     return p
 
 
@@ -85,11 +110,58 @@ def _list_parser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(prog="list", description="List active RUSE deployments")
 
 
+def _audit_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="audit",
+        description="Full health audit of all active RUSE SUP deployments",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""checks per VM:
+  - SSH reachable
+  - SUP systemd service active
+  - Brain process running
+  - Ollama model loaded (matches expected for behavior)
+  - GPU model loaded into VRAM (V100 VMs)
+  - Recent log activity (latest jsonl fresh)
+  - MCHP maintenance cron entries (M VMs)
+
+cross-deployment:
+  - OpenStack vs inventory orphans/missing
+  - PHASE experiments.json registration
+  - duplicate run_ids
+
+Outputs a terminal summary + markdown report at deployments/logs/audit_*.md""",
+    )
+
+
+def _shrink_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="shrink",
+        description="Shrink a running deployment in-place to match its top-level config.yaml",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""how it works:
+  1. Diffs the run's config.yaml snapshot against the top-level config.yaml
+  2. Deletes surplus VMs from OpenStack
+  3. Cleans up inventory.ini, ssh_config_snippet.txt, ~/.ssh/config block,
+     and PHASE experiments.json
+  4. Updates the run snapshot to match the desired config
+
+Surviving VMs keep running with their existing behavioral configs —
+no reboot, no reinstall.
+
+example:
+  # 1. Edit deployments/ruse-controls/config.yaml to remove unwanted VMs
+  # 2. Run shrink against the active run
+  ./shrink ruse-controls-040226205037""",
+    )
+    p.add_argument("target", help="Deployment target: name-MMDDYYHHMMSS")
+    return p
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = argv or sys.argv[1:]
 
     if not argv:
-        print("Usage: deploy|teardown|list [options]", file=sys.stderr)
+        print("Usage: deploy|teardown|list|shrink|audit [options]", file=sys.stderr)
         return 1
 
     command = argv[0]
@@ -104,9 +176,13 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_teardown(rest)
         elif command == "list":
             return _cmd_list(rest)
+        elif command == "shrink":
+            return _cmd_shrink(rest)
+        elif command == "audit":
+            return _cmd_audit(rest)
         else:
             print(f"Unknown command: {command}", file=sys.stderr)
-            print("Usage: deploy|teardown|list [options]", file=sys.stderr)
+            print("Usage: deploy|teardown|list|shrink|audit [options]", file=sys.stderr)
             return 1
 
     except KeyboardInterrupt:
@@ -141,6 +217,14 @@ def _cmd_deploy(argv: list[str]) -> int:
         configs_spec = "all"
     else:
         configs_spec = None
+
+    # Batch mode: deploy all available PHASE feedback configs for the type
+    if args.batch:
+        if not configs_spec:
+            output.error("ERROR: --batch requires --feedback or granular config flags")
+            return 1
+        deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "ruse")
+        return _cmd_batch_deploy(deploy_type, configs_spec, args.config_name)
 
     if args.rampart:
         from .commands.rampart import run_rampart_spinup
@@ -178,6 +262,75 @@ def _cmd_deploy(argv: list[str]) -> int:
     return run_ruse_spinup(config_name, DEPLOY_DIR, behavior_source, resolved_configs)
 
 
+def _cmd_batch_deploy(deploy_type: str, configs_spec: str, config_name: str | None) -> int:
+    """Deploy all available PHASE feedback configs for the given type."""
+    from .commands.feedback import find_all_feedback_sources
+
+    sources = find_all_feedback_sources(deploy_type)
+    if not sources:
+        output.error(f"ERROR: No PHASE feedback configs found for '{deploy_type}'")
+        output.info(f"  Searched: ~/PHASE/feedback_engine/configs/ for dirs containing '{deploy_type}'")
+        return 1
+
+    # Show what will be deployed
+    output.banner(f"BATCH DEPLOY ({deploy_type}, {configs_spec})")
+    output.info("")
+    for i, src in enumerate(sources, 1):
+        output.info(f"  {i}. {src['dataset']}  (preset: {src['preset']}, source: {src['name']})")
+    output.info("")
+
+    if not output.confirm(f"Deploy these {len(sources)} feedback config(s)?"):
+        output.info("Cancelled.")
+        return 0
+
+    # Select the right spinup function and default config
+    if deploy_type == "rampart":
+        from .commands.rampart import run_rampart_spinup as spinup
+        default_config = "rampart-controls"
+    elif deploy_type == "ghosts":
+        from .commands.ghosts import run_ghosts_spinup as spinup
+        default_config = "ghosts-controls"
+    else:
+        from .commands.spinup import run_ruse_spinup as spinup
+        default_config = "ruse-controls"
+
+    base_config = config_name or default_config
+
+    # Deploy each feedback source
+    failed = 0
+    results: list[tuple[str, int]] = []
+    for i, src in enumerate(sources, 1):
+        output.info("")
+        output.info(f"[{i}/{len(sources)}] Deploying {src['dataset']} ({src['preset']})...")
+        try:
+            rc = spinup(base_config, DEPLOY_DIR, str(src["path"]), configs_spec)
+        except SystemExit as e:
+            rc = e.code if isinstance(e.code, int) else 1
+        except Exception as e:
+            output.error(f"  ERROR: {e}")
+            rc = 1
+
+        results.append((src["dataset"], rc))
+        if rc != 0:
+            output.error(f"  FAILED: {src['dataset']} (rc={rc})")
+            failed += 1
+
+    # Final summary
+    output.info("")
+    output.banner("BATCH DEPLOY SUMMARY")
+    for dataset, rc in results:
+        status = "OK" if rc == 0 else f"FAILED (rc={rc})"
+        output.info(f"  {dataset}: {status}")
+    output.info("")
+
+    if failed:
+        output.info(f"DONE: {len(sources) - failed}/{len(sources)} succeeded, {failed} failed")
+        return 1
+
+    output.info(f"DONE: all {len(sources)} deployment(s) launched")
+    return 0
+
+
 def _cmd_teardown(argv: list[str]) -> int:
     parser = _teardown_parser()
     args = parser.parse_args(argv)
@@ -186,8 +339,17 @@ def _cmd_teardown(argv: list[str]) -> int:
         from .commands.teardown import run_teardown_all
         return run_teardown_all(DEPLOY_DIR)
 
+    has_filter = args.ruse or args.rampart or args.ghosts or args.feedback
+    if has_filter:
+        from .commands.teardown import run_teardown_filtered
+        return run_teardown_filtered(
+            DEPLOY_DIR,
+            types={"ruse": args.ruse, "rampart": args.rampart, "ghosts": args.ghosts},
+            feedback_only=args.feedback,
+        )
+
     if not args.target:
-        output.error("ERROR: specify a target (name-MMDDYYHHMMSS) or use --all")
+        output.error("ERROR: specify a target (name-MMDDYYHHMMSS), use filter flags, or use --all")
         parser.print_help(sys.stderr)
         return 1
 
@@ -199,6 +361,19 @@ def _cmd_list(argv: list[str]) -> int:
     _list_parser().parse_args(argv)  # just for --help support
     from .commands.list_cmd import run_list
     return run_list(DEPLOY_DIR)
+
+
+def _cmd_shrink(argv: list[str]) -> int:
+    parser = _shrink_parser()
+    args = parser.parse_args(argv)
+    from .commands.shrink import run_shrink
+    return run_shrink(args.target, DEPLOY_DIR)
+
+
+def _cmd_audit(argv: list[str]) -> int:
+    _audit_parser().parse_args(argv)  # just for --help
+    from .commands.audit import run_audit
+    return run_audit(DEPLOY_DIR)
 
 
 if __name__ == "__main__":

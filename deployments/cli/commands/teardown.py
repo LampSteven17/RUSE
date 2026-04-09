@@ -1,7 +1,8 @@
-"""Teardown commands — specific deployment and teardown-all."""
+"""Teardown commands — specific deployment, filtered batch, and teardown-all."""
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -37,6 +38,127 @@ def run_teardown(target: str, deploy_dir: Path) -> int:
         return _ghosts_teardown(config_dir, config_name, run_id, deploy_dir)
 
     return _sup_teardown(config_dir, config_name, run_id, deploy_dir)
+
+
+def run_teardown_filtered(
+    deploy_dir: Path,
+    types: dict[str, bool],
+    feedback_only: bool,
+) -> int:
+    """Teardown all active deployments matching the given filters.
+
+    types: {"ruse": bool, "rampart": bool, "ghosts": bool}
+    feedback_only: if True, only tear down feedback-enabled deployments.
+    """
+    # If no type flags given but --feedback was used, match all types
+    any_type = any(types.values())
+
+    os_client = OpenStack()
+    targets: list[tuple[str, str, str]] = []  # (config_name, run_id, group)
+
+    for config_dir in sorted(deploy_dir.iterdir()):
+        config_file = config_dir / "config.yaml"
+        if not config_file.exists() or not config_dir.is_dir():
+            continue
+
+        name = config_dir.name
+        runs_dir = config_dir / "runs"
+        if not runs_dir.is_dir():
+            continue
+
+        try:
+            config = DeploymentConfig.load(config_file)
+        except Exception:
+            continue
+
+        # Determine group
+        if config.is_rampart():
+            group = "rampart"
+        elif config.is_ghosts():
+            group = "ghosts"
+        else:
+            group = "ruse"
+
+        # Apply type filter
+        if any_type and not types.get(group, False):
+            continue
+
+        # Apply feedback filter
+        is_feedback = name.startswith(f"{group}-feedback-")
+        if feedback_only and not is_feedback:
+            continue
+
+        # Find active runs
+        for run_dir in sorted(runs_dir.iterdir()):
+            if not run_dir.is_dir():
+                continue
+            rid = run_dir.name
+            if not re.match(r"^\d{12}$", rid):
+                continue
+            if _is_run_active(run_dir, name, rid, config, os_client, deploy_dir):
+                targets.append((name, rid, group))
+
+    if not targets:
+        output.info("No active deployments match the given filters.")
+        return 0
+
+    # Show what will be torn down
+    filter_desc = []
+    if any_type:
+        filter_desc.extend(k for k, v in types.items() if v)
+    else:
+        filter_desc.append("all types")
+    if feedback_only:
+        filter_desc.append("feedback only")
+
+    output.banner(f"BATCH TEARDOWN ({', '.join(filter_desc)})")
+    output.info("")
+    for name, rid, group in targets:
+        output.info(f"  {name}-{rid}  ({group})")
+    output.info("")
+
+    if not output.confirm(f"Teardown these {len(targets)} deployment(s)?"):
+        output.info("Cancelled.")
+        return 0
+
+    # Tear down each one
+    failed = 0
+    for i, (name, rid, group) in enumerate(targets, 1):
+        output.info("")
+        output.info(f"[{i}/{len(targets)}] Tearing down {name}-{rid}...")
+        rc = run_teardown(f"{name}-{rid}", deploy_dir)
+        if rc != 0:
+            output.error(f"  FAILED: {name}-{rid} (rc={rc})")
+            failed += 1
+
+    output.info("")
+    if failed:
+        output.info(f"DONE: {len(targets) - failed}/{len(targets)} succeeded, {failed} failed")
+        return 1
+
+    output.info(f"DONE: all {len(targets)} deployment(s) torn down")
+    return 0
+
+
+def _is_run_active(
+    run_dir: Path, name: str, rid: str, config: DeploymentConfig,
+    os_client: OpenStack, deploy_dir: Path,
+) -> bool:
+    """Check if a run is still active (mirrors list_cmd._check_active)."""
+    if (run_dir / "inventory.ini").exists():
+        return True
+    if (run_dir / "deployment_type").exists():
+        return True
+
+    dep_id = _make_dep_id(name, rid)
+    if config.is_rampart():
+        ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
+        return os_client.has_vms_with_prefix(f"e-{ent_hash}-")
+    elif config.is_ghosts():
+        g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
+        return os_client.has_vms_with_prefix(f"g-{g_hash}-")
+    else:
+        return os_client.has_vms_with_prefix(f"r-{dep_id}-")
 
 
 def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: Path) -> int:
@@ -102,7 +224,6 @@ def _rampart_teardown(
     config_dir: Path, config_name: str, run_id: str, config: DeploymentConfig, deploy_dir: Path,
 ) -> int:
     """Teardown a RAMPART enterprise deployment."""
-    import hashlib
     import json
     import time
 
@@ -200,7 +321,6 @@ def _ghosts_teardown(
     config_dir: Path, config_name: str, run_id: str, deploy_dir: Path,
 ) -> int:
     """Teardown a GHOSTS deployment."""
-    import hashlib
     import time
 
     run_dir = config_dir / "runs" / run_id
