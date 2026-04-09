@@ -160,9 +160,18 @@ deployments/
 Auto-detected from `~/PHASE/feedback_engine/configs/` (most recent directory matching deploy type). Can target a specific dataset with `--source`.
 
 ### Deployment naming pattern
-- `{type}-controls` — Baseline (no feedback)
-- `{type}-feedback-{preset}-{dataset}-{scope}` — Auto-generated feedback deployment
-- On teardown, `*-feedback-*` directories are cleaned up entirely
+- `{type}-controls` — Baseline (no feedback) — committed to git
+- `{type}-feedback-{preset}-{dataset}-{scope}` — Auto-generated feedback deployment,
+  **NOT committed**. These dirs are created by the deploy CLI from `FEEDBACK_TEMPLATE`
+  and matching PHASE source data. They live entirely on the local mlserv filesystem
+  and are listed in `.gitignore`:
+  ```
+  deployments/ruse-feedback-stdctrls-*/
+  deployments/ghosts-feedback-stdctrls-*/
+  deployments/rampart-feedback-stdctrls-*/
+  ```
+- On teardown, `*-feedback-*` directories are cleaned up entirely (last run torn
+  down → whole directory removed)
 
 ### Dataset targets (in `feedback.py`)
 ```python
