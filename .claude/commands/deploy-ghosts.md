@@ -186,6 +186,17 @@ deployments/ghosts-feedback-stdctrls-sum24-all/runs/<run_id>/  # Feedback
 ```
 
 ### Feedback Config Generation
-When `./deploy --ghosts --all` (or any feedback flag) is used with `ghosts-controls`, the CLI auto-generates a `ghosts-feedback-*` deployment directory via `generate_ghosts_feedback_config()` in `feedback.py`. This mirrors `generate_feedback_config()` for RUSE SUPs. The generated config has `type: ghosts` and the same ghosts section as `ghosts-controls`. On teardown, `ghosts-feedback-*` directories are cleaned up entirely (like `ruse-feedback-*`).
+When `./deploy --ghosts --all` (or any feedback flag) is used with `ghosts-controls`, the CLI auto-generates a `ghosts-feedback-*` deployment directory via `generate_ghosts_feedback_config()` in `feedback.py`. This mirrors `generate_feedback_config()` for RUSE SUPs. The generated config has `type: ghosts`, `behavior_source` (PHASE dir path), `behavior_configs` ("all" or list of filenames), and the same ghosts section as `ghosts-controls`. On teardown, `ghosts-feedback-*` directories are cleaned up entirely (like `ruse-feedback-*`).
+
+### VM Provisioning Safety
+`_provision_vms()` in ghosts.py tracks which VMs reach ACTIVE state and only includes those in the inventory. VMs that reach ERROR state are excluded — preventing confusing downstream Ansible failures on broken VMs.
+
+### Feedback Subdir Resolution
+`_find_feedback_subdir()` in ghosts.py searches for PHASE config files in this priority order:
+1. GHOSTS-specific paths: `npc/npc`, `api/api` (double-nested PHASE structure)
+2. Fallback: first subdirectory containing `activity_pattern.json` or `timing_profile.json`
+
+### Timeline Generation Details
+`phase_to_timeline.py` clamps `active_hour_range` values to 0-23 to prevent IndexError on malformed activity patterns. The `_build_time_windows()` function safely handles edge cases in hourly distribution data.
 
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.
