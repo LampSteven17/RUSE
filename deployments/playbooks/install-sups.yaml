@@ -102,3 +102,26 @@
       shell: systemctl is-active $(systemctl list-units --type=service | grep -E '(mchp|smol|bu)' | awk '{print $1}' | head -1) || true
       register: service_status
       changed_when: false
+
+    # MCHP brains have a slow Selenium/pyautogui memory leak. Schedule a daily
+    # service restart at 03:00 UTC + a weekly full VM reboot Sundays at 04:00 UTC
+    # to keep them healthy. M brains only — B/S brains don't need this.
+    - name: Install MCHP maintenance cron entries (daily restart + weekly reboot)
+      when: sup_behavior is match('^M[0-9]')
+      cron:
+        name: "{{ item.name }}"
+        user: root
+        minute: "{{ item.minute }}"
+        hour: "{{ item.hour }}"
+        weekday: "{{ item.weekday | default('*') }}"
+        job: "{{ item.job }}"
+      loop:
+        - name: mchp-daily-restart
+          minute: "0"
+          hour: "3"
+          job: "/bin/systemctl restart {{ sup_behavior | lower | replace('.', '_') }}.service"
+        - name: mchp-weekly-reboot
+          minute: "0"
+          hour: "4"
+          weekday: "0"
+          job: "/sbin/reboot"
