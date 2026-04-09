@@ -214,12 +214,14 @@ The central orchestrator is **user-roles.json** — equivalent to RUSE's `behavi
 ### With --feedback: 19 per-node roles
 `./deploy --rampart --feedback` generates per-node roles via `lib/phase_to_user_roles.py`:
 - Reads PHASE per-node feedback dirs (e.g., `winep1/winep1/activity_pattern.json`)
-- Creates per-node roles (`winep1_user`, `linep9_user`, etc.) inheriting from baseline
-- Overrides: `day_start_hour`, `activity_daily_hours`, `logins_per_hour`, `login_length` from PHASE
-- Preserves: `workflows`, `fractions`, `terminals`, `recursive_logins` from baseline
+- **Strips `e-{hash}-` prefix** from enterprise config node names before PHASE lookup (enterprise config uses `e-14a6d-linep3`, PHASE dirs use bare `linep3`)
+- Creates per-node roles (`e-14a6d-winep1_user`, `e-14a6d-linep9_user`, etc.) inheriting from baseline
+- Overrides: `day_start_hour`, `activity_daily_hours`, `logins_per_hour`, `login_length`, `clustersize`, `taskinterval`, `taskgroupinterval` from PHASE
+- Preserves: `workflows` (enterprise-only like browse_iis always retained), `fractions`, `terminals`, `recursive_logins` from baseline
 - Generates `user-roles-feedback.json` + `enterprise-config-feedback.json`
 - Skips dc1-3 (no user), linep1 (no user)
 - All values remain strings (matching user-roles.json convention)
+- Generated feedback config includes `behavior_source` and `behavior_configs` fields for audit trail
 
 ## SSH Authentication
 
@@ -271,6 +273,7 @@ Available workflows: `browse_iis`, `browse_shibboleth`, `browse_web`, `browse_yo
 | Auth fails with "Authentication failed" on DC | `deploy_users()` used bare domain (`administrator@castle`) but NetBIOS is now `CASTLE{hash}` | Fixed: use FQDN (`administrator@castle.{hash}.{project}.os`) in role_domains.py and rampart.py |
 | 0 endpoints found for emulation | `user_map` keyed by prefixed names (`e-hash-winep1`) but `node_map` keyed by bare names (`winep1`) | Fixed: strip `ent_prefix` from home_node names in `_generate_emulation_inventory()` and `_deploy_windows_emulation()` |
 | DNS zone collision between RAMPART deployments | All deploys shared one zone (`vxn3kr-bot-project.os`) | Fixed: per-deployment zone (`{hash}.vxn3kr-bot-project.os`), scoped teardown via `dns_zone.txt` marker |
+| PHASE feedback produces 0 per-node roles | `phase_to_user_roles.py` used prefixed names (`e-14a6d-linep3`) to look up PHASE dirs that use bare names (`linep3`) | Fixed: `_strip_enterprise_prefix()` strips `e-{hash}-` before PHASE dir lookup |
 
 ## Important Constraints
 

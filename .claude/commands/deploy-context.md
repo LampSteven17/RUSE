@@ -7,17 +7,19 @@ Load critical context about the shared RUSE deployment CLI infrastructure before
 Read the following files in order to understand the shared deployment infrastructure:
 
 ### Python CLI (the orchestrator)
-1. `deployments/cli/__main__.py` - Entry point, argparse, command routing (deploy/teardown/list as separate scripts)
+1. `deployments/cli/__main__.py` - Entry point, argparse, command routing (deploy/teardown/list/shrink/audit as separate scripts)
 2. `deployments/cli/config.py` - DeploymentConfig dataclass (loads config.yaml, supports sup/rampart/ghosts types)
 3. `deployments/cli/openstack.py` - OpenStack CLI wrapper with caching (subprocess to `openstack` CLI, sources ~/vxn3kr-bot-rc)
-4. `deployments/cli/ansible_runner.py` - Runs Ansible playbooks, streams + parses output, stateful line parser with task whitelist
+4. `deployments/cli/ansible_runner.py` - Runs Ansible playbooks, streams + parses output in main thread (no race), stateful line parser with task whitelist
 5. `deployments/cli/output.py` - Terminal output helpers (monochrome, ASCII banners, timestamps)
 6. `deployments/cli/ssh_config.py` - SSH config block management (~/.ssh/config with RUSE markers)
 
 ### Command modules (shared)
-7. `deployments/cli/commands/teardown.py` - Teardown for all three types (SUP/enterprise/ghosts) + teardown-all
+7. `deployments/cli/commands/teardown.py` - Teardown for all three types + filter flags (--ruse/--rampart/--ghosts [--feedback]) + teardown-all
 8. `deployments/cli/commands/list_cmd.py` - List active deployments across all types
-9. `deployments/cli/commands/feedback.py` - PHASE feedback source detection, config generation, per-config-file CLI flags
+9. `deployments/cli/commands/feedback.py` - PHASE feedback source detection, config generation, per-config-file CLI flags, find_all_feedback_sources for batch deploy
+10. `deployments/cli/commands/shrink.py` - In-place VM removal: diffs run snapshot vs config.yaml, deletes delta VMs from OpenStack + cleans inventory/SSH config/experiments.json
+11. `deployments/cli/commands/audit.py` - Full health audit of all RUSE deployments: SSH/service/process/model/GPU/log/cron checks per VM + cross-deployment consistency, writes markdown report
 
 ### Supporting libraries (imported by all command modules)
 10. `deployments/lib/vm_naming.py` - VM naming conventions, prefix generation, parsing, sorting
@@ -30,29 +32,33 @@ Read the following files in order to understand the shared deployment infrastruc
 
 ## Architecture
 
-The deploy system is a Python CLI with three separate entry-point scripts:
+The deploy system is a Python CLI with five separate entry-point scripts:
 
 ```
 deployments/
   deploy                    # #!/bin/bash → exec python3 -m cli deploy "$@"
   teardown                  # #!/bin/bash → exec python3 -m cli teardown "$@"
   list                      # #!/bin/bash → exec python3 -m cli list "$@"
+  shrink                    # #!/bin/bash → exec python3 -m cli shrink "$@"
+  audit                     # #!/bin/bash → exec python3 -m cli audit "$@"
   deploy.legacy             # Old bash script (preserved for reference)
 
   cli/                      # Python CLI package
-    __main__.py             # argparse routing: deploy/teardown/list
+    __main__.py             # argparse routing: deploy/teardown/list/shrink/audit
     config.py               # DeploymentConfig dataclass
     openstack.py            # OpenStack CLI wrapper
-    ansible_runner.py       # Playbook runner + streaming parser
+    ansible_runner.py       # Playbook runner + streaming parser (main thread)
     output.py               # Monochrome terminal output
     ssh_config.py           # SSH config management
     commands/
       spinup.py             # ./deploy --ruse        (see /deploy-ruse)
       rampart.py            # ./deploy --rampart     (see /deploy-rampart)
       ghosts.py             # ./deploy --ghosts      (see /deploy-ghosts)
-      teardown.py           # ./teardown <target> | ./teardown --all
+      teardown.py           # ./teardown <target> | --all | --ruse|rampart|ghosts [--feedback]
       list_cmd.py           # ./list
-      feedback.py           # PHASE feedback resolution + config generation
+      feedback.py           # PHASE feedback resolution + config generation + batch source discovery
+      shrink.py             # ./shrink <target> — in-place VM removal
+      audit.py              # ./audit — health check of all RUSE deployments
 
   playbooks/                # Ansible (infrastructure only, no display)
     provision-vms.yaml      # Create VMs, get IPs, write inventory
@@ -84,18 +90,37 @@ deployments/
 
 ```bash
 # Deploy (type-specific — see individual skills for details)
-./deploy --ruse                    # SUP baseline
-./deploy --rampart                 # Enterprise baseline
-./deploy --ghosts                  # GHOSTS NPCs baseline
+./deploy --ruse                              # SUP baseline
+./deploy --rampart                           # Enterprise baseline
+./deploy --ghosts                            # GHOSTS NPCs baseline
+
+# Batch deploy: deploys ALL available PHASE feedback configs for a type
+./deploy --ruse --feedback --batch           # all RUSE feedback variants
+./deploy --rampart --feedback --batch        # all RAMPART feedback variants
+./deploy --ghosts --feedback --batch         # all GHOSTS feedback variants
+# (Discovers via find_all_feedback_sources() in feedback.py — scans
+#  ~/PHASE/feedback_engine/configs/ for matching dirs, shows them,
+#  prompts for confirmation, then deploys each in sequence with a final summary.)
 
 # List all active deployments
 ./list
 
-# Teardown
-./teardown ruse-controls-032226210347      # Specific RUSE deployment
-./teardown rampart-controls-032726230919   # Specific RAMPART deployment
-./teardown ghosts-controls-032326180512    # Specific GHOSTS deployment
-./teardown --all                           # Everything (requires confirmation)
+# Teardown — three forms
+./teardown ruse-controls-032226210347        # Specific deployment by name+run_id
+./teardown --ruse --feedback                 # Filter: all active RUSE feedback deploys
+./teardown --rampart                         # Filter: all active RAMPART deploys
+./teardown --ghosts --feedback               # Filter: all active GHOSTS feedback deploys
+./teardown --all                             # Nuclear: everything (requires confirmation)
+
+# Shrink a running deployment in place (no full teardown/redeploy)
+./shrink ruse-controls-040226205037          # Diffs run snapshot vs config.yaml,
+                                             # deletes surplus VMs, cleans inventory/SSH/PHASE
+
+# Health audit of all RUSE deployments
+./audit                                       # Per-VM checks: SSH, service, process, model
+                                             # loaded, GPU loaded, log freshness, MCHP cron;
+                                             # cross-deployment: orphan detection, PHASE
+                                             # registration; writes markdown to logs/audit_*.md
 ```
 
 ## Key Design Decisions
