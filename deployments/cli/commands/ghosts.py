@@ -82,8 +82,30 @@ def run_ghosts_spinup(
 
     output.info(f"  {len(all_vms)}/{total_vms} VMs provisioned")
 
-    # Write inventory and SSH config
-    _write_inventory(api_vm, client_vms, run_dir, deployment)
+    # Route PHASE per-NPC timelines (if any) BEFORE writing the inventory
+    # so per-host timeline paths can be baked into inventory variables.
+    # Fail loud on a feedback source with no npc-*/timeline.json — no
+    # silent fallback to a single shared timeline.
+    timeline_mapping: dict[str, Path] = {}
+    if behavior_source:
+        output.info("")
+        output.info("  Routing PHASE per-NPC timelines...")
+        timeline_mapping = _build_npc_timeline_mapping(
+            Path(behavior_source), client_vms, run_dir,
+        )
+        if not timeline_mapping:
+            output.error(
+                f"  FAILED: no npc-*/timeline.json files in {behavior_source}"
+            )
+            output.error(
+                "  Expected PHASE Stage 2 layout with "
+                "{source}/npc-0/timeline.json, npc-1/timeline.json, ..."
+            )
+            return 1
+        output.info(f"  Routed {len(timeline_mapping)} per-NPC timelines")
+
+    # Write inventory and SSH config (inventory includes per-host timeline paths)
+    _write_inventory(api_vm, client_vms, run_dir, deployment, timeline_mapping)
     _write_ssh_config(all_vms, run_dir, deployment)
 
     # [2/5] Test SSH
@@ -115,25 +137,14 @@ def run_ghosts_spinup(
         output.info(f"  Log: {api_result.log_path}")
         # Continue anyway — clients might still be useful to install
 
-    # Generate PHASE-informed timeline if feedback source provided
-    client_extra_vars: dict[str, str] = {}
-    if behavior_source:
-        output.info("")
-        output.info("  Generating PHASE-informed GHOSTS timeline...")
-        timeline_path = _generate_feedback_timeline(behavior_source, run_dir)
-        if timeline_path:
-            client_extra_vars["ghosts_timeline_file"] = str(timeline_path)
-            output.info(f"  Timeline written: {timeline_path.name}")
-        else:
-            output.info("  WARNING: Could not generate timeline, using default")
-
     # [4/5] Install GHOSTS clients
+    # Per-host ghosts_timeline_file is already in the inventory (injected by
+    # _write_inventory above when timeline_mapping is non-empty).
     output.info("")
     output.info(f"[4/5] Installing GHOSTS clients ({client_count} VMs)...")
     client_result = runner.run_playbook(
         "install-ghosts-clients.yaml",
         inventory_path,
-        extra_vars=client_extra_vars if client_extra_vars else None,
         on_event=default_event_handler,
     )
 
@@ -293,8 +304,20 @@ def _openstack_cmd(rc_file: Path, *args: str) -> subprocess.CompletedProcess:
 
 # --- Inventory & SSH Config ---
 
-def _write_inventory(api_vm: dict, client_vms: list[dict], run_dir: Path, deployment_name: str) -> None:
-    """Write Ansible inventory with two host groups."""
+def _write_inventory(
+    api_vm: dict,
+    client_vms: list[dict],
+    run_dir: Path,
+    deployment_name: str,
+    timeline_mapping: dict[str, Path] | None = None,
+) -> None:
+    """Write Ansible inventory with two host groups.
+
+    If timeline_mapping is provided, each client VM line gets a
+    per-host ghosts_timeline_file variable pointing at its tuned
+    PHASE timeline (matches the pre-existing per-host ghosts_api_ip
+    pattern, consumed by install-ghosts-clients.yaml).
+    """
     lines = [
         f"# Auto-generated inventory for {deployment_name} (GHOSTS)",
         f"# Generated: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
@@ -306,10 +329,13 @@ def _write_inventory(api_vm: dict, client_vms: list[dict], run_dir: Path, deploy
     ]
 
     api_ip = api_vm["ip"]
+    mapping = timeline_mapping or {}
     for vm in client_vms:
-        lines.append(
-            f"{vm['name']} ansible_host={vm['ip']} ghosts_api_ip={api_ip}"
-        )
+        vm_name = vm["name"]
+        line = f"{vm_name} ansible_host={vm['ip']} ghosts_api_ip={api_ip}"
+        if vm_name in mapping:
+            line += f" ghosts_timeline_file={mapping[vm_name]}"
+        lines.append(line)
 
     lines.extend([
         "",
@@ -464,47 +490,67 @@ def _make_dep_id(deployment_name: str, run_id: str) -> str:
     return f"{dep}{run_id}"
 
 
-def _generate_feedback_timeline(behavior_source: str, run_dir: Path) -> Path | None:
-    """Generate a GHOSTS timeline.json from PHASE feedback configs."""
-    import importlib.util
+def _build_npc_timeline_mapping(
+    source_path: Path,
+    client_vms: list[dict],
+    run_dir: Path,
+) -> dict[str, Path]:
+    """Route PHASE Stage 2 per-NPC timelines to client VMs.
 
-    source_path = Path(behavior_source)
-    feedback_dir = _find_feedback_subdir(source_path)
-    if not feedback_dir:
-        return None
+    PHASE now writes one tuned timeline.json per NPC at
+    behavior_source/npc-{N}/timeline.json. Each timeline has per-VM
+    tuning (different DelayAfter values, handler mixes, lognormal sigmas)
+    — the whole point of Stage 1 was to unblock this per-VM signal that
+    was previously being averaged into a single shared timeline.
 
-    # Import the translator from lib/
-    lib_dir = Path(__file__).resolve().parent.parent.parent / "lib"
-    spec = importlib.util.spec_from_file_location(
-        "phase_to_timeline", lib_dir / "phase_to_timeline.py",
-    )
-    if not spec or not spec.loader:
-        return None
+    This function:
+      1. Walks source_path/npc-*/timeline.json to discover available
+         per-NPC timelines.
+      2. For each client VM, extracts the trailing npc-N from the VM
+         name (e.g. g-14a6d-npc-2 -> npc-2) and looks up the
+         corresponding PHASE timeline.
+      3. Copies each matched timeline to run_dir/timelines/{vm_name}.json
+         so the run_dir is self-contained for teardown and audit.
+      4. Returns {vm_name: Path} mapping that the inventory writer
+         uses to inject per-host ghosts_timeline_file variables.
 
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    timeline = mod.generate_timeline(feedback_dir)
-    timeline_path = run_dir / "timeline.json"
-    timeline_path.write_text(json.dumps(timeline, indent=2) + "\n")
-    return timeline_path
-
-
-def _find_feedback_subdir(source_path: Path) -> Path | None:
-    """Find a behavior config subdir with JSON files.
-
-    Prefers GHOSTS-specific paths (npc/npc, api/api).
-    Falls back to first subdir containing activity_pattern.json or timing_profile.json.
+    VMs whose name doesn't contain npc-N are skipped with a warning
+    (they're either the API VM, which doesn't run install-ghosts-clients,
+    or a topology mismatch).
     """
-    # GHOSTS NPC path (double-nested) — try these first for GHOSTS deployments
-    for name in ["npc/npc", "api/api"]:
-        candidate = source_path / name
-        if candidate.is_dir() and any(candidate.glob("*.json")):
-            return candidate
+    import re
+    import shutil
 
-    # Fallback: first subdir with activity_pattern.json or timing_profile.json
-    for config_file in ["activity_pattern.json", "timing_profile.json"]:
-        for p in source_path.rglob(config_file):
-            return p.parent
+    # Discover per-NPC timeline files keyed by NPC id (e.g. "npc-0")
+    npc_timelines: dict[str, Path] = {}
+    for timeline_path in sorted(source_path.glob("npc-*/timeline.json")):
+        npc_id = timeline_path.parent.name  # e.g. "npc-0"
+        npc_timelines[npc_id] = timeline_path
 
-    return None
+    if not npc_timelines:
+        return {}
+
+    # Stage per-host copies under run_dir/timelines/ for a self-contained run
+    timelines_dir = run_dir / "timelines"
+    timelines_dir.mkdir(parents=True, exist_ok=True)
+
+    mapping: dict[str, Path] = {}
+    for vm in client_vms:
+        vm_name = vm["name"]
+        # Extract trailing npc-N from VM name (e.g. g-14a6d-npc-0 -> npc-0)
+        match = re.search(r"(npc-\d+)$", vm_name)
+        if not match:
+            output.info(f"  WARNING: client VM {vm_name} does not match npc-N pattern, skipping")
+            continue
+        npc_id = match.group(1)
+
+        source_timeline = npc_timelines.get(npc_id)
+        if source_timeline is None:
+            output.info(f"  WARNING: no PHASE timeline for {vm_name} ({npc_id})")
+            continue
+
+        dest = timelines_dir / f"{vm_name}.json"
+        shutil.copy2(source_timeline, dest)
+        mapping[vm_name] = dest
+
+    return mapping

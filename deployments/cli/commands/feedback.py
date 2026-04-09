@@ -20,11 +20,13 @@ FEEDBACK_TEMPLATE = [
     {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g",        "count": 1},
 ]
 
-# Maps PHASE manifest dataset names → short abbreviations for deployment directory names.
+# Maps PHASE dataset names → short abbreviations for deployment directory names.
 # Used by generate_feedback_config() to abbreviate "axes-summer24" → "sum24" etc.
 # Lookup: try exact match on full dataset name first, then substring (longest key first).
+# Dataset names are extracted from the PHASE source directory name via
+# _parse_source_name() (middle component of {experiment}_{dataset}_{preset}).
 DATASET_ABBREVIATIONS = {
-    # PHASE canonical names (exact match from manifest "dataset" field)
+    # PHASE canonical names (exact match from the source dir's dataset component)
     "axes-summer24": "sum24",
     "axes-fall24": "fall24",
     "axes-spring25": "spr25",
@@ -151,13 +153,71 @@ def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
     return best_typed or best_any
 
 
+# ── PHASE source validation & metadata extraction (post Stage 2) ───────────
+#
+# Stage 2 dropped manifest.json. Feedback source dirs are now identified by
+# their generated file layout (type-specific globs), and metadata is parsed
+# from the directory name itself: {experiment}_{dataset}_{preset}.
+
+
+def _parse_source_name(source_dir: Path) -> tuple[str, str, str]:
+    """Extract (experiment, dataset, preset) from a PHASE source dir name.
+
+    PHASE source dirs are named {experiment}_{dataset}_{preset}, e.g.:
+      axes-ruse-controls_axes-summer24_std-ctrls
+      → ("axes-ruse-controls", "axes-summer24", "std-ctrls")
+
+    Experiment, dataset, and preset each use hyphens internally, so an
+    underscore split yields exactly three parts. Falls back to "unknown"
+    tuple on malformed names.
+    """
+    parts = source_dir.name.split("_")
+    if len(parts) != 3:
+        return ("unknown", "unknown", "unknown")
+    return parts[0], parts[1], parts[2]
+
+
+def _is_valid_feedback_source(source_dir: Path, deploy_type: str | None) -> bool:
+    """Check whether source_dir contains the expected Stage 2 file layout.
+
+    Post Stage 2 there is no manifest.json marker; validity is inferred
+    from the presence of the generator's output files:
+      RUSE    — {behavior}/{sup}/timing_profile.json  (8 per-SUP files per sup)
+      RAMPART — {bare_node}/user-roles.json          (per-node pyhuman configs)
+      GHOSTS  — npc-*/timeline.json                  (per-NPC timelines)
+
+    If deploy_type is None/unknown, accept any of the three patterns.
+    """
+    if not source_dir.is_dir():
+        return False
+
+    if deploy_type == "rampart":
+        return any(source_dir.glob("*/user-roles.json"))
+    if deploy_type == "ghosts":
+        return any(source_dir.glob("npc-*/timeline.json"))
+    if deploy_type in ("ruse", "sup", None):
+        # Matches both new Stage 2 layout and any residual pre-Stage-2 layout
+        # that wrote {behavior}/{sup}/*.json (same path shape).
+        return any(source_dir.glob("*/*/timing_profile.json"))
+
+    # Unknown type — accept any marker
+    return (
+        any(source_dir.glob("*/user-roles.json"))
+        or any(source_dir.glob("npc-*/timeline.json"))
+        or any(source_dir.glob("*/*/timing_profile.json"))
+    )
+
+
 def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
     """Find all PHASE feedback config directories matching deploy type.
 
     Returns list of dicts sorted by dataset name:
         [{"path": Path, "name": str, "preset": str, "dataset": str}, ...]
 
-    Only includes directories with a valid manifest.json.
+    A directory is included if its name contains the deploy-type prefix
+    (e.g. "ghosts") AND its file layout matches the Stage 2 generator
+    output for that type. Metadata (preset, dataset) is parsed from the
+    source directory name.
     """
     if not FEEDBACK_BASE.is_dir():
         return []
@@ -168,22 +228,17 @@ def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
     for d in sorted(FEEDBACK_BASE.iterdir()):
         if not d.is_dir():
             continue
-        manifest_path = d / "manifest.json"
-        if not manifest_path.exists():
-            continue
         if type_prefix and type_prefix not in d.name:
             continue
-
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except (json.JSONDecodeError, OSError):
+        if not _is_valid_feedback_source(d, deploy_type):
             continue
 
+        _experiment, dataset, preset = _parse_source_name(d)
         results.append({
             "path": d,
             "name": d.name,
-            "preset": manifest.get("preset_name", "?"),
-            "dataset": manifest.get("dataset", "?"),
+            "preset": preset,
+            "dataset": dataset,
         })
 
     return results
@@ -278,17 +333,17 @@ def generate_feedback_config(
     configs_spec: str,
     deploy_dir: Path,
 ) -> str:
-    """Generate a feedback deployment config.yaml. Returns deployment name."""
+    """Generate a RUSE feedback deployment config.yaml. Returns deployment name."""
     import yaml
 
-    manifest_path = source_dir / "manifest.json"
-    if not manifest_path.exists():
-        output.error(f"ERROR: No manifest.json in {source_dir}")
+    if not _is_valid_feedback_source(source_dir, "ruse"):
+        output.error(
+            f"ERROR: {source_dir} is not a valid RUSE feedback source "
+            f"(no {{behavior}}/{{sup}}/timing_profile.json files found)"
+        )
         raise SystemExit(1)
 
-    manifest = json.loads(manifest_path.read_text())
-    preset_name = manifest.get("preset_name", "unknown")
-    dataset = manifest.get("dataset", "unknown")
+    _experiment, dataset, preset_name = _parse_source_name(source_dir)
 
     # Abbreviate dataset (exact match first, then longest substring match)
     dataset_abbrev = _abbreviate_dataset(dataset)
@@ -342,14 +397,14 @@ def generate_rampart_feedback_config(
     """Generate a RAMPART feedback deployment config.yaml. Returns deployment name."""
     import yaml
 
-    manifest_path = source_dir / "manifest.json"
-    if not manifest_path.exists():
-        output.error(f"ERROR: No manifest.json in {source_dir}")
+    if not _is_valid_feedback_source(source_dir, "rampart"):
+        output.error(
+            f"ERROR: {source_dir} is not a valid RAMPART feedback source "
+            f"(no {{bare_node}}/user-roles.json files found)"
+        )
         raise SystemExit(1)
 
-    manifest = json.loads(manifest_path.read_text())
-    preset_name = manifest.get("preset_name", "unknown")
-    dataset = manifest.get("dataset", "unknown")
+    _experiment, dataset, preset_name = _parse_source_name(source_dir)
 
     # Abbreviate dataset (exact match first, then longest substring match)
     dataset_abbrev = _abbreviate_dataset(dataset)
@@ -399,14 +454,14 @@ def generate_ghosts_feedback_config(
     """Generate a GHOSTS feedback deployment config.yaml. Returns deployment name."""
     import yaml
 
-    manifest_path = source_dir / "manifest.json"
-    if not manifest_path.exists():
-        output.error(f"ERROR: No manifest.json in {source_dir}")
+    if not _is_valid_feedback_source(source_dir, "ghosts"):
+        output.error(
+            f"ERROR: {source_dir} is not a valid GHOSTS feedback source "
+            f"(no npc-*/timeline.json files found)"
+        )
         raise SystemExit(1)
 
-    manifest = json.loads(manifest_path.read_text())
-    preset_name = manifest.get("preset_name", "unknown")
-    dataset = manifest.get("dataset", "unknown")
+    _experiment, dataset, preset_name = _parse_source_name(source_dir)
 
     # Abbreviate dataset (exact match first, then longest substring match)
     dataset_abbrev = _abbreviate_dataset(dataset)

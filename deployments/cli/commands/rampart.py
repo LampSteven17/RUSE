@@ -751,26 +751,131 @@ def _generate_feedback_user_roles(
     enterprise_config: Path,
     output_dir: Path,
 ) -> dict | None:
-    """Generate per-node user roles from PHASE feedback configs."""
-    import importlib.util
+    """Build user-roles-feedback.json + enterprise-config-feedback.json from
+    PHASE Stage 2 per-node files.
 
-    lib_dir = Path(__file__).resolve().parent.parent.parent / "lib"
-    spec = importlib.util.spec_from_file_location(
-        "phase_to_user_roles", lib_dir / "phase_to_user_roles.py",
-    )
-    if not spec or not spec.loader:
-        return None
+    PHASE now writes target-native configs: behavior_source contains
+    {bare_node}/user-roles.json files, each a self-contained pyhuman config
+    whose first role is the tuned {bare_node}_user role and whose remaining
+    roles are baseline clones (standard/power/admin user).
 
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    This function:
+      1. Walks behavior_source/*/user-roles.json to discover processed nodes.
+      2. Extracts the first (tuned) role from each per-node file.
+      3. Renames each tuned role from "{bare_node}_user" to the deployment-
+         prefixed form "{e-hash-prefixed_node_name}_user" so concurrent
+         deployments of different hashes can coexist without role name
+         collisions.
+      4. Walks the enterprise config, strips the e-{hash}- prefix from each
+         node name to get its bare form, looks up the corresponding tuned
+         role, and rewrites the node's "user" field to point at the
+         renamed role.
+      5. Nodes with user: null in the enterprise config (dc1-3, linep1) are
+         left unchanged — PHASE does not write feedback for them.
+      6. Writes the combined user-roles-feedback.json (all tuned roles +
+         the 3 baseline roles for any unfed nodes) and the rewritten
+         enterprise-config-feedback.json into output_dir.
+    """
+    import copy
+    import json
+    import re
 
+    # Load the baseline roles file — we need the standard/power/admin user
+    # roles to keep in the output as fallbacks for any unfed nodes.
     try:
-        return mod.generate_user_roles(
-            behavior_source, baseline_user_roles, enterprise_config, output_dir,
-        )
-    except Exception as e:
-        output.info(f"  Feedback translation error: {e}")
+        baseline_data = json.loads(baseline_user_roles.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        output.info(f"  ERROR: failed to read baseline {baseline_user_roles}: {e}")
         return None
+
+    baseline_role_names = {"standard user", "power user", "admin user"}
+    baseline_trio = [
+        r for r in baseline_data.get("roles", [])
+        if r.get("name") in baseline_role_names
+    ]
+
+    # Load the enterprise config (prefixed node names)
+    try:
+        enterprise = json.loads(enterprise_config.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        output.info(f"  ERROR: failed to read enterprise config {enterprise_config}: {e}")
+        return None
+
+    # Discover per-node feedback files: behavior_source/{bare_node}/user-roles.json
+    per_node_files = sorted(behavior_source.glob("*/user-roles.json"))
+    if not per_node_files:
+        output.info(
+            f"  No per-node user-roles.json found in {behavior_source} — "
+            f"expected Stage 2 layout with {{bare_node}}/user-roles.json files."
+        )
+        return None
+
+    # Extract the tuned role (first entry in roles array) for each node,
+    # keyed by bare node name.
+    tuned_by_bare: dict[str, dict] = {}
+    for f in per_node_files:
+        bare_name = f.parent.name  # e.g. "linep9"
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            output.info(f"  WARNING: failed to parse {f}: {e}")
+            continue
+        roles = data.get("roles", [])
+        if not roles:
+            output.info(f"  WARNING: {f} has empty roles array, skipping")
+            continue
+        tuned_by_bare[bare_name] = roles[0]
+
+    if not tuned_by_bare:
+        output.info(f"  No valid tuned roles could be extracted from {behavior_source}")
+        return None
+
+    # Walk the enterprise config nodes, rewriting each fed node's user field
+    # and collecting the tuned roles (renamed to include the e-{hash}- prefix).
+    modified_enterprise = copy.deepcopy(enterprise)
+    per_node_roles_out: list[dict] = []
+    nodes_processed: list[str] = []
+
+    for i, node in enumerate(modified_enterprise.get("nodes", [])):
+        node_name = node.get("name", "")  # e.g. "e-14a6d-linep9"
+        if node.get("user") is None:
+            continue  # dc1/dc2/dc3/linep1 — no user, skip
+
+        # Strip the e-{5char_hex}- prefix to get the bare node name
+        bare_name = re.sub(r"^e-[a-f0-9]+-", "", node_name)
+
+        tuned = tuned_by_bare.get(bare_name)
+        if tuned is None:
+            # No PHASE feedback for this node — leave its user field pointing
+            # at the baseline role (which is in baseline_trio). The enterprise
+            # config node keeps its current user value unchanged.
+            continue
+
+        # Clone the tuned role and rename it to the deployment-unique form
+        renamed = copy.deepcopy(tuned)
+        new_role_name = f"{node_name}_user"  # e.g. "e-14a6d-linep9_user"
+        renamed["name"] = new_role_name
+        per_node_roles_out.append(renamed)
+
+        modified_enterprise["nodes"][i]["user"] = new_role_name
+        nodes_processed.append(node_name)
+
+    # Combined output: tuned per-node roles first, then the baseline trio
+    # (for any node whose "user" field wasn't rewritten above).
+    all_roles = per_node_roles_out + baseline_trio
+    output_roles = {"roles": all_roles}
+
+    roles_path = output_dir / "user-roles-feedback.json"
+    enterprise_path = output_dir / "enterprise-config-feedback.json"
+    roles_path.write_text(json.dumps(output_roles, indent=2) + "\n")
+    enterprise_path.write_text(json.dumps(modified_enterprise, indent=2) + "\n")
+
+    return {
+        "user_roles_path": roles_path,
+        "enterprise_config_path": enterprise_path,
+        "role_count": len(per_node_roles_out),
+        "nodes_processed": nodes_processed,
+    }
 
 
 def _copy_if_exists(src: Path, dst: Path) -> None:
