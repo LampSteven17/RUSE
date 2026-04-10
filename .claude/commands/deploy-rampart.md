@@ -54,8 +54,16 @@ Deploy flow (rampart.py):
         ├── setup_moodle_idps()          - Moodle IdP configuration
         ├── setup_moodle_sps()           - Moodle SP configuration
         └── setup_moodle_idps_part2()    - Moodle IdP finalization
-  [---] Generate PHASE user roles (if --feedback): phase_to_user_roles.py
-        → user-roles-feedback.json (19 per-node roles)
+  [---] Assemble PHASE user roles (if --feedback): rampart.py::_generate_feedback_user_roles
+        Reads behavior_source/{bare_node}/user-roles.json (Stage 2
+        target-native format, written directly by PHASE — no
+        translation layer), extracts each file's first role (the
+        tuned {bare_node}_user role), renames it to
+        e-{hash}-{bare_node}_user for deployment-unique naming,
+        combines with the 3 baseline roles (standard/power/admin user)
+        from the workflow baseline, and rewrites each fed enterprise
+        node's "user" field to point at the renamed role.
+        → user-roles-feedback.json (19 tuned + 3 baseline roles)
         → enterprise-config-feedback.json (per-node role references)
   [4/5] Generate users + login schedule (simulate-logins.py) → logins.json
         Uses FQDN domain auth (administrator@castle.{hash}.{project}.os)
@@ -211,17 +219,72 @@ The central orchestrator is **user-roles.json** — equivalent to RUSE's `behavi
 ### Baseline: 3 role types
 `standard user`, `power user`, `admin user` — static in `~/uva-cs-workflow/user-roles/user-roles.json`.
 
-### With --feedback: 19 per-node roles
-`./deploy --rampart --feedback` generates per-node roles via `lib/phase_to_user_roles.py`:
-- Reads PHASE per-node feedback dirs (e.g., `winep1/winep1/activity_pattern.json`)
-- **Strips `e-{hash}-` prefix** from enterprise config node names before PHASE lookup (enterprise config uses `e-14a6d-linep3`, PHASE dirs use bare `linep3`)
-- Creates per-node roles (`e-14a6d-winep1_user`, `e-14a6d-linep9_user`, etc.) inheriting from baseline
-- Overrides: `day_start_hour`, `activity_daily_hours`, `logins_per_hour`, `login_length`, `clustersize`, `taskinterval`, `taskgroupinterval` from PHASE
-- Preserves: `workflows` (enterprise-only like browse_iis always retained), `fractions`, `terminals`, `recursive_logins` from baseline
-- Generates `user-roles-feedback.json` + `enterprise-config-feedback.json`
-- Skips dc1-3 (no user), linep1 (no user)
-- All values remain strings (matching user-roles.json convention)
-- Generated feedback config includes `behavior_source` and `behavior_configs` fields for audit trail
+### With --feedback: 19 per-node roles (post Stage 2, 2026-04-09)
+`./deploy --rampart --feedback` assembles per-node roles via
+`rampart.py::_generate_feedback_user_roles()`. **There is no longer a
+translation layer** — `deployments/lib/phase_to_user_roles.py` was
+deleted in Stage 2. PHASE's feedback engine now writes target-native
+`user-roles.json` files directly, one per fed endpoint.
+
+**PHASE output layout** (read as-is by the deploy):
+```
+~/PHASE/feedback_engine/configs/axes-rampart-controls_{dataset}_{preset}/
+  linep2/user-roles.json     linep3/user-roles.json   ...  linep10/user-roles.json
+  winep1/user-roles.json     winep2/user-roles.json   ...  winep10/user-roles.json
+  (19 files total — dc1/dc2/dc3/linep1 are absent; they have user: null in
+   enterprise-med.json and don't receive feedback architecturally.)
+```
+
+Each per-node file is a **self-contained pyhuman config**:
+```json
+{
+  "roles": [
+    {"name": "linep9_user", ...},   // ← tuned role (first entry)
+    {"name": "standard user", ...}, // ← baseline clones (for reference)
+    {"name": "power user", ...},
+    {"name": "admin user", ...}
+  ],
+  "_phase_metadata": { ... provenance ... }
+}
+```
+
+**Assembly flow** in `_generate_feedback_user_roles()`:
+1. Walks `behavior_source/*/user-roles.json` to discover processed nodes.
+2. For each file, extracts the first role (the tuned `{bare_node}_user` role).
+3. Clones the tuned role and renames it to `e-{hash}-{bare_node}_user`
+   (e.g. `e-14a6d-linep9_user`). This is where the `e-{hash}-` prefix
+   gets applied — PHASE writes bare names, deploy maps them to
+   hash-prefixed enterprise config node names so concurrent deployments
+   of different hashes don't collide.
+4. Walks `enterprise-config-prefixed.json` nodes, strips the
+   `e-{hash}-` prefix via regex, looks up the matching tuned role, and
+   rewrites the node's `"user"` field to the renamed role.
+5. Nodes with `user: null` (dc1-3, linep1) are left unchanged.
+6. Combines tuned roles with the 3 baseline roles (`standard user`,
+   `power user`, `admin user`) loaded from the workflow baseline — so
+   any unfed node still has valid role references.
+7. Writes `user-roles-feedback.json` (22 roles = 19 tuned + 3 baseline)
+   and `enterprise-config-feedback.json` into the run dir.
+
+**Role naming convention matters**: the tuned role for `linep9`
+appears in the output as `e-{hash}-linep9_user`, NOT `linep9_user`.
+This diverges from the PHASE file's name so the enterprise config can
+reference a unique role name per deployment.
+
+**Baseline role assignment** (determined on the PHASE side during
+generation, reflected in the `_phase_metadata.baseline_role` field of
+each file):
+- `winep1..winep10` and `linep2..linep8` → cloned from `standard user`
+- `linep9` → cloned from `admin user`
+- `linep10` → cloned from `power user`
+
+So e.g. `linep9`'s tuned role inherits the admin's
+`fraction_of_logins_to_personal_machine: "0.2"` while receiving
+PHASE-supplied `day_start_hour`, `activity_daily_hours`,
+`logins_per_hour`, `login_length`, `clustersize`, `taskinterval`,
+`taskgroupinterval`. Enterprise-only workflows (`browse_iis`,
+`browse_shibboleth`, `moodle`, `build_software`) are retained in the
+`workflows` list because PHASE preserves them during role cloning.
 
 ## SSH Authentication
 
@@ -273,7 +336,7 @@ Available workflows: `browse_iis`, `browse_shibboleth`, `browse_web`, `browse_yo
 | Auth fails with "Authentication failed" on DC | `deploy_users()` used bare domain (`administrator@castle`) but NetBIOS is now `CASTLE{hash}` | Fixed: use FQDN (`administrator@castle.{hash}.{project}.os`) in role_domains.py and rampart.py |
 | 0 endpoints found for emulation | `user_map` keyed by prefixed names (`e-hash-winep1`) but `node_map` keyed by bare names (`winep1`) | Fixed: strip `ent_prefix` from home_node names in `_generate_emulation_inventory()` and `_deploy_windows_emulation()` |
 | DNS zone collision between RAMPART deployments | All deploys shared one zone (`vxn3kr-bot-project.os`) | Fixed: per-deployment zone (`{hash}.vxn3kr-bot-project.os`), scoped teardown via `dns_zone.txt` marker |
-| PHASE feedback produces 0 per-node roles | `phase_to_user_roles.py` used prefixed names (`e-14a6d-linep3`) to look up PHASE dirs that use bare names (`linep3`) | Fixed: `_strip_enterprise_prefix()` strips `e-{hash}-` before PHASE dir lookup |
+| PHASE feedback produces 0 per-node roles | (historical, pre-Stage-2) `phase_to_user_roles.py` used prefixed names to look up PHASE dirs that used bare names | Resolved in Stage 2 (2026-04-09): `phase_to_user_roles.py` was deleted and replaced by `rampart.py::_generate_feedback_user_roles` which reads `{bare_node}/user-roles.json` directly and applies the `e-{hash}-` prefix only when renaming the tuned role in the combined output. No more translation-layer mismatch. |
 
 ## Important Constraints
 
