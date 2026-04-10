@@ -74,9 +74,13 @@ deployments/
     vm_naming.py            # VM naming: r-{dep_id}-{behavior}-{index}
     register_experiment.py  # PHASE experiments.json
     enterprise_ssh_config.py # Enterprise SSH config gen (see /deploy-rampart)
-    phase_to_timeline.py    # GHOSTS timeline gen (see /deploy-ghosts)
-    phase_to_user_roles.py  # RAMPART user roles gen (see /deploy-rampart)
 ```
+
+**Note:** `phase_to_timeline.py` and `phase_to_user_roles.py` were deleted in
+Stage 2 (2026-04-09). PHASE's feedback engine now writes target-native formats
+directly — RAMPART per-node `user-roles.json` and GHOSTS per-NPC `timeline.json`
+— so RUSE no longer needs a reverse-translation layer. See `/deploy-rampart`
+and `/deploy-ghosts` for the new read-direct flows.
 
 ## Three Deployment Types
 
@@ -181,5 +185,43 @@ DATASET_TARGETS = {
     "spring25": "spring25", "spr25": "spring25",
 }
 ```
+
+### PHASE feedback source layouts (post Stage 2, 2026-04-09)
+
+PHASE's feedback engine now writes target-native formats directly — no
+more reverse-translation at deploy time. Each experiment type has its
+own file layout, identified by glob patterns instead of the old
+`manifest.json` marker.
+
+```
+~/PHASE/feedback_engine/configs/
+  axes-ruse-controls_{dataset}_{preset}/
+    {behavior}/{sup}/*.json   # 7–8 RUSE behavioral configs per sup
+                              # e.g. B.gemma/B0.gemma/timing_profile.json
+                              # validator: */*/timing_profile.json
+
+  axes-rampart-controls_{dataset}_{preset}/
+    {bare_node}/user-roles.json  # self-contained pyhuman configs
+                                 # 19 per-node files (linep2-10, winep1-10)
+                                 # dc1-3 + linep1 absent (user: null)
+                                 # validator: */user-roles.json
+
+  axes-ghosts-controls_{dataset}_{preset}/
+    npc-{N}/timeline.json        # 5 per-NPC tuned timelines
+                                 # per-VM DelayAfter proportional to volume
+                                 # api-0 absent (server VM, not NPC)
+                                 # validator: npc-*/timeline.json
+```
+
+**Source directory naming**: `{experiment}_{dataset}_{preset}`, split on
+underscore. E.g. `axes-ruse-controls_axes-summer24_std-ctrls` parses to
+experiment=`axes-ruse-controls`, dataset=`axes-summer24`, preset=`std-ctrls`.
+Parsing via `_parse_source_name()` in `feedback.py` replaces the old
+manifest.json reads.
+
+**manifest.json is gone**: Stage 2 also removed it from
+`distribute-behavior-configs.yaml` excludes. A directory is a valid
+feedback source if it matches its type's glob pattern (see
+`_is_valid_feedback_source()` in `feedback.py`).
 
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.

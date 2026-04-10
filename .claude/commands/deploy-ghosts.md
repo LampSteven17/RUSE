@@ -15,9 +15,14 @@ Read the following files in order to understand the GHOSTS deployment system:
 4. `deployments/playbooks/install-ghosts-api.yaml` - API VM: Docker install, GHOSTS repo clone, docker compose up (postgres, api, frontend, n8n, grafana)
 5. `deployments/playbooks/install-ghosts-clients.yaml` - Client VMs: .NET 9 SDK, build GHOSTS universal client, configure application.json + timeline.json, systemd service
 
-### PHASE Feedback Integration
-6. `deployments/lib/phase_to_timeline.py` - Translates PHASE behavioral configs into GHOSTS timeline.json (timing windows, weighted URLs, delays, stickiness, DNS noise)
-7. `deployments/cli/commands/feedback.py` - Feedback source resolution, `--target` flag, `find_feedback_by_target()`, `DATASET_TARGETS` mapping
+### PHASE Feedback Integration (post Stage 2, 2026-04-09)
+6. `deployments/cli/commands/ghosts.py::_build_npc_timeline_mapping()` - Walks `behavior_source/npc-*/timeline.json`, matches each PHASE timeline to a client VM by parsing the trailing npc-N from the VM name, copies each to `run_dir/timelines/{vm_name}.json`, returns `{vm_name: Path}` mapping
+7. `deployments/cli/commands/feedback.py` - Feedback source resolution, `--target` flag, `find_feedback_by_target()`, `DATASET_TARGETS` mapping, `_is_valid_feedback_source()` glob validator (no more manifest.json)
+
+**phase_to_timeline.py was deleted in Stage 2.** PHASE now writes
+target-native per-NPC `timeline.json` files directly; RUSE reads them
+as-is and routes each to its target VM via per-host Ansible inventory
+variables. No translation layer.
 
 ### CLI Integration
 8. `deployments/cli/__main__.py` - CLI routing: `--ghosts` flag, `--target` flag, feedback flag passthrough to ghosts spinup
@@ -110,20 +115,53 @@ Each NPC client has two config files at `/opt/ghosts-client/config/`:
 4. Client polls for timeline updates, reports activity results
 5. Verify: `curl localhost:5000/api/machines` on API VM
 
-### PHASE Feedback → GHOSTS Timeline Translation
+### PHASE Feedback → Per-NPC Timeline Routing (Stage 2, 2026-04-09)
 
-`phase_to_timeline.py` reads PHASE behavioral configs and generates a GHOSTS timeline:
+PHASE's feedback engine writes one tuned `timeline.json` per NPC, at
+`~/PHASE/feedback_engine/configs/axes-ghosts-*/npc-{N}/timeline.json`.
+Each timeline is already in the native GHOSTS schema expected by
+`install-ghosts-clients.yaml` — `{"Status": "Run", "TimeLineHandlers":
+[...], "_phase_metadata": {...}}` — with per-VM tuning (different
+browser delays, handler mixes, lognormal sigmas). There is no
+translation layer; RUSE reads these files as-is and routes each to its
+target VM.
 
-| PHASE Config | GHOSTS Timeline Effect |
-|---|---|
-| `timing_profile.json` → `hourly_distribution.mean_fraction` | Split day into peak/normal BrowserFirefox handlers with different UtcTimeOn/Off and DelayAfter |
-| `site_config.json` → `domain_categories` + `site_categories` | Weighted URL list (lightweight 6x, medium 3x, heavy 2x repetition) |
-| `behavior_modifiers.json` → `page_dwell`, `navigation_clicks` | DelayAfter (ms), stickiness + stickiness-depth |
-| `workflow_weights.json` → workflow weights | Handler type mix (BrowserFirefox, Bash, Curl proportions) |
-| `activity_pattern.json` → `active_hour_range` | Constrains which hours have active handlers |
-| `diversity_injection.json` → `background_services` | DNS lookup bash events (nslookup every ~6min) |
+**Routing flow** in `ghosts.py::run_ghosts_spinup`:
 
-Each config is optional — missing configs fall back to sensible defaults. The translator is a pure function: `generate_timeline(feedback_dir: Path) -> dict`.
+1. After provisioning but **before** writing the inventory, call
+   `_build_npc_timeline_mapping(source, client_vms, run_dir)`. This
+   walks `source/npc-*/timeline.json`, matches each file to a client
+   VM by extracting the trailing `npc-N` from the VM name
+   (`g-{hash}-npc-0` → `npc-0`), copies each timeline to
+   `run_dir/timelines/{vm_name}.json` for a self-contained run dir,
+   and returns a `{vm_name: Path}` mapping.
+
+2. `_write_inventory()` accepts that mapping and appends a per-host
+   `ghosts_timeline_file=/abs/path/to/{vm_name}.json` variable to each
+   client VM's inventory line, alongside the existing `ghosts_api_ip=`
+   variable. Example inventory output:
+   ```
+   [ghosts_clients]
+   g-14a6d-npc-0 ansible_host=10.0.0.10 ghosts_api_ip=10.0.0.5 ghosts_timeline_file=/abs/path/timelines/g-14a6d-npc-0.json
+   g-14a6d-npc-1 ansible_host=10.0.0.11 ghosts_api_ip=10.0.0.5 ghosts_timeline_file=/abs/path/timelines/g-14a6d-npc-1.json
+   ...
+   ```
+
+3. `install-ghosts-clients.yaml` is unchanged — the existing
+   `{{ ghosts_timeline_file }}` reference in the "Deploy PHASE-generated
+   timeline" task is now resolved per-host via standard Ansible
+   inventory variable lookup. Baseline (no-feedback) deploys have no
+   `ghosts_timeline_file` variable in the inventory, so the playbook's
+   default-timeline fallback path runs instead.
+
+**Fail-loud semantics**: if `behavior_source` has no
+`npc-*/timeline.json` files, the deploy exits early with a clear error
+naming the expected layout. No silent fallback to a shared timeline.
+
+**API VM is never a target**: `install-ghosts-clients.yaml` has
+`hosts: ghosts_clients`, and the API VM lives in `[ghosts_api]` — it
+doesn't run the client playbook at all, so it's never routed a
+timeline.
 
 ### CLI Usage
 ```bash
@@ -180,23 +218,24 @@ deployments/ghosts-controls/runs/<run_id>/          # Baseline
 deployments/ghosts-feedback-stdctrls-sum24-all/runs/<run_id>/  # Feedback
 ├── config.yaml              # Snapshot of deployment config
 ├── inventory.ini            # Two groups: [ghosts_api] + [ghosts_clients]
+│                            #   client lines carry per-host ghosts_timeline_file=
 ├── ssh_config_snippet.txt   # SSH access for all VMs
 ├── deployment_type          # Marker file containing "ghosts"
-└── timeline.json            # PHASE-generated timeline (if feedback enabled)
+└── timelines/               # Per-NPC PHASE timelines (if feedback enabled)
+    ├── g-{hash}-npc-0.json  # Tuned timeline for npc-0 (distinct DelayAfter,
+    ├── g-{hash}-npc-1.json  # handler mix, lognormal sigmas)
+    ├── g-{hash}-npc-2.json
+    ├── g-{hash}-npc-3.json
+    └── g-{hash}-npc-4.json
 ```
 
 ### Feedback Config Generation
-When `./deploy --ghosts --all` (or any feedback flag) is used with `ghosts-controls`, the CLI auto-generates a `ghosts-feedback-*` deployment directory via `generate_ghosts_feedback_config()` in `feedback.py`. This mirrors `generate_feedback_config()` for RUSE SUPs. The generated config has `type: ghosts`, `behavior_source` (PHASE dir path), `behavior_configs` ("all" or list of filenames), and the same ghosts section as `ghosts-controls`. On teardown, `ghosts-feedback-*` directories are cleaned up entirely (like `ruse-feedback-*`).
+When `./deploy --ghosts --feedback` (or `--all`) is used with `ghosts-controls`, the CLI auto-generates a `ghosts-feedback-*` deployment directory via `generate_ghosts_feedback_config()` in `feedback.py`. Since Stage 2 (2026-04-09), validity is checked via `_is_valid_feedback_source(source_dir, "ghosts")` which globs for `npc-*/timeline.json`, and `preset`/`dataset` are parsed from the source dir name via `_parse_source_name()`. The generated config has `type: ghosts`, `behavior_source` (PHASE dir path), `behavior_configs` ("all" or list of filenames), and the same ghosts section as `ghosts-controls`. On teardown, `ghosts-feedback-*` directories are cleaned up entirely (like `ruse-feedback-*`).
 
 ### VM Provisioning Safety
 `_provision_vms()` in ghosts.py tracks which VMs reach ACTIVE state and only includes those in the inventory. VMs that reach ERROR state are excluded — preventing confusing downstream Ansible failures on broken VMs.
 
-### Feedback Subdir Resolution
-`_find_feedback_subdir()` in ghosts.py searches for PHASE config files in this priority order:
-1. GHOSTS-specific paths: `npc/npc`, `api/api` (double-nested PHASE structure)
-2. Fallback: first subdirectory containing `activity_pattern.json` or `timing_profile.json`
-
-### Timeline Generation Details
-`phase_to_timeline.py` clamps `active_hour_range` values to 0-23 to prevent IndexError on malformed activity patterns. The `_build_time_windows()` function safely handles edge cases in hourly distribution data.
+### Feedback Source Validation
+Since Stage 2, `_is_valid_feedback_source(source_dir, "ghosts")` in `feedback.py` checks that the source contains `npc-*/timeline.json` files (the PHASE GHOSTS generator output). There is no more `manifest.json` marker, and no more "find any JSON subdir" fallback — if the expected layout is missing, the deploy fails loud with a clear message. See `_build_npc_timeline_mapping()` in `ghosts.py` for the VM → timeline routing logic.
 
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.
