@@ -41,7 +41,7 @@
 
           [Service]
           Type=simple
-          ExecStart=/usr/bin/xvfb-run -a /opt/pyhuman/bin/python -u /opt/pyhuman/human.py --clustersize {{ rampart_clustersize | default(5) }} --taskinterval {{ rampart_taskinterval | default(10) }} --taskgroupinterval {{ rampart_taskgroupinterval | default(500) }} --seed {{ rampart_seed }} --workflows {{ rampart_workflows }} --extra passfile /tmp/shib_login.{{ rampart_username }}
+          ExecStart=/usr/bin/xvfb-run -a /opt/pyhuman/bin/python -u /opt/pyhuman/human.py --clustersize {{ rampart_clustersize | default(5) }} --clustersize-sigma {{ rampart_clustersize_sigma | default(0) }} --taskinterval {{ rampart_taskinterval | default(10) }} --taskinterval-sigma {{ rampart_taskinterval_sigma | default(0) }} --taskgroupinterval {{ rampart_taskgroupinterval | default(500) }} --seed {{ rampart_seed }} --workflows {{ rampart_workflows }} --extra passfile /tmp/shib_login.{{ rampart_username }}
           Restart=always
           RestartSec=30
           Environment=PYTHONUNBUFFERED=1

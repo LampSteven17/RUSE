@@ -137,3 +137,23 @@ class BrowserUseLoop(BaseEmulationLoop):
             if self.logger:
                 self.logger.info("[behavior] Applied behavior_modifiers",
                                  details=fc.behavior_modifiers)
+
+        # G1: Inject PHASE behavioral guidance into BrowserUse prompts
+        augmentation = (fc.prompt_augmentation or {}).get("prompt_content", "")
+        if augmentation:
+            from brains.browseruse.prompts import BUPrompts
+            applied = 0
+            for w in self.workflows:
+                if hasattr(w, 'prompts') and w.prompts:
+                    existing = w.prompts.content or ""
+                    w.prompts = BUPrompts(
+                        task=w.prompts.task,
+                        content=f"{existing}\n\n[PHASE Behavioral Guidance]\n{augmentation}" if existing else augmentation,
+                    )
+                    applied += 1
+                elif hasattr(w, 'prompts'):
+                    w.prompts = BUPrompts(task="Complete the browsing task.", content=augmentation)
+                    applied += 1
+            if self.logger:
+                self.logger.info("[behavior] Applied prompt_augmentation",
+                                 details={"length": len(augmentation), "workflows": applied})
