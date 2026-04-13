@@ -168,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     rest = argv[1:]
 
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    session_log = output.start_session_log(LOGS_DIR, command)
 
     try:
         if command == "deploy":
@@ -188,6 +189,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         output.info("\nInterrupted.")
         return 130
+
+    finally:
+        output.close_session_log()
 
 
     # Flag name → config filename
