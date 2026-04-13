@@ -1,27 +1,25 @@
 """Full health audit of all active RUSE deployments.
 
-Checks 14 things across every VM in every active deployment:
-  1. OpenStack state (ACTIVE)
-  2. SSH reachable
-  3. SUP service active
-  4. Brain process running (pgrep runners.run_*)
-  5. Ollama model loaded (and matches expected)
-  6. GPU model loaded into VRAM (V100 VMs)
-  7. Recent log activity (latest.jsonl mtime within threshold)
-  8. MCHP maintenance cron entries (M VMs only)
-  9. PHASE experiments.json registration
+Per-VM checks (via SSH probe):
+  1. SSH reachable
+  2. SUP service active
+  3. Brain process running (pgrep runners.run_*)
+  4. Ollama model loaded (and matches expected)
+  5. GPU model loaded into VRAM (V100 VMs)
+  6. Recent log activity (latest.jsonl mtime within threshold)
+  7. MCHP maintenance cron entries (M VMs only)
+  8. Behavioral config files present (V2+ feedback deploys)
+  9. Feature warnings from runtime (D1-G3 [WARNING] lines in systemd.log)
 
 Cross-deployment consistency:
-  10. Inventory ↔ OpenStack ↔ experiments.json count match (orphan detection)
-  11. Run config snapshot matches deployed VMs
-
-Aggregate:
+  10. Inventory ↔ OpenStack orphan/missing detection
+  11. PHASE experiments.json registration
   12. No duplicate run_ids per config
-  13. Expected feedback datasets present
-  14. GPU budget within capacity
+  13. Orphaned boot volumes (nameless 200GB available)
+  14. Session log warnings from most recent deploy
 
 Outputs:
-  - Terminal summary table
+  - Terminal summary table (9 check columns + 2 new: Fdbk, Warn)
   - Markdown report at deployments/logs/audit_<timestamp>.md
 """
 
@@ -121,6 +119,21 @@ else
 fi
 echo "CRON_COUNT=$(sudo crontab -l 2>/dev/null | grep -cE 'mchp-(daily|weekly)' || echo 0)"
 echo "NOW=$(date +%s)"
+# Feedback feature checks (D1-G3)
+BC_DIR=$(ls -d /opt/ruse/deployed_sups/*/behavioral_configurations 2>/dev/null | head -1)
+if [ -n "$BC_DIR" ]; then
+  echo "BC_FILES=$(ls "$BC_DIR"/*.json 2>/dev/null | wc -l)"
+else
+  echo "BC_FILES=0"
+fi
+SYSLOG=$(ls -t /opt/ruse/deployed_sups/*/logs/systemd.log 2>/dev/null | head -1)
+if [ -n "$SYSLOG" ]; then
+  echo "WARN_COUNT=$(grep -c '\\[WARNING\\]' "$SYSLOG" 2>/dev/null || echo 0)"
+  echo "WARN_LINES=$(grep '\\[WARNING\\]' "$SYSLOG" 2>/dev/null | tail -10 | tr '\\n' '|')"
+else
+  echo "WARN_COUNT=0"
+  echo "WARN_LINES="
+fi
 """
     result = subprocess.run(
         [
@@ -160,7 +173,7 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     checks["ssh"] = "OK" if probe.get("ssh_ok") else "FAIL"
     if not probe.get("ssh_ok"):
         # If SSH fails, all downstream checks unknown
-        for k in ("service", "process", "model", "gpu", "log", "cron"):
+        for k in ("service", "process", "model", "gpu", "log", "cron", "feedback", "warnings"):
             checks[k] = "?"
         return checks
 
@@ -232,6 +245,29 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
             checks["cron"] = "PARTIAL"
         else:
             checks["cron"] = "MISSING"
+
+    # 8. Behavioral config files present
+    if behavior in ("C0", "M0"):
+        checks["feedback"] = "n/a"
+    else:
+        bc_files = int(probe.get("BC_FILES", "0") or "0")
+        is_v2_plus = any(c.isdigit() and int(c) >= 2 for c in behavior if c.isdigit())
+        if bc_files > 0:
+            checks["feedback"] = f"OK ({bc_files} files)"
+        elif is_v2_plus:
+            checks["feedback"] = "FAIL (no configs)"
+        else:
+            checks["feedback"] = "n/a"  # V0/V1 baselines don't use feedback
+
+    # 9. Feature warnings from runtime (D1-G3)
+    if behavior in ("C0", "M0"):
+        checks["warnings"] = "n/a"
+    else:
+        warn_count = int(probe.get("WARN_COUNT", "0") or "0")
+        if warn_count == 0:
+            checks["warnings"] = "OK"
+        else:
+            checks["warnings"] = f"WARN ({warn_count})"
 
     # Post-pass: interpret IDLE correctly.
     # Ollama unloads idle models after OLLAMA_KEEP_ALIVE (default 5m).
@@ -393,11 +429,37 @@ def run_audit(deploy_dir: Path) -> int:
         if len(run_ids) > 1:
             issues.append(f"{name}: multiple active runs: {', '.join(run_ids)}")
 
+    # Check 15: orphaned volumes
+    orphan_vols = os_client.find_orphaned_volumes(size=200)
+    if orphan_vols:
+        issues.append(f"ORPHANED VOLUMES: {len(orphan_vols)} nameless 200GB volumes (run ./teardown --all or delete manually)")
+
+    # Check 16: session log warnings from most recent deploy
+    session_logs = sorted((deploy_dir / "logs").glob("session-deploy-*.log"), reverse=True)
+    if session_logs:
+        latest_session = session_logs[0]
+        try:
+            session_text = latest_session.read_text()
+            session_warnings = [l.strip() for l in session_text.splitlines() if "[WARNING]" in l]
+            if session_warnings:
+                issues.append(f"SESSION LOG WARNINGS ({latest_session.name}): {len(session_warnings)} warnings")
+                for w in session_warnings[:10]:
+                    issues.append(f"  {w}")
+        except OSError:
+            pass
+
     # Per-VM check failures → issues
     for dep, vm, probe, checks in all_results:
         for check_name, status in checks.items():
             if status not in ("OK", "n/a", "?") and not status.startswith("OK"):
                 issues.append(f"{dep['name']}-{dep['run_id']}/{vm['name']}: {check_name}={status}")
+        # Surface warning details from runtime logs
+        warn_lines = probe.get("WARN_LINES", "")
+        if warn_lines:
+            for w in warn_lines.split("|"):
+                w = w.strip()
+                if w:
+                    issues.append(f"{dep['name']}-{dep['run_id']}/{vm['name']}: {w}")
 
     # Per-deployment summary
     output.info("")
@@ -408,7 +470,7 @@ def run_audit(deploy_dir: Path) -> int:
     for dep, vm, probe, checks in all_results:
         by_dep[(dep["name"], dep["run_id"])].append((vm, probe, checks))
 
-    headers = ["Deployment", "VMs", "SSH", "Svc", "Proc", "Model", "GPU", "Logs", "Cron"]
+    headers = ["Deployment", "VMs", "SSH", "Svc", "Proc", "Model", "GPU", "Logs", "Cron", "Fdbk", "Warn"]
     rows = []
 
     def _ok(v: str) -> bool:
@@ -424,10 +486,13 @@ def run_audit(deploy_dir: Path) -> int:
         gpu_ok = sum(1 for _, _, c in entries if _ok(c.get("gpu", "")))
         log_ok = sum(1 for _, _, c in entries if _ok(c.get("log", "")))
         cron_ok = sum(1 for _, _, c in entries if _ok(c.get("cron", "")))
+        fdbk_ok = sum(1 for _, _, c in entries if _ok(c.get("feedback", "")))
+        warn_ok = sum(1 for _, _, c in entries if _ok(c.get("warnings", "")))
         rows.append([
             f"{name}-{rid}", str(n),
             f"{ssh_ok}/{n}", f"{svc_ok}/{n}", f"{proc_ok}/{n}",
             f"{model_ok}/{n}", f"{gpu_ok}/{n}", f"{log_ok}/{n}", f"{cron_ok}/{n}",
+            f"{fdbk_ok}/{n}", f"{warn_ok}/{n}",
         ])
     output.table(headers, rows)
     output.info("")
@@ -454,12 +519,14 @@ def run_audit(deploy_dir: Path) -> int:
 def _row_status(checks: dict) -> str:
     """Compact one-char-per-check status string for terminal."""
     parts = []
-    for k in ("ssh", "service", "process", "model", "gpu", "log", "cron"):
+    for k in ("ssh", "service", "process", "model", "gpu", "log", "cron", "feedback", "warnings"):
         v = checks.get(k, "?")
         if v == "OK" or v.startswith("OK") or v == "n/a":
             parts.append(".")
         elif v == "?":
             parts.append("?")
+        elif v.startswith("WARN"):
+            parts.append("W")
         else:
             parts.append("X")
     return "".join(parts)
@@ -494,8 +561,8 @@ def _write_markdown(
 
     lines.append("## Summary")
     lines.append("")
-    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     def _ok(v: str) -> bool:
         return v == "n/a" or v.startswith("OK")
@@ -509,9 +576,12 @@ def _write_markdown(
         gpu_ok = sum(1 for _, _, c in entries if _ok(c.get("gpu", "")))
         log_ok = sum(1 for _, _, c in entries if _ok(c.get("log", "")))
         cron_ok = sum(1 for _, _, c in entries if _ok(c.get("cron", "")))
+        fdbk_ok = sum(1 for _, _, c in entries if _ok(c.get("feedback", "")))
+        warn_ok = sum(1 for _, _, c in entries if _ok(c.get("warnings", "")))
         lines.append(
             f"| `{name}-{rid}` | {n} | {ssh_ok}/{n} | {svc_ok}/{n} | {proc_ok}/{n} | "
-            f"{model_ok}/{n} | {gpu_ok}/{n} | {log_ok}/{n} | {cron_ok}/{n} |"
+            f"{model_ok}/{n} | {gpu_ok}/{n} | {log_ok}/{n} | {cron_ok}/{n} | "
+            f"{fdbk_ok}/{n} | {warn_ok}/{n} |"
         )
     lines.append("")
 
@@ -532,15 +602,16 @@ def _write_markdown(
     for (name, rid), entries in sorted(by_dep.items()):
         lines.append(f"### `{name}-{rid}`")
         lines.append("")
-        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for vm, probe, checks in sorted(entries, key=lambda e: e[0]["name"]):
             lines.append(
                 f"| `{vm['name']}` | {vm['behavior']} | {vm['ip']} | "
                 f"{checks.get('ssh', '?')} | {checks.get('service', '?')} | "
                 f"{checks.get('process', '?')} | {checks.get('model', '?')} | "
                 f"{checks.get('gpu', '?')} | {checks.get('log', '?')} | "
-                f"{checks.get('cron', '?')} |"
+                f"{checks.get('cron', '?')} | {checks.get('feedback', '?')} | "
+                f"{checks.get('warnings', '?')} |"
             )
         lines.append("")
 
@@ -551,7 +622,7 @@ def _write_markdown(
     lines.append("- **FAIL / WRONG / STALE / MISSING** — investigate")
     lines.append("- **?** — could not determine (usually SSH failed)")
     lines.append("")
-    lines.append("Compact terminal status: each VM gets 7 chars (ssh/service/process/model/gpu/log/cron). "
-                 "`.` = pass, `X` = fail, `?` = unknown.")
+    lines.append("Compact terminal status: each VM gets 9 chars (ssh/service/process/model/gpu/log/cron/feedback/warnings). "
+                 "`.` = pass, `X` = fail, `W` = warnings present, `?` = unknown.")
 
     path.write_text("\n".join(lines))
