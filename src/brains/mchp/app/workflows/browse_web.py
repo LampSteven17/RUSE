@@ -33,6 +33,7 @@ class WebBrowse(BaseWorkflow):
         self.default_timeout = default_timeout
         self.website_list = self._load_website_list()
         self.site_weights = None
+        self.keep_alive_probability = 0.5  # G2: probability of reusing current tab
 
     def action(self, extra=None, logger=None):
         if self.driver is None:
@@ -43,6 +44,15 @@ class WebBrowse(BaseWorkflow):
 
     def _web_browse(self, logger=None):
         self.driver.driver.set_page_load_timeout(self.default_timeout)
+
+        # G2: Reuse current tab if keep_alive_probability is met and page is loaded
+        current_url = self.driver.driver.current_url or "about:blank"
+        if current_url != "about:blank" and random.random() < self.keep_alive_probability:
+            # Continue navigating from current page instead of loading a new site
+            sleep(random.randint(self.min_sleep_time, self.max_sleep_time))
+            self._navigate_website(logger=logger)
+            return
+
         website = self._get_random_website()
 
         self._browse(website, logger=logger)

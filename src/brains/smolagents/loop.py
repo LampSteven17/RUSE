@@ -132,3 +132,25 @@ class SmolAgentLoop(BaseEmulationLoop):
             if self.logger:
                 self.logger.info("[behavior] Applied behavior_modifiers",
                                  details=fc.behavior_modifiers)
+
+        # G1: Inject PHASE behavioral guidance into SmolAgents prompts
+        augmentation = (fc.prompt_augmentation or {}).get("prompt_content", "")
+        if augmentation:
+            from brains.smolagents.prompts import SMOLPrompts
+            applied = 0
+            for w in self.workflows:
+                if hasattr(w, 'prompts') and w.prompts:
+                    existing = w.prompts.content or ""
+                    w.prompts = SMOLPrompts(
+                        task=w.prompts.task,
+                        content=f"{existing}\n\n[PHASE Behavioral Guidance]\n{augmentation}" if existing else augmentation,
+                    )
+                    w._agent = None  # Force re-creation with new prompts
+                    applied += 1
+                elif hasattr(w, 'prompts'):
+                    w.prompts = SMOLPrompts(task="Research and answer the question.", content=augmentation)
+                    w._agent = None
+                    applied += 1
+            if self.logger:
+                self.logger.info("[behavior] Applied prompt_augmentation",
+                                 details={"length": len(augmentation), "workflows": applied})

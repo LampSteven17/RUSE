@@ -48,6 +48,8 @@ class BaseEmulationLoop(ABC):
         self._diversity_config = None
         self._background_svc = None
         self._recent_workflows = []
+        self._cluster_distinct = set()
+        self._cluster_remaining = 0
 
         self.workflows = []
         self._running = False
@@ -188,9 +190,30 @@ class BaseEmulationLoop(ABC):
                 self._background_svc = BackgroundServiceGenerator(bg_config, self.logger)
             else:
                 self._background_svc.update_config(bg_config)
+            rotation = fc.diversity_injection.get("workflow_rotation", {})
             if self.logger:
                 self.logger.info("[behavior] Applied diversity_injection",
-                                 details={"rotation": fc.diversity_injection.get("workflow_rotation", {})})
+                                 details={"rotation": rotation})
+
+        # Feature status report — always print so you know what's active
+        rotation = (self._diversity_config or {}).get("workflow_rotation", {})
+        min_distinct = rotation.get("min_distinct_per_cluster", 0)
+        max_consec = rotation.get("max_consecutive_same", 0)
+        has_bg_svc = self._background_svc is not None
+        has_prompt_aug = bool(fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"))
+
+        if min_distinct == 0:
+            print("[WARNING] D2 min_distinct_per_cluster DISABLED — "
+                  "no diversity_injection.workflow_rotation.min_distinct_per_cluster")
+        if max_consec == 0:
+            print("[WARNING] D2 max_consecutive_same DISABLED — "
+                  "no diversity_injection.workflow_rotation.max_consecutive_same")
+        if not has_bg_svc:
+            print("[WARNING] D4 background services DISABLED — "
+                  "no diversity_injection.background_services")
+        if not has_prompt_aug:
+            print("[WARNING] G1 prompt_augmentation DISABLED — "
+                  "no prompt_augmentation.prompt_content")
 
     # ── Workflow selection ────────────────────────────────────────────
 
@@ -204,12 +227,20 @@ class BaseEmulationLoop(ABC):
             return self.workflows[random.randrange(len(self.workflows))]
 
     def _select_workflow_with_rotation(self):
-        """Select workflow with diversity-aware rotation."""
+        """Select workflow with diversity-aware rotation.
+
+        Enforces two constraints from diversity_injection.workflow_rotation:
+        - max_consecutive_same: penalizes N identical picks in a row
+        - min_distinct_per_cluster (D2): near cluster end, penalizes already-seen
+          workflows to force diversity within the cluster
+        """
         rotation = (self._diversity_config or {}).get("workflow_rotation", {})
         max_consec = rotation.get("max_consecutive_same", 99)
+        min_distinct = rotation.get("min_distinct_per_cluster", 0)
 
         weights = list(self._workflow_weights) if self._workflow_weights else [1.0] * len(self.workflows)
 
+        # Penalize consecutive same workflow
         if len(self._recent_workflows) >= max_consec:
             last_name = self._recent_workflows[-1]
             if all(w == last_name for w in self._recent_workflows[-max_consec:]):
@@ -217,10 +248,21 @@ class BaseEmulationLoop(ABC):
                     if getattr(w, 'name', '') == last_name:
                         weights[i] *= 0.1
 
+        # D2: Near cluster end, force diversity if below minimum distinct count
+        if min_distinct > 0 and self._cluster_remaining > 0:
+            needed = min_distinct - len(self._cluster_distinct)
+            if needed > 0 and self._cluster_remaining <= needed:
+                for i, w in enumerate(self.workflows):
+                    if getattr(w, 'name', '') in self._cluster_distinct:
+                        weights[i] *= 0.01  # strong penalty, not zero (graceful)
+
         workflow = random.choices(self.workflows, weights=weights, k=1)[0]
-        self._recent_workflows.append(getattr(workflow, 'name', ''))
+        name = getattr(workflow, 'name', '')
+        self._recent_workflows.append(name)
         if len(self._recent_workflows) > 10:
             self._recent_workflows.pop(0)
+        self._cluster_distinct.add(name)
+        self._cluster_remaining -= 1
         return workflow
 
     # ── Main emulation loop ──────────────────────────────────────────
@@ -259,6 +301,10 @@ class BaseEmulationLoop(ABC):
                     })
 
             cluster_size = self._get_cluster_size()
+
+            # D2: Reset per-cluster diversity tracking
+            self._cluster_distinct = set()
+            self._cluster_remaining = cluster_size
 
             if self.logger:
                 self.logger.decision(

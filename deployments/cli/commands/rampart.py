@@ -478,7 +478,9 @@ def _generate_emulation_inventory(
             "domain": user["domain"],
             "workflows": " ".join(user["login_profile"]["workflows"]),
             "clustersize": user["login_profile"].get("clustersize", "5"),
+            "clustersize_sigma": user["login_profile"].get("clustersize_sigma", "0"),
             "taskinterval": user["login_profile"].get("taskinterval", "10"),
+            "taskinterval_sigma": user["login_profile"].get("taskinterval_sigma", "0"),
             "taskgroupinterval": user["login_profile"].get("taskgroupinterval", "500"),
         }
 
@@ -544,7 +546,9 @@ def _generate_emulation_inventory(
             f"rampart_workflows=\"{user['workflows']}\" "
             f"rampart_seed={vm_seed} "
             f"rampart_clustersize={user['clustersize']} "
+            f"rampart_clustersize_sigma={user['clustersize_sigma']} "
             f"rampart_taskinterval={user['taskinterval']} "
+            f"rampart_taskinterval_sigma={user['taskinterval_sigma']} "
             f"rampart_taskgroupinterval={user['taskgroupinterval']}"
         )
 
@@ -648,7 +652,9 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
             "workflows": " ".join(u["login_profile"]["workflows"]),
             "seed": seed + idx,
             "clustersize": u["login_profile"].get("clustersize", "5"),
+            "clustersize_sigma": u["login_profile"].get("clustersize_sigma", "0"),
             "taskinterval": u["login_profile"].get("taskinterval", "10"),
+            "taskinterval_sigma": u["login_profile"].get("taskinterval_sigma", "0"),
             "taskgroupinterval": u["login_profile"].get("taskgroupinterval", "500"),
         })
         idx += 1
@@ -687,7 +693,9 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
                 f"$l += 'while ($true) {{'; "
                 f"$l += '    try {{'; "
                 f"$l += '        & C:\\Python\\python.exe -u C:\\human\\human.py "
-                f"--clustersize {vm['clustersize']} --taskinterval {vm['taskinterval']} --taskgroupinterval {vm['taskgroupinterval']} "
+                f"--clustersize {vm['clustersize']} --clustersize-sigma {vm['clustersize_sigma']} "
+                f"--taskinterval {vm['taskinterval']} --taskinterval-sigma {vm['taskinterval_sigma']} "
+                f"--taskgroupinterval {vm['taskgroupinterval']} "
                 f"--seed {vm['seed']} --workflows {vm['workflows']} "
                 f"--extra passfile C:\\tmp\\shib_login.{vm['username']}'; "
                 f"$l += '    }} catch {{'; "

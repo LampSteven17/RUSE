@@ -135,6 +135,14 @@ class MCHPAgent(BaseEmulationLoop):
                     nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
                     if "max" in nav_clicks:
                         w.max_navigation_clicks = int(nav_clicks["max"])
+                    # G2: Connection reuse probability for tab management
+                    conn_reuse = fc.behavior_modifiers.get("connection_reuse", {})
+                    if "keep_alive_probability" in conn_reuse:
+                        w.keep_alive_probability = float(conn_reuse["keep_alive_probability"])
+                    else:
+                        print("[WARNING] G2 keep_alive_probability DISABLED — "
+                              "no behavior_modifiers.connection_reuse.keep_alive_probability, "
+                              f"using default {w.keep_alive_probability}")
                     if self.logger:
                         self.logger.info("[behavior] Applied behavior_modifiers to BrowseWeb",
                                          details=fc.behavior_modifiers)
