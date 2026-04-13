@@ -206,6 +206,7 @@ def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: P
         return 1
 
     output.info("Verified: 0 VMs remaining on OpenStack")
+    _cleanup_orphaned_volumes(os_client)
 
     # Cleanup local state — remove this run, then remove feedback config dir if empty
     if run_dir.is_dir():
@@ -301,6 +302,9 @@ def _rampart_teardown(
         output.info(f"WARNING: {remaining} enterprise VMs still exist on OpenStack")
         return 1
 
+    output.info("  Verified: 0 VMs remaining")
+    _cleanup_orphaned_volumes(os_client)
+
     if run_dir.is_dir():
         _safe_rmtree(run_dir)
         output.info("  Removed local run directory")
@@ -362,6 +366,9 @@ def _ghosts_teardown(
         output.info("")
         output.info(f"WARNING: {remaining} GHOSTS VMs still exist on OpenStack")
         return 1
+
+    output.info("  Verified: 0 VMs remaining")
+    _cleanup_orphaned_volumes(os_client)
 
     # Cleanup local state — remove this run, then remove feedback config dir if empty
     if run_dir.is_dir():
@@ -466,6 +473,21 @@ def _kill_pid_file(pid_file: Path) -> None:
     except (ValueError, FileNotFoundError):
         output.dim("  Could not read emulate.pid")
 
+
+
+def _cleanup_orphaned_volumes(os_client: OpenStack) -> int:
+    """Delete orphaned boot volumes (nameless, 200GB, available). Returns count deleted."""
+    orphans = os_client.find_orphaned_volumes(size=200)
+    if not orphans:
+        return 0
+    deleted = 0
+    for v in orphans:
+        vid = v.get("ID", v.get("id", ""))
+        if vid and os_client.volume_delete(vid):
+            deleted += 1
+    if deleted:
+        output.info(f"  Cleaned up {deleted} orphaned boot volumes")
+    return deleted
 
 
 def _safe_rmtree(path: Path) -> None:
