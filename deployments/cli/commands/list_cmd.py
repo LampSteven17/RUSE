@@ -40,7 +40,9 @@ def run_list(deploy_dir: Path) -> int:
 
         try:
             config = DeploymentConfig.load(config_file)
-        except Exception:
+        except Exception as e:
+            output.error(f"  WARNING: skipping {config_file.parent.name}/config.yaml: "
+                         f"{type(e).__name__}: {e}")
             continue
 
         if config.is_rampart():

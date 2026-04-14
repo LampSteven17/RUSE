@@ -75,31 +75,49 @@
           delegate_to: localhost
           register: source_dir
 
-        - name: Deploy configs
-          when: source_dir.stat.exists
-          block:
-            - name: Ensure behavioral_configurations directory
-              file:
-                path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/"
-                state: directory
-                mode: '0755'
+        - name: Assert behavior config source exists
+          # Previously the deploy block was gated on `when: source_dir.stat.exists`
+          # which meant if the source dir was missing (typo, regen failed, wrong
+          # path), the playbook silently skipped config distribution and the
+          # feedback deploy degraded to baseline with no warning.
+          fail:
+            msg: >-
+              Behavior config source not found: {{ config_source_dir }}
+              (resolved from config_source={{ config_source }}, behavior_dir={{ behavior_dir }},
+              baseline_config={{ baseline_config }}). Either the PHASE feedback engine
+              didn't generate this config, or the source path is wrong.
+          when: not source_dir.stat.exists
 
-            - name: Resolve behavior_configs patterns
-              set_fact:
-                resolved_behavior_configs: "{{ ['*.json'] if (behavior_configs is not defined or behavior_configs == 'all') else behavior_configs }}"
+        - name: Ensure behavioral_configurations directory
+          file:
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/"
+            state: directory
+            mode: '0755'
 
-            - name: Find config files
-              find:
-                paths: "{{ config_source_dir }}"
-                patterns: "{{ resolved_behavior_configs }}"
-              delegate_to: localhost
-              register: behavior_config_files
+        - name: Resolve behavior_configs patterns
+          set_fact:
+            resolved_behavior_configs: "{{ ['*.json'] if (behavior_configs is not defined or behavior_configs == 'all') else behavior_configs }}"
 
-            - name: Copy configs to SUP
-              copy:
-                src: "{{ item.path }}"
-                dest: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/{{ item.path | basename }}"
-                mode: '0644'
-              loop: "{{ behavior_config_files.files }}"
-              loop_control:
-                label: "{{ item.path | basename }}"
+        - name: Find config files
+          find:
+            paths: "{{ config_source_dir }}"
+            patterns: "{{ resolved_behavior_configs }}"
+          delegate_to: localhost
+          register: behavior_config_files
+
+        - name: Assert config files were found
+          fail:
+            msg: >-
+              No config files matched patterns {{ resolved_behavior_configs }}
+              in {{ config_source_dir }}. PHASE generated an empty or malformed
+              feedback source.
+          when: behavior_config_files.files | length == 0
+
+        - name: Copy configs to SUP
+          copy:
+            src: "{{ item.path }}"
+            dest: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/{{ item.path | basename }}"
+            mode: '0644'
+          loop: "{{ behavior_config_files.files }}"
+          loop_control:
+            label: "{{ item.path | basename }}"

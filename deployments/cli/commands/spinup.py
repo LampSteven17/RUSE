@@ -291,7 +291,10 @@ def _register_phase(snippet_path: Path, config_name: str, run_id: str, deploy_di
                 _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
             else:
                 _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
-    except Exception:
+    except Exception as e:
+        # In-process import failed — fall back to subprocess (which will surface
+        # its own errors loudly via _register_phase_subprocess).
+        output.dim(f"  PHASE register import failed ({type(e).__name__}), trying subprocess...")
         _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
 
 
@@ -306,7 +309,7 @@ def _register_phase_subprocess(
     inventory_path = run_dir / "inventory.ini"
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             [
                 "python3", str(lib_dir / "register_experiment.py"),
                 "--name", config_name,
@@ -314,9 +317,14 @@ def _register_phase_subprocess(
                 "--inventory", str(inventory_path),
                 "--run-id", run_id,
             ],
-            capture_output=True,
+            capture_output=True, text=True,
             timeout=30,
         )
-        output.dim("  Registered in PHASE experiments.json")
-    except Exception:
-        pass  # Non-critical
+        if result.returncode == 0:
+            output.dim("  Registered in PHASE experiments.json")
+        else:
+            err = (result.stderr or result.stdout or "").strip()[:200]
+            output.error(f"  WARNING: PHASE registration FAILED (rc={result.returncode}): {err}")
+            output.error(f"  Logs from this deploy will not be analyzed by PHASE inference.")
+    except Exception as e:
+        output.error(f"  WARNING: PHASE registration crashed ({type(e).__name__}): {e}")

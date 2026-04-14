@@ -455,9 +455,11 @@ def _register_phase(
         if result.returncode == 0:
             output.info("  Registered in PHASE experiments.json")
         else:
-            output.info(f"  PHASE registration skipped: {result.stderr[:80]}")
-    except Exception:
-        pass  # Non-critical
+            err = (result.stderr or result.stdout or "").strip()[:200]
+            output.error(f"  WARNING: PHASE registration FAILED (rc={result.returncode}): {err}")
+            output.error(f"  Logs from this deploy will not be analyzed by PHASE inference.")
+    except Exception as e:
+        output.error(f"  WARNING: PHASE registration crashed ({type(e).__name__}): {e}")
 
 
 def _find_ghosts_config(config_name: str | None, deploy_dir: Path) -> Path | None:

@@ -64,7 +64,24 @@
       shell: systemctl is-active rampart-human
       register: emulation_status
       changed_when: false
-      ignore_errors: yes
+      failed_when: false  # we assert explicitly below
+
+    - name: Check emulation restart counter (catches crash loops)
+      shell: systemctl show rampart-human -p NRestarts --value
+      register: emulation_restarts
+      changed_when: false
+      failed_when: false
+
+    - name: Assert rampart-human is active and not crash-looping
+      fail:
+        msg: >-
+          rampart-human is '{{ emulation_status.stdout }}' with
+          {{ emulation_restarts.stdout }} restarts on {{ inventory_hostname }}.
+          Check: journalctl -u rampart-human, /opt/pyhuman/human.py args,
+          /tmp/shib_login.{{ rampart_username }} exists.
+      when: >-
+        emulation_status.stdout != "active"
+        or (emulation_restarts.stdout | default("0") | int) > 10
 
 
   # Windows emulation is deployed from Python (rampart.py) using sshpass

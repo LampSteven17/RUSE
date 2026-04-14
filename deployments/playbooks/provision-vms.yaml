@@ -128,10 +128,17 @@
           {%- endfor -%}
           {{ ok }}
 
-    - name: Fail if ALL VMs failed
+    - name: Fail if too many VMs failed to reach ACTIVE
+      # Threshold 90% — below that the deploy isn't usable. Previously this
+      # only failed when 0/N succeeded, so e.g. 18/23 = 78% would silently
+      # continue and downstream Ansible steps would error obscurely on
+      # missing hosts. Better to abort here with a clear count.
       fail:
-        msg: "All {{ vm_list | length }} VMs failed to provision."
-      when: successful_vms | length == 0
+        msg: >-
+          {{ vm_list | length - successful_vms | length }}/{{ vm_list | length }}
+          VMs failed to reach ACTIVE state ({{ ((successful_vms | length / vm_list | length) * 100) | round(0) }}%
+          succeeded; threshold 90%). Failed: {{ failed_vms | map(attribute='behavior') | join(', ') }}
+      when: (successful_vms | length / vm_list | length) < 0.9
 
     # ── Get IPs ──────────────────────────────────────────────────────
     - name: Get VM IPs
