@@ -10,26 +10,33 @@ from pathlib import Path
 
 _BANNER_WIDTH = 64
 _session_log = None  # file handle, opened by start_session_log()
+_session_log_path = None  # Path, set by start_session_log()
 
 
 def start_session_log(logs_dir: Path, command: str) -> Path:
     """Open a session log file. All subsequent _write() calls are teed to it."""
-    global _session_log
+    global _session_log, _session_log_path
     logs_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
     log_path = logs_dir / f"session-{command}-{ts}.log"
     _session_log = open(log_path, "w")
+    _session_log_path = log_path
     _session_log.write(f"# RUSE CLI session: {command} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     _session_log.flush()
     return log_path
 
 
 def close_session_log() -> None:
-    """Close the session log file."""
-    global _session_log
+    """Close the session log file and print its path so operator can find it."""
+    global _session_log, _session_log_path
     if _session_log:
+        path = getattr(_session_log, "name", None) or _session_log_path
         _session_log.close()
         _session_log = None
+        if path:
+            # Print directly to stderr — the log file is now closed so we can't tee
+            print("", file=sys.stderr)
+            print(f"Session log: {path}", file=sys.stderr)
 
 
 def _write(text: str) -> None:
