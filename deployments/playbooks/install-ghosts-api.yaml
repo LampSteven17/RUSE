@@ -42,6 +42,7 @@
 
     - name: Install Docker and Docker Compose
       shell: |
+        set -euo pipefail
         # Skip if already installed
         if command -v docker &>/dev/null; then
           echo "Docker already installed"
@@ -70,8 +71,19 @@
         version: "{{ ghosts_branch }}"
         force: yes
 
+    - name: Verify frontend Dockerfile exists (detects bad clone)
+      stat:
+        path: "{{ ghosts_path }}/src/Ghosts.Frontend/Dockerfile"
+      register: frontend_dockerfile
+
+    - name: Assert frontend Dockerfile is present
+      fail:
+        msg: "{{ ghosts_path }}/src/Ghosts.Frontend/Dockerfile is missing. git clone of {{ ghosts_repo }}@{{ ghosts_branch }} produced an incomplete tree."
+      when: not frontend_dockerfile.stat.exists
+
     - name: Patch frontend Dockerfile (fix Angular peer dep conflict)
       shell: |
+        set -euo pipefail
         sed -i 's/RUN npm ci\r\?$/RUN npm ci --legacy-peer-deps/' {{ ghosts_path }}/src/Ghosts.Frontend/Dockerfile
       args:
         executable: /bin/bash
@@ -79,6 +91,7 @@
 
     - name: Start GHOSTS API stack
       shell: |
+        set -euo pipefail
         cd {{ ghosts_path }}/src/Ghosts.Api
         docker compose up -d --build
       args:
@@ -86,6 +99,14 @@
       async: 900
       poll: 15
       register: compose_result
+
+    - name: Assert docker compose build + up succeeded
+      # With set -euo pipefail in the shell the task would already fail on
+      # non-zero rc, but docker compose sometimes returns rc=0 while emitting
+      # "ERROR" during the build phase. Catch that too.
+      fail:
+        msg: "docker compose up reported errors (rc={{ compose_result.rc }}): {{ compose_result.stdout | default('') | regex_search('ERROR.*', multiline=True) }}"
+      when: compose_result.rc != 0 or 'ERROR' in (compose_result.stdout | default(''))
 
     - name: Wait for GHOSTS API health
       uri:

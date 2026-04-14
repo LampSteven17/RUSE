@@ -48,6 +48,7 @@
 
     - name: Install .NET 9 SDK
       shell: |
+        set -euo pipefail
         if command -v dotnet &>/dev/null && dotnet --list-sdks | grep -q "^9\."; then
           echo ".NET 9 SDK already installed"
           exit 0
@@ -70,8 +71,19 @@
         version: "{{ ghosts_branch }}"
         force: yes
 
+    - name: Verify client source tree exists
+      stat:
+        path: "{{ ghosts_client_src }}"
+      register: client_src
+
+    - name: Assert client source tree is present
+      fail:
+        msg: "{{ ghosts_client_src }} missing after git clone. Repo/branch produced an incomplete tree."
+      when: not client_src.stat.exists
+
     - name: Build GHOSTS universal client
       shell: |
+        set -euo pipefail
         cd {{ ghosts_client_src }}
         /usr/share/dotnet/dotnet publish \
           -c Release \
@@ -85,6 +97,20 @@
         DOTNET_CLI_TELEMETRY_OPTOUT: "1"
       async: 600
       poll: 15
+      register: publish_result
+
+    - name: Verify published DLL exists
+      stat:
+        path: "{{ ghosts_client_publish }}/Ghosts.Client.Universal.dll"
+      register: published_dll
+
+    - name: Assert dotnet publish produced the client binary
+      fail:
+        msg: >-
+          Ghosts.Client.Universal.dll not found at {{ ghosts_client_publish }}.
+          dotnet publish rc={{ publish_result.rc | default('?') }}. Without this
+          binary the systemd service would start and crash-loop silently.
+      when: not published_dll.stat.exists
 
     - name: Create client config directory
       file:

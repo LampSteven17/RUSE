@@ -98,10 +98,35 @@
       poll: 30
       register: stage2_result
 
-    - name: Check SUP service status
-      shell: systemctl is-active $(systemctl list-units --type=service | grep -E '(mchp|smol|bu)' | awk '{print $1}' | head -1) || true
+    - name: Assert Stage 2 succeeded
+      # S3: Previously stage2_result.rc was registered but never explicitly
+      # checked. Ansible defaults to failing the task on rc != 0 so the play
+      # would abort, but with no clear message. Add explicit assertion so the
+      # failure reason reaches the operator.
+      fail:
+        msg: >-
+          Stage 2 install failed on {{ inventory_hostname }} (rc={{ stage2_result.rc }}).
+          stderr: {{ stage2_result.stderr | default('') | truncate(400) }}
+      when: stage2_result.rc != 0
+
+    - name: Check SUP service is running
+      # S4: Previously this shell ran `systemctl is-active $(... | head -1) || true`
+      # which always returned rc=0 and the result was never asserted. If the
+      # install left no matching service unit, the deploy silently continued.
+      # Now we derive the expected unit name from sup_behavior and fail if it
+      # isn't active.
+      shell: systemctl is-active "{{ sup_behavior | lower | replace('.', '_') }}.service"
       register: service_status
       changed_when: false
+      failed_when: false
+
+    - name: Assert SUP service is active
+      fail:
+        msg: >-
+          SUP service {{ sup_behavior | lower | replace('.', '_') }}.service is
+          '{{ service_status.stdout }}' on {{ inventory_hostname }} (expected: active).
+          Check: journalctl, /opt/ruse/deployed_sups/{{ sup_behavior }}/logs/systemd.log
+      when: service_status.stdout != "active"
 
     # MCHP brains have a slow Selenium/pyautogui memory leak. Schedule a daily
     # service restart at 03:00 UTC + a weekly full VM reboot Sundays at 04:00 UTC
@@ -125,3 +150,24 @@
           hour: "4"
           weekday: "0"
           job: "/sbin/reboot"
+
+    - name: Verify MCHP cron entries were installed (M-series only)
+      # S5: Previously the cron module's success wasn't audited. If the module
+      # silently no-op'd (missing crontab, permission issue), the VM would hit
+      # the Selenium memory leak after ~4 days with no warning. This check
+      # confirms both cron entries actually reached the crontab.
+      when: sup_behavior is match('^M[0-9]')
+      shell: crontab -l | grep -cE 'mchp-(daily-restart|weekly-reboot)' || echo 0
+      register: cron_count
+      changed_when: false
+      failed_when: false
+
+    - name: Assert both MCHP crons are installed
+      fail:
+        msg: >-
+          Only {{ cron_count.stdout | trim }}/2 MCHP maintenance crons found on
+          {{ inventory_hostname }}. Without these the M-brain will exhaust memory
+          after ~4 days. Check crontab -l and systemctl status cron.
+      when:
+        - sup_behavior is match('^M[0-9]')
+        - (cron_count.stdout | default('0') | trim | int) < 2
