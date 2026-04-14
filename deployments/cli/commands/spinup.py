@@ -101,8 +101,16 @@ def run_ruse_spinup(
     output.info("")
     output.info("--- Testing SSH connectivity ---")
     ssh_ok = _test_ssh_all(provisioned_hosts)
-    if ssh_ok < provisioned:
-        output.info(f"  WARNING: SSH reachable on {ssh_ok}/{provisioned} VMs")
+    # S1: Fail-loud if too many VMs unreachable. Previously this was a warning
+    # and install proceeded against unreachable hosts, eventually "succeeding"
+    # while the SUP services on unreachable VMs never got configured.
+    ssh_threshold = 0.9
+    if ssh_ok < provisioned * ssh_threshold:
+        output.error(f"  FAIL: SSH reachable on only {ssh_ok}/{provisioned} VMs "
+                     f"(threshold {int(ssh_threshold*100)}%). Aborting.")
+        return 1
+    elif ssh_ok < provisioned:
+        output.info(f"  WARNING: SSH reachable on {ssh_ok}/{provisioned} VMs (threshold met)")
     else:
         output.info(f"  All {ssh_ok} VMs reachable via SSH")
 
