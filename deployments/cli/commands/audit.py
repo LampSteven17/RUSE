@@ -181,6 +181,12 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     expected_svc = expected_service(behavior)
     if expected_svc is None:
         checks["service"] = "n/a"
+    elif behavior == "M0":
+        # M0 is unmodified upstream MITRE pyhuman. On Linux it crash-loops
+        # because workflows like open_office_calc.py call os.startfile()
+        # (Windows-only API). This is the EXPECTED baseline behavior of the
+        # control and is not an issue worth flagging.
+        checks["service"] = "EXPECTED (M0 upstream crashes on Linux)"
     else:
         svc_state = probe.get("SVC", "?")
         checks["service"] = "OK" if svc_state == "active" else f"FAIL ({svc_state})"
@@ -451,7 +457,9 @@ def run_audit(deploy_dir: Path) -> int:
     # Per-VM check failures → issues
     for dep, vm, probe, checks in all_results:
         for check_name, status in checks.items():
-            if status not in ("OK", "n/a", "?") and not status.startswith("OK"):
+            if (status not in ("OK", "n/a", "?")
+                and not status.startswith("OK")
+                and not status.startswith("EXPECTED")):
                 issues.append(f"{dep['name']}-{dep['run_id']}/{vm['name']}: {check_name}={status}")
         # Surface warning details from runtime logs
         warn_lines = probe.get("WARN_LINES", "")
@@ -474,8 +482,8 @@ def run_audit(deploy_dir: Path) -> int:
     rows = []
 
     def _ok(v: str) -> bool:
-        # "OK", "OK (idle)", "OK (24 GB)", "OK (12s ago)", "n/a" all count as pass
-        return v == "n/a" or v.startswith("OK")
+        # "OK", "OK (idle)", "OK (24 GB)", "OK (12s ago)", "n/a", "EXPECTED ..." all count as pass
+        return v == "n/a" or v.startswith("OK") or v.startswith("EXPECTED")
 
     for (name, rid), entries in sorted(by_dep.items()):
         n = len(entries)
@@ -521,7 +529,7 @@ def _row_status(checks: dict) -> str:
     parts = []
     for k in ("ssh", "service", "process", "model", "gpu", "log", "cron", "feedback", "warnings"):
         v = checks.get(k, "?")
-        if v == "OK" or v.startswith("OK") or v == "n/a":
+        if v == "OK" or v.startswith("OK") or v == "n/a" or v.startswith("EXPECTED"):
             parts.append(".")
         elif v == "?":
             parts.append("?")
