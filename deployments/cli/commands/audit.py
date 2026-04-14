@@ -525,7 +525,7 @@ def run_audit(deploy_dir: Path) -> int:
             output.info(f"  • {i}")
         output.info("")
     else:
-        output.info("No issues found. ✓")
+        output.info("No issues found.")
         output.info("")
 
     # Write markdown report
