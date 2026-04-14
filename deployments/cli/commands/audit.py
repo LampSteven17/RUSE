@@ -95,6 +95,10 @@ def _ssh_probe(name: str, ip: str, behavior: str, key_path: str = "~/.ssh/id_ed2
     bash = f"""
 SVC=$(systemctl is-active {svc} 2>/dev/null || echo notfound)
 echo "SVC=$SVC"
+# H4: Restart counter — catches crash loops where service is "active" between
+# rapid restarts. Today's RAMPART D5 arg-mismatch bug had services with
+# NRestarts=2185 over 12hrs but audit reported them as healthy.
+echo "NRESTARTS=$(systemctl show {svc} -p NRestarts --value 2>/dev/null || echo 0)"
 echo "PROC_COUNT=$(pgrep -f 'runners.run_' 2>/dev/null | wc -l)"
 OLLAMA=$(curl -s --max-time 5 http://localhost:11434/api/ps 2>/dev/null)
 if [ -n "$OLLAMA" ]; then
@@ -189,7 +193,15 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         checks["service"] = "EXPECTED (M0 upstream crashes on Linux)"
     else:
         svc_state = probe.get("SVC", "?")
-        checks["service"] = "OK" if svc_state == "active" else f"FAIL ({svc_state})"
+        nrestarts = int(probe.get("NRESTARTS", "0") or "0")
+        # H4: A service that's "active" right now but with a high restart count
+        # is in a crash loop, not healthy. Flag if NRestarts > 10.
+        if svc_state == "active" and nrestarts > 10:
+            checks["service"] = f"FAIL (crash-looping, {nrestarts} restarts)"
+        elif svc_state == "active":
+            checks["service"] = "OK" if nrestarts == 0 else f"OK ({nrestarts} restarts)"
+        else:
+            checks["service"] = f"FAIL ({svc_state}, {nrestarts} restarts)"
 
     # 3. Process
     if behavior in ("C0", "M0"):
@@ -307,7 +319,9 @@ def _discover_deployments(deploy_dir: Path) -> list[dict]:
             continue
         try:
             cfg = DeploymentConfig.load(config_file)
-        except Exception:
+        except Exception as e:
+            output.error(f"  WARNING: skipping {config_dir.name}/config.yaml: "
+                         f"{type(e).__name__}: {e}")
             continue
         # RUSE SUPs only — skip rampart and ghosts
         if cfg.is_rampart() or cfg.is_ghosts():

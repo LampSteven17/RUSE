@@ -165,18 +165,41 @@ def run_rampart_spinup(
             on_event=default_event_handler,
         )
         if emu_result.rc != 0:
-            output.info(f"  WARNING: Some Linux emulation services may have failed")
+            output.error(f"  FAIL: Linux emulation playbook rc={emu_result.rc}")
             output.info(f"  Log: {emu_result.log_path}")
+            return 1
 
         # Windows endpoints: direct SSH (Ansible mangles PowerShell $ variables)
         win_ok, win_total = _deploy_windows_emulation(run_dir, ent_prefix)
         if win_total > 0:
-            if win_ok < win_total:
-                output.info(f"  WARNING: Windows emulation started on {win_ok}/{win_total} VMs")
+            # C2: Fail deploy if too many Windows endpoints didn't deploy.
+            # Threshold is 90% — below that the deploy is not usable for
+            # experiments. Previously failures were silently logged as warnings
+            # and the deploy reported "DONE" despite 100% Windows failure rate.
+            win_threshold_pct = 90
+            actual_pct = 100.0 * win_ok / win_total
+            if actual_pct < win_threshold_pct:
+                output.error(
+                    f"  FAIL: Windows emulation below {win_threshold_pct}% threshold "
+                    f"({win_ok}/{win_total} = {actual_pct:.0f}%)"
+                )
+                output.error(
+                    f"  Deploy aborted — see failure breakdown above. "
+                    f"Check domain join, admin password, WinRM/SSH connectivity."
+                )
+                return 1
+            elif win_ok < win_total:
+                output.info(
+                    f"  WARNING: Windows emulation partial success: {win_ok}/{win_total} "
+                    f"(threshold {win_threshold_pct}% met)"
+                )
             else:
                 output.info(f"  Windows emulation started on all {win_ok} VMs")
     else:
-        output.info("  WARNING: No endpoint VMs with users found, skipping emulation")
+        # Shouldn't happen in normal deploys — if emulation_inventory is empty,
+        # something went wrong upstream. Fail loud rather than "skipping".
+        output.error("  FAIL: No endpoint VMs with users found — check simulate-logins.py output")
+        return 1
 
     # Register in PHASE experiments.json
     snippet_path = run_dir / "ssh_config_snippet.txt"
@@ -371,14 +394,18 @@ def _generate_ssh_config(
 
     snippet_path = run_dir / "ssh_config_snippet.txt"
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["python3", str(ssh_script), str(deploy_output), deployment, run_id,
              "-o", str(snippet_path)],
-            check=True, capture_output=True,
+            check=True, capture_output=True, text=True,
         )
         install_ssh_config(snippet_path, f"{deployment}/{run_id}")
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as e:
+        # Don't fail the deploy — operators can still SSH by IP — but warn
+        # loudly so they know SSH config block isn't installed.
+        err = (e.stderr or "").strip()[:200]
+        output.error(f"  WARNING: SSH config generation failed (rc={e.returncode}): {err}")
+        output.error(f"  You'll need to SSH by IP for this deployment.")
 
 
 def _start_emulation(
@@ -440,9 +467,14 @@ def _register_phase(
         if result.returncode == 0:
             output.info("  Registered in PHASE experiments.json")
         else:
-            output.info(f"  PHASE registration skipped: {result.stderr[:80]}")
-    except Exception:
-        pass  # Non-critical
+            # Non-fatal but PHASE analysis won't find this deployment's logs
+            # without the experiments.json entry — surface the actual error.
+            err = (result.stderr or result.stdout or "").strip()[:200]
+            output.error(f"  WARNING: PHASE registration FAILED (rc={result.returncode}): {err}")
+            output.error(f"  Logs from this deploy will not be analyzed by PHASE inference.")
+    except Exception as e:
+        output.error(f"  WARNING: PHASE registration crashed ({type(e).__name__}): {e}")
+        output.error(f"  Logs from this deploy will not be analyzed by PHASE inference.")
 
 
 def _generate_emulation_inventory(
@@ -671,18 +703,27 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
     ]
     ssh_user = f"Administrator@{domain_name}"
 
-    def _setup_one(vm: dict) -> bool:
+    def _ssh_step(vm: dict, step_name: str, cmd: str) -> None:
+        """Run one SSH command; raise with real error on nonzero or timeout.
+        Silent-failure-resistant: every subprocess call checked, stderr included."""
+        r = subprocess.run(
+            ssh_base + [f"{ssh_user}@{vm['ip']}", cmd],
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "SSH_AUTH_SOCK": ""},
+        )
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "").strip().replace("\n", " ")[:200]
+            raise RuntimeError(f"[{step_name}] rc={r.returncode}: {err}")
+
+    def _setup_one(vm: dict) -> tuple[bool, str]:
+        """Deploy emulation to one Windows VM. Returns (success, error_message)."""
         ts = time.strftime("%H:%M:%S")
         try:
             # 1) Write passfile
-            subprocess.run(
-                ssh_base + [f"{ssh_user}@{vm['ip']}",
-                    f'powershell -Command "New-Item -Path C:\\tmp -ItemType Directory -Force | Out-Null; '
-                    f"Set-Content -Path C:\\tmp\\shib_login.{vm['username']} "
-                    f"-Value '{vm['username']}`n{vm['password']}' -Encoding ASCII\""
-                ],
-                capture_output=True, timeout=30,
-                env={**os.environ, "SSH_AUTH_SOCK": ""},
+            _ssh_step(vm, "passfile",
+                f'powershell -Command "New-Item -Path C:\\tmp -ItemType Directory -Force | Out-Null; '
+                f"Set-Content -Path C:\\tmp\\shib_login.{vm['username']} "
+                f"-Value '{vm['username']}`n{vm['password']}' -Encoding ASCII\""
             )
 
             # 2) Write run-emulation.ps1 using $l array
@@ -705,13 +746,9 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
                 f"$l += '}}'; "
                 f'$l | Set-Content C:\\tmp\\run-emulation.ps1 -Encoding ASCII"'
             )
-            subprocess.run(
-                ssh_base + [f"{ssh_user}@{vm['ip']}", script_cmd],
-                capture_output=True, timeout=30,
-                env={**os.environ, "SSH_AUTH_SOCK": ""},
-            )
+            _ssh_step(vm, "script", script_cmd)
 
-            # 3) Create + start scheduled task
+            # 3) Create + register scheduled task
             task_cmd = (
                 f'powershell -ExecutionPolicy Bypass -Command "'
                 f"Unregister-ScheduledTask -TaskName RampartHuman -Confirm:$false -ErrorAction SilentlyContinue; "
@@ -723,34 +760,55 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
                 f"Register-ScheduledTask -TaskName RampartHuman -Action $a -Trigger $t -Settings $s "
                 f'-User SYSTEM -RunLevel Highest -Force"'
             )
-            subprocess.run(
-                ssh_base + [f"{ssh_user}@{vm['ip']}", task_cmd],
-                capture_output=True, timeout=30,
-                env={**os.environ, "SSH_AUTH_SOCK": ""},
-            )
+            _ssh_step(vm, "register_task", task_cmd)
 
-            # 4) Start
-            subprocess.run(
-                ssh_base + [f"{ssh_user}@{vm['ip']}",
-                    'powershell -Command "Start-ScheduledTask -TaskName RampartHuman"'],
-                capture_output=True, timeout=30,
-                env={**os.environ, "SSH_AUTH_SOCK": ""},
+            # 4) Start task
+            _ssh_step(vm, "start_task",
+                'powershell -Command "Start-ScheduledTask -TaskName RampartHuman"'
             )
 
             output.info(f"  [{ts}]    OK  {vm['name']} (Windows)")
-            return True
+            return True, ""
+        except subprocess.TimeoutExpired as e:
+            msg = f"timeout during {getattr(e, 'cmd', '?')} — network/firewall/auth issue"
+            output.info(f"  [{ts}]    FAIL  {vm['name']}  {msg}")
+            return False, msg
+        except RuntimeError as e:
+            msg = str(e)
+            output.info(f"  [{ts}]    FAIL  {vm['name']}  {msg}")
+            return False, msg
         except Exception as e:
-            output.info(f"  [{ts}]    FAIL  {vm['name']}  {e}")
-            return False
+            msg = f"unexpected {type(e).__name__}: {e}"
+            output.info(f"  [{ts}]    FAIL  {vm['name']}  {msg}")
+            return False, msg
 
-    ok = 0
+    results: list[tuple[str, bool, str]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
         futures = {pool.submit(_setup_one, vm): vm for vm in win_vms}
         for f in concurrent.futures.as_completed(futures):
-            if f.result():
-                ok += 1
+            vm = futures[f]
+            success, err = f.result()
+            results.append((vm["name"], success, err))
 
-    return ok, len(win_vms)
+    ok = sum(1 for _, s, _ in results if s)
+    total = len(results)
+
+    # C2: Aggregate failure — if too many fail, surface a clear error
+    # so the caller can abort. Also summarize common error patterns so operator
+    # sees "19/19 Authentication failed" instead of 19 individual warnings.
+    if ok < total:
+        from collections import Counter
+        err_patterns = Counter()
+        for name, success, err in results:
+            if not success:
+                # Bucket by first 60 chars of error for pattern detection
+                err_patterns[err[:60]] += 1
+        output.info("")
+        output.error(f"  WINDOWS EMULATION FAILURES ({total - ok}/{total}):")
+        for pattern, count in err_patterns.most_common():
+            output.error(f"    {count}x  {pattern}")
+
+    return ok, total
 
 
 def _generate_feedback_user_roles(

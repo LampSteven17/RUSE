@@ -96,9 +96,15 @@
       until: api_health.status is defined and api_health.status in [200, 302]
       retries: 30
       delay: 10
-      ignore_errors: yes
+      # No ignore_errors: if API never starts after 5 minutes that's a deploy
+      # failure, not a "may still be starting" warning. Previously this task
+      # silently passed and clients would be deployed against a dead API.
+
+    - name: Assert GHOSTS API is responding
+      fail:
+        msg: "GHOSTS API failed to start after 5 minutes. Check: docker logs on {{ inventory_hostname }}, port 5000 availability, image pull."
+      when: api_health.status is not defined or api_health.status not in [200, 302]
 
     - name: Report API status
       debug:
-        msg: >-
-          GHOSTS API is {{ 'UP' if (api_health.status is defined and api_health.status in [200, 302]) else 'NOT RESPONDING (may still be starting)' }}
+        msg: "GHOSTS API is UP (status {{ api_health.status }})"

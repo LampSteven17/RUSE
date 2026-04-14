@@ -293,4 +293,9 @@
       shell: systemctl is-active ghosts-client
       register: client_status
       changed_when: false
-      ignore_errors: yes
+      failed_when: false  # we assert explicitly below for clear error msg
+
+    - name: Assert GHOSTS client is active
+      fail:
+        msg: "ghosts-client service is '{{ client_status.stdout }}' on {{ inventory_hostname }} (expected: active). Check journalctl -u ghosts-client and /opt/ghosts-client/config/."
+      when: client_status.stdout != "active"
