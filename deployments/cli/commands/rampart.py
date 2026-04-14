@@ -699,7 +699,15 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
         "ssh", "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "PreferredAuthentications=password",
+        # Disable pubkey auth: if any SSH key is offered before password,
+        # Windows sshd counts it against MaxAuthTries and rejects the
+        # password attempt. This is an extra safeguard — the real fix is
+        # SSH_AUTH_SOCK="" in env (already set below), but that doesn't
+        # stop ssh from trying explicit IdentityFiles from ~/.ssh/config.
+        "-o", "PubkeyAuthentication=no",
         "-o", "ConnectTimeout=15",
+        # No BatchMode=yes — sshpass needs to feed stdin, and BatchMode
+        # disables that in some ssh builds.
     ]
     ssh_user = f"Administrator@{domain_name}"
 
