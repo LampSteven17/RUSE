@@ -54,7 +54,10 @@ class BaseEmulationLoop(ABC):
         self.workflows = []
         self._running = False
 
-        if self.calibration_profile:
+        # Defer CalibratedTiming init if behavioral configs will provide variance/activity
+        # — otherwise we'd emit transient startup warnings before _reload_behavioral_config()
+        # re-creates it with the proper variance_config and activity_config dicts.
+        if self.calibration_profile and not self._behavior_config_dir:
             self._init_calibrated_timing()
 
     # ── Abstract methods (subclasses must implement) ─────────────────
@@ -168,6 +171,14 @@ class BaseEmulationLoop(ABC):
             if self.logger:
                 self.logger.info("[behavior] Hot-swapped timing_profile",
                                  details={"dataset": config.dataset})
+        elif self.calibration_profile and self._phase_timing is None:
+            # Deferred startup init: behavior_config_dir was set but no timing_profile
+            # in the feedback configs. Fall back to baseline calibration profile.
+            self._init_calibrated_timing()
+            if self._phase_timing and fc.variance_injection:
+                self._phase_timing.update_variance_config(fc.variance_injection)
+            if self._phase_timing and fc.activity_pattern:
+                self._phase_timing.update_activity_config(fc.activity_pattern)
         elif self._phase_timing:
             if fc.variance_injection:
                 self._phase_timing.update_variance_config(fc.variance_injection)
