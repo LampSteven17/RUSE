@@ -207,6 +207,7 @@ def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: P
 
     output.info("Verified: 0 VMs remaining on OpenStack")
     _cleanup_orphaned_volumes(os_client)
+    _close_phase_experiment(config_name)
 
     # Cleanup local state — remove this run, then remove feedback config dir if empty
     if run_dir.is_dir():
@@ -304,6 +305,7 @@ def _rampart_teardown(
 
     output.info("  Verified: 0 VMs remaining")
     _cleanup_orphaned_volumes(os_client)
+    _close_phase_experiment(config_name)
 
     if run_dir.is_dir():
         _safe_rmtree(run_dir)
@@ -369,6 +371,7 @@ def _ghosts_teardown(
 
     output.info("  Verified: 0 VMs remaining")
     _cleanup_orphaned_volumes(os_client)
+    _close_phase_experiment(config_name)
 
     # Cleanup local state — remove this run, then remove feedback config dir if empty
     if run_dir.is_dir():
@@ -419,15 +422,23 @@ def run_teardown_all(deploy_dir: Path) -> int:
     if removed:
         output.info(f"  Removed {len(removed)} SSH config blocks")
 
-    # Clean up inventory files across all deployments
+    # Clean up inventory files + close PHASE experiments.json entries for
+    # every deployment that had an active run.
     for config_dir in deploy_dir.iterdir():
         if not config_dir.is_dir():
             continue
         runs_dir = config_dir / "runs"
-        if runs_dir.is_dir():
-            for run_dir in runs_dir.iterdir():
-                for f in ("inventory.ini", "ssh_config_snippet.txt"):
-                    (run_dir / f).unlink(missing_ok=True)
+        if not runs_dir.is_dir():
+            continue
+        had_active_runs = False
+        for run_dir in runs_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            had_active_runs = True
+            for f in ("inventory.ini", "ssh_config_snippet.txt"):
+                (run_dir / f).unlink(missing_ok=True)
+        if had_active_runs:
+            _close_phase_experiment(config_dir.name)
 
     output.info("")
     output.info("DONE.")
@@ -488,6 +499,43 @@ def _cleanup_orphaned_volumes(os_client: OpenStack) -> int:
     if deleted:
         output.info(f"  Cleaned up {deleted} orphaned boot volumes")
     return deleted
+
+
+EXPERIMENTS_JSON = Path("/mnt/AXES2U1/experiments.json")
+
+
+def _close_phase_experiment(config_name: str) -> None:
+    """Set end_date on the PHASE experiments.json entry for this deployment.
+
+    Previously teardown left entries with end_date=None, so PHASE batch
+    pipelines (e.g. PHASE.py --ruse) would still pick up torn-down deploys
+    as if they were active and try to dredge their (now-deleted) VM IPs.
+    Setting end_date marks the deploy as ended without deleting the
+    historical registration record.
+    """
+    import json
+    if not EXPERIMENTS_JSON.exists():
+        return
+    try:
+        data = json.loads(EXPERIMENTS_JSON.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        output.error(f"  WARNING: cannot read experiments.json: {e}")
+        return
+
+    entry = data.get(config_name)
+    if not entry:
+        return  # nothing to close
+
+    if entry.get("end_date"):
+        return  # already closed
+
+    today = time.strftime("%Y-%m-%d")
+    entry["end_date"] = today
+    try:
+        EXPERIMENTS_JSON.write_text(json.dumps(data, indent=4) + "\n")
+        output.info(f"  Closed experiments.json entry: {config_name} end_date={today}")
+    except OSError as e:
+        output.error(f"  WARNING: cannot write experiments.json: {e}")
 
 
 def _safe_rmtree(path: Path) -> None:
