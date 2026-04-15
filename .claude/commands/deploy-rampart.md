@@ -337,6 +337,11 @@ Available workflows: `browse_iis`, `browse_shibboleth`, `browse_web`, `browse_yo
 | 0 endpoints found for emulation | `user_map` keyed by prefixed names (`e-hash-winep1`) but `node_map` keyed by bare names (`winep1`) | Fixed: strip `ent_prefix` from home_node names in `_generate_emulation_inventory()` and `_deploy_windows_emulation()` |
 | DNS zone collision between RAMPART deployments | All deploys shared one zone (`vxn3kr-bot-project.os`) | Fixed: per-deployment zone (`{hash}.vxn3kr-bot-project.os`), scoped teardown via `dns_zone.txt` marker |
 | PHASE feedback produces 0 per-node roles | (historical, pre-Stage-2) `phase_to_user_roles.py` used prefixed names to look up PHASE dirs that used bare names | Resolved in Stage 2 (2026-04-09): `phase_to_user_roles.py` was deleted and replaced by `rampart.py::_generate_feedback_user_roles` which reads `{bare_node}/user-roles.json` directly and applies the `e-{hash}-` prefix only when renaming the tuned role in the combined output. No more translation-layer mismatch. |
+| 161 Windows endpoints silently not deployed across 7 "successful" deploys | `_safe_parallel_call` in `post-deploy.py` swallowed every per-VM auth failure as a WARNING and continued. `deploy_human` ran as `Administrator@castle` (bare NetBIOS) when the actual NetBIOS is `CASTLEBCEFA` — all 10 winep auth-failed, all got logged as warnings, deploy reported DONE. | **Stage 3 (2026-04-14):** Three simultaneous fixes: (a) `role_human.py::deploy_human` now uses `Administrator@{domain}.{enterprise_url}` FQDN; (b) `role_domains.py::join_domain_windows` PowerShell credential uses `{fqdn_domain_name}` instead of bare `{domain_name}`; (c) `post-deploy.py::_check_step_results` aborts step if > 10% of VMs fail with aggregated error pattern summary. Deploy can no longer "succeed" with broken Windows endpoints. |
+| RAMPART D5 pyhuman crash loop (2185 restarts in 12hr) | Playbook passed `--clustersize-sigma` / `--taskinterval-sigma` to `/opt/pyhuman/human.py` but that's a separate upstream pyhuman (not RUSE's `src/brains/mchp/human.py`) and didn't recognize the args. Audit thought services were healthy because "active state + journal activity in 5min" didn't distinguish workflow runs from crash-loop noise. | **Stage 3 (2026-04-14):** (a) Rebuilt `~/uva-cs-workflow/Downloads/workflows.zip` with D5 sigma support patched into the RAMPART-specific `human.py`; (b) `install-rampart-emulation.yaml` now asserts `systemctl is-active` AND `NRestarts <= 10`; (c) `audit.py` probes NRestarts and reports `FAIL (crash-looping, N restarts)` for any service with > 10 restarts. |
+| Linux domain-join verification failed spuriously on 4/20 endpoints | `role_domains.py::join_domain_linux` verified by SSHing as `administrator@fqdn` with domain admin password to run `realm list`. That was really testing **AD-auth-via-SSH integration** (sssd + sshd + PAM), not whether realm join succeeded. Slow VMs whose sssd wasn't fully up in the 75-second retry window failed verification even when domain join had succeeded. | **Stage 3 (2026-04-14):** Changed verification to SSH as `ubuntu` (known-working cloud-init creds) and run `sudo realm list`. Tests actual domain membership, not SSH auth integration. Retry window extended 75s → 300s for slow VMs. |
+| Orphan boot volumes accumulating (192 × 200GB from earlier teardowns) | Teardown deleted VMs but never deleted their boot volumes. `--boot-from-volume 200` creates volumes that persist after server delete. | **2026-04-14:** `_cleanup_orphaned_volumes()` added to every teardown path. Matches nameless / 200GB / available volumes via `find_orphaned_volumes()` and deletes them. |
+| `PHASE.py --ruse` still dredges torn-down deploys | Teardown never touched `experiments.json`. Every torn-down deploy left an `end_date=None` entry that PHASE treats as active. | **2026-04-15:** `_close_phase_experiment(config_name)` in every teardown path sets `end_date` to today's date. Historical registration preserved for analysis correlation; PHASE batch pipelines no longer pick up ended deploys. |
 
 ## Important Constraints
 
@@ -345,3 +350,51 @@ Available workflows: `browse_iis`, `browse_shibboleth`, `browse_web`, `browse_yo
 - **No package installs on axes** — axes is locked down
 - **`~/uva-cs-workflow/`** is the active copy (ported from nomod); `~/uva-cs-workflow-old/` is the pre-fix backup; `~/uva-cs-workflow-nomod/` is the reference copy
 - **`sshpass` must be installed on mlserv** — required for Windows emulation deployment
+
+## Stage 3 Fail-Loud Assertions (2026-04-14)
+
+**post-deploy.py::_check_step_results** — aggregate failure detection
+after every parallel batch. If > 10% of VMs fail a step, prints
+error pattern summary and `sys.exit(1)`. Wired into:
+- `register_windows` (Windows license activation)
+- `join_domains` (Linux + Windows domain join)
+- `deploy_human` (pyhuman install on every endpoint)
+- `setup_moodle_idps`, `setup_moodle_sps`, `setup_moodle_idps_part2`
+- `setup_fileservers`
+
+Successful steps print `[step_name] OK — all N succeeded` so the
+operator knows the aggregate contract was met.
+
+**rampart.py::_deploy_windows_emulation** — 4 SSH subprocess.run
+calls (write passfile, write run-emulation.ps1, register task, start
+task) now each check returncode and raise with stderr. Caller aborts
+the deploy if Windows success rate < 90%. Previously broad
+`except Exception: return False` swallowed every failure.
+
+**install-rampart-emulation.yaml** — systemctl is-active assertion
+AND NRestarts ≤ 10 assertion. Catches services that are "active"
+between rapid restart cycles (the exact pattern that masked the D5
+crash loop).
+
+Windows SSH in `_deploy_windows_emulation` now also uses
+`PubkeyAuthentication=no` (prevents pubkey attempts burning through
+Windows sshd's `MaxAuthTries` before the password attempt).
+
+### PHASE registration + teardown
+- `register_experiment.py` — uses FQDN in experiments.json
+- `_close_phase_experiment(config_name)` — teardown sets `end_date`
+  so PHASE batch pipelines skip ended deploys
+
+### D5 sigma (RAMPART-specific)
+PHASE generates `clustersize_sigma` / `taskinterval_sigma` per-node
+in each `{bare_node}/user-roles.json` (from
+`rampart_generator.py::_clustersize_sigma` + `_taskinterval_sigma`
+lognormal calculation). `rampart.py::_generate_emulation_inventory`
+extracts those fields from each user's `login_profile` and passes
+them as `rampart_clustersize_sigma=0.5 rampart_taskinterval_sigma=0.5`
+per-host vars. `install-rampart-emulation.yaml` ExecStart inserts them
+as `--clustersize-sigma` / `--taskinterval-sigma` into pyhuman's
+command line. The patched `/opt/pyhuman/human.py` (from the local
+`workflows.zip`) applies `random.lognormvariate(0, sigma)` per
+cluster + per task. Controls get `0/0` (no jitter); feedback deploys
+get `0.5/0.5` which produces clusters ranging 2-15 around a mean of 5.

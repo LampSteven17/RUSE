@@ -314,4 +314,67 @@ CPU BrowserUse can at least make forward progress (slower, but no longer crashes
   via `git clone` during install. Local edits on mlserv don't reach VMs without a
   `git push` first.
 
+## PHASE Feedback Runtime Consumption (2026-04-13 → 2026-04-14)
+
+RUSE runtime now consumes PHASE-generated feedback fields across D1-D5
+and G1-G3. See `docs/feedback-consumption-plan.md` for the full design
+and `docs/feedback-field-audit.md` for field-by-field audit.
+
+### Implemented items
+- **D1** — per-hour `cluster_size_sigma` / `idle_gap_sigma` from
+  `variance_injection.feature_variance_targets.{volume,duration}.hourly_std_target`
+  (24-element arrays, indexed by `datetime.now().hour`).
+  `src/common/timing/phase_timing.py::CalibratedTiming`.
+- **D2** — `min_distinct_per_cluster` enforcement in workflow rotation.
+  `src/common/emulation_loop.py::_select_workflow_with_rotation`.
+- **D3** — per-hour max cluster size derived from
+  `connections_per_burst.max * hourly_fractions + 3*std` (replaces
+  hardcoded `200`).
+- **D4** — per-hour `dns_queries_per_hour` / `http_head_per_hour`
+  indexing (verified already correct, no changes needed).
+- **D5** — pyhuman `--clustersize-sigma` / `--taskinterval-sigma`
+  lognormal jitter. See `/deploy-rampart` for the full pipeline.
+- **G1** — `prompt_augmentation.prompt_content` injected into
+  BrowserUse + SmolAgents prompts via `_apply_brain_specific_config`.
+  `src/brains/{browseruse,smolagents}/loop.py`.
+- **G2** — `connection_reuse.keep_alive_probability` drives tab reuse
+  in MCHP `BrowseWeb` workflow.
+  `src/brains/mchp/app/workflows/browse_web.py`.
+- **G3** — `activity_pattern.daily_shape.detection_hours` suppresses
+  activity (up to 50% reduction) during high-detection hours in
+  `should_skip_hour()`.
+
+### Fail-loud semantics
+Every feature prints `[WARNING] {tag} DISABLED — {reason}` to
+`systemd.log` when it can't activate. Baselines emit warnings
+(expected — no feedback). Feedback deploys with complete PHASE configs
+emit silence. Partial configs emit specific warnings telling the
+operator which PHASE field is missing.
+
+### Transient startup warning fix (commit ebf34d2)
+`_init_calibrated_timing()` used to create `CalibratedTiming` without
+variance/activity configs at `__init__`, triggering D1/D3/G3 warnings,
+before the first `_reload_behavioral_config()` re-created it with the
+proper configs. The deferred init now skips the startup construction
+when `behavior_config_dir` is set — the reload path handles it in one
+shot. Audit no longer surfaces hundreds of false-positive warnings
+from feedback VMs.
+
+## Stage 3 Fail-Loud Assertions (2026-04-14)
+
+`install-sups.yaml` now has explicit assertions (was previously
+swallowing failures):
+- **S3** — `stage2_result.rc != 0` → fail with stderr.
+- **S4** — `systemctl is-active {behavior}.service` must return
+  `active` (was using `|| true` which always returned rc=0).
+- **S5** — `crontab -l | grep -cE 'mchp-(daily|weekly)'` must show
+  both entries for M-series brains.
+
+`spinup.py` now aborts if `_test_ssh_all()` finds fewer than 90%
+reachable VMs (previously a warning and install continued against
+unreachable hosts).
+
+See `/deploy-context` for the full catalog of fail-loud assertions
+across the deploy system.
+
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.
