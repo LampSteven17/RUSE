@@ -238,4 +238,60 @@ When `./deploy --ghosts --feedback` (or `--all`) is used with `ghosts-controls`,
 ### Feedback Source Validation
 Since Stage 2, `_is_valid_feedback_source(source_dir, "ghosts")` in `feedback.py` checks that the source contains `npc-*/timeline.json` files (the PHASE GHOSTS generator output). There is no more `manifest.json` marker, and no more "find any JSON subdir" fallback — if the expected layout is missing, the deploy fails loud with a clear message. See `_build_npc_timeline_mapping()` in `ghosts.py` for the VM → timeline routing logic.
 
+## Stage 3 Fail-Loud Assertions (2026-04-14)
+
+`ghosts.py::run_ghosts_spinup` now enforces strict success contracts
+at every step (was previously silently continuing past failures):
+
+- **G1 — API install failure aborts**: `if api_result.rc != 0: return api_result.rc`.
+  Previously the deploy continued to install clients against a dead API.
+- **G2 — Client install failure aborts**: same pattern. Previously the
+  final return only surfaced `api_result.rc`, so client failures on a
+  healthy API were swallowed.
+- **G3 — SSH 90% threshold**: if fewer than 90% of VMs respond to SSH
+  after provisioning, the deploy aborts with a specific error. Previously
+  a warning and continued against unreachable hosts.
+- **G4 — VM→ACTIVE threshold + IP audit**: `_provision_vms` fails if
+  < 90% VMs reach ACTIVE. Additionally any ACTIVE VM whose IP can't be
+  extracted via `openstack server show -c addresses` is flagged as a
+  FAIL instead of silently dropped from the inventory.
+- **G6 — per-NPC timeline coverage**: `_build_npc_timeline_mapping`
+  now `raise RuntimeError` if any client VM can't be matched to a
+  `npc-*/timeline.json` file. Caller catches and aborts. Previously
+  unmatched VMs silently fell back to the default timeline, losing
+  PHASE tuning with no warning.
+
+`install-ghosts-api.yaml` assertions (was using `ignore_errors: yes`):
+- **C3 — API health**: explicit `fail:` task when the `/api/home`
+  health check doesn't return 200/302 after 5 minutes of retries.
+  Previously logged "NOT RESPONDING (may still be starting)" as an
+  INFO and continued.
+- **G7 — shell `set -euo pipefail`**: Docker install shell now aborts
+  mid-script on curl/apt failures. Previously any mid-script failure
+  was silently skipped.
+- **G8 — file existence asserts**: stat + assert that
+  `src/Ghosts.Frontend/Dockerfile` exists before sed-patching it.
+  Previously sed against a missing file just failed obscurely.
+- **G9 — docker compose error detection**: asserts `rc == 0 AND no
+  "ERROR" in stdout`. Compose sometimes exits 0 while build phase
+  emits ERROR to stdout.
+
+`install-ghosts-clients.yaml` assertions:
+- **C4 — client service**: explicit `fail:` when `systemctl is-active
+  ghosts-client` returns anything other than `active`. Previously
+  `ignore_errors: yes` swallowed failures.
+- **G10 — dotnet publish output**: stat + assert
+  `Ghosts.Client.Universal.dll` exists at the publish location.
+  Previously the systemd service could start against a missing binary
+  and crash-loop silently.
+
+### Teardown improvements
+- **Orphan volume cleanup** — every teardown sweeps nameless/200GB/
+  available volumes. Previously GHOSTS teardowns left boot volumes
+  behind.
+- **experiments.json closure** — `_close_phase_experiment(config_name)`
+  sets `end_date` on the matching PHASE registration. Previously
+  `PHASE.py --ghosts` batch pipeline picked up torn-down deploys as
+  active and tried to dredge their IPs.
+
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.

@@ -224,4 +224,118 @@ manifest.json reads.
 feedback source if it matches its type's glob pattern (see
 `_is_valid_feedback_source()` in `feedback.py`).
 
+## Stage 3: Fail-loud deploy semantics (2026-04-14)
+
+After discovering 161 RAMPART Windows endpoints had been silently failing
+to deploy across 7 "successful" deploys (`_safe_parallel_call` swallowed
+every per-VM auth failure as a WARNING and continued), the deploy system
+was overhauled to fail loud at every silent-failure point. `DONE` now
+means every VM is actually verified functional.
+
+### Core principles
+1. No broad `except Exception:` without logging the actual error.
+2. No `ignore_errors: yes` or `failed_when: false` on readiness checks.
+3. No aggregate metric (`5 VMs succeeded`) without a pass/fail threshold.
+4. Deploys emit a success contract — complete = every VM in expected state.
+5. Shell blocks use `set -euo pipefail` so mid-script failures don't silently
+   skip subsequent steps.
+
+### Canonical failure threshold
+90% by default. Below that the deploy is not usable for experiments,
+so the step aborts with a clear summary of failure patterns.
+
+### Where the assertions live
+- **rampart.py** `_deploy_windows_emulation._ssh_step`: every SSH subprocess.run
+  checks returncode, raises with stderr. Aggregates error patterns at end
+  (e.g. `19x Authentication failed` shown once, not 19 warnings buried
+  in scrollback). Caller aborts at < 90%.
+- **post-deploy.py** `_check_step_results`: after every parallel batch
+  (`register_windows`, `join_domains`, `deploy_human`, Moodle steps,
+  `setup_fileservers`). Counts error dicts, prints pattern summary,
+  `sys.exit(1)` if > 10% fail. Prints `[step_name] OK — all N succeeded`
+  on success so operators know each step actually completed.
+- **spinup.py** (RUSE), **ghosts.py** (GHOSTS), **rampart.py** (RAMPART):
+  SSH threshold 90% — abort if fewer VMs reachable than threshold.
+- **provision-vms.yaml**: abort if < 90% VMs reach ACTIVE.
+- **distribute-behavior-configs.yaml**: abort if behavior source missing
+  or no config files matched (previously silently degraded feedback deploy
+  to baseline with no warning).
+- **install-sups.yaml**: explicit assert stage2 rc=0, service is-active
+  assertion (replacing `|| true` swallow), cron-count assertion for M-series
+  maintenance jobs.
+- **install-ghosts-api.yaml**: `set -euo pipefail` on Docker install shell,
+  Dockerfile exists check before sed patch, explicit `fail:` when API
+  health check times out (removed `ignore_errors`), docker compose error
+  detection in stdout.
+- **install-ghosts-clients.yaml**: `set -euo pipefail` on dotnet publish,
+  stat + assert `Ghosts.Client.Universal.dll` exists, systemctl is-active
+  assertion (removed `ignore_errors`).
+- **install-rampart-emulation.yaml**: systemctl is-active + NRestarts ≤ 10
+  assertion (catches services "active" between rapid restart cycles — the
+  exact pattern that masked the D5 arg mismatch crash loop).
+
+### audit.py parallel upgrades
+- **NRestarts probe** — `systemctl show -p NRestarts --value`. Service
+  check reports `FAIL (crash-looping, N restarts)` when active but
+  NRestarts > 10. Previously crash-looping services reported `active`
+  between restart cycles and audit missed the failure entirely.
+- **M0 expected-failure exception** — `M0` (unmodified upstream MITRE
+  pyhuman) reports `EXPECTED (M0 upstream crashes on Linux)` instead of
+  FAIL, recognizing that `os.startfile()` crash is the intentional
+  baseline behavior.
+- **Feedback feature probes** (Fdbk, Warn columns) — checks
+  `/opt/ruse/deployed_sups/*/behavioral_configurations/` file count and
+  `[WARNING]` line count in `systemd.log` to surface D1-G3 feature
+  activation state per VM.
+
+### Teardown improvements
+- **Orphan volume cleanup** — `_cleanup_orphaned_volumes(os_client)` in
+  every teardown path. Deletes nameless/200GB/available volumes left
+  over from deleted servers (was leaking ~200GB per VM).
+- **experiments.json closure** — `_close_phase_experiment(config_name)`
+  sets `end_date` on the matching `/mnt/AXES2U1/experiments.json` entry
+  so PHASE batch pipelines (`PHASE.py --ruse`, `--rampart`, `--ghosts`)
+  don't pick up torn-down deploys as active. Historical registration
+  preserved for analysis correlation; only `end_date` is set.
+
+## Stage 3b: Operator observability (2026-04-14)
+
+### Session log
+Every `./deploy`, `./teardown`, `./list`, `./shrink`, `./audit` invocation
+opens a log file at `deployments/logs/session-{command}-{timestamp}.log`.
+Every `output.info/error/banner/table` call tees to it via
+`output._write()`. The session log captures:
+- All banners, warnings, errors
+- Filtered Ansible output from `default_event_handler` (OK/FAIL lines)
+- Batch deploy summaries
+- Abort reasons with stderr detail
+
+Raw unfiltered Ansible output stays in
+`deployments/logs/ansible-{playbook}-{timestamp}.log` (unchanged).
+
+**The log path is printed as the last line of every CLI invocation**,
+even on abort, so operators can paste it directly for diagnosis.
+
+### Grepping after a failure
+```bash
+# What aborted the deploy?
+grep -E "FAIL|ABORTING|FAILURES" deployments/logs/session-deploy-*.log | tail -30
+
+# What aggregate failure patterns did post-deploy.py see?
+grep -E "FAILURES:|nodes:" deployments/*/runs/*/enterprise.log | tail -20
+
+# What did Ansible actually say per-task?
+grep -E "FAILED|fatal|UNREACHABLE" deployments/logs/ansible-*.log | tail -30
+```
+
+## Documentation
+- `docs/silent-failures-audit.md` — 15-item CRITICAL/HIGH/MEDIUM/LOW
+  catalog with specific fix plan (now mostly implemented). Useful as
+  a reference when adding new deploy steps — check that no new silent
+  failure patterns slip in.
+- `docs/feedback-consumption-plan.md` — D1-D5, G1-G3 runtime consumption
+  plan for PHASE feedback fields.
+- `docs/feedback-field-audit.md` — per-file gap analysis of what PHASE
+  generates vs what RUSE consumes, with pruning checklists.
+
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.
