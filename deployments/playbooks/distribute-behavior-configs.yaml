@@ -113,6 +113,19 @@
               feedback source.
           when: behavior_config_files.files | length == 0
 
+        - name: Validate behavior.json parses as JSON
+          # Fail-loud before shipping a corrupt file to the VM — otherwise the
+          # agent loads it, json.load() raises, the service crash-loops, and
+          # the failure only surfaces on the next audit run. Parsing here
+          # means an invalid file aborts the deploy with the filename in the
+          # error message.
+          delegate_to: localhost
+          shell: "python3 -m json.tool < {{ item.path | quote }} > /dev/null"
+          loop: "{{ behavior_config_files.files }}"
+          loop_control:
+            label: "{{ item.path | basename }}"
+          changed_when: false
+
         - name: Copy configs to SUP
           copy:
             src: "{{ item.path }}"
