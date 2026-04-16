@@ -26,9 +26,8 @@ Read the following files in order to understand the RUSE SUP deployment system:
 7. `deployments/cli/commands/feedback.py` - Feedback source resolution, config generation, per-config-file CLI flags
 8. `deployments/lib/register_experiment.py` - PHASE experiments.json registration
 
-### Deployment Configs (feedback variants)
-9. `deployments/ruse-feedback-stdctrls-sum24-all/config.yaml` - Example feedback deployment config (if present)
-10. `deployments/ruse-feedback-stdctrls-sum24-timing/config.yaml` - Example timing-only feedback config (if present)
+### Deployment Configs (feedback variants, auto-generated per-dataset)
+9. `deployments/ruse-feedback-stdctrls-{sum24,fall24,spr25,axall,vt1g,vt50g}-all/config.yaml` - Feedback deploys created by `generate_feedback_config()`, one per PHASE dataset, not committed to git
 
 ## Architecture
 
@@ -114,20 +113,75 @@ Feedback variant template (5 VMs per ./deploy --ruse --feedback):
 
 ## Behavioral Config Distribution
 
-The distribute playbook (`distribute-behavior-configs.yaml`) handles:
+Consolidated to a single `behavior.json` per SUP on 2026-04-16 (previously
+8 separate JSONs). The distribute playbook (`distribute-behavior-configs.yaml`)
+handles:
 1. Deriving baseline config key from versioned key: `B2C.gemma → B0C.gemma`, `M2 → M1`
-2. Copying configs to `/opt/ruse/deployed_sups/{key}/behavioral_configurations/` on each VM
-3. Only runs for V2+ configs (V0/V1 are baselines with no behavioral configs)
+2. Source resolution: `{feedback_source}/{behavior_dir}/{baseline_config}/behavior.json`
+   (e.g. `.../B.gemma/B0.gemma/behavior.json`)
+3. Validates parseability with `python3 -m json.tool` on localhost before
+   copying — a corrupt behavior.json aborts the deploy rather than shipping
+   to the VM
+4. Copying to `/opt/ruse/deployed_sups/{key}/behavioral_configurations/behavior.json`
+5. Only runs for V2+ configs (V0/V1 are baselines with no behavioral configs)
 
-Config files distributed:
-- `timing_profile.json` - Hourly activity distribution, burst/idle characteristics
-- `workflow_weights.json` - Per-workflow selection probabilities
-- `behavior_modifiers.json` - Max steps, dwell times, navigation limits
-- `site_config.json` - Site category weights for task selection
-- `prompt_augmentation.json` - Additional prompt content for LLM-based brains
-- `activity_pattern.json` - Active hour ranges
-- `diversity_injection.json` - Background service diversity
-- `variance_injection.json` - Behavioral variance parameters
+The `*.json` wildcard used by the playbook's `find` task means legacy
+multi-file sources would still copy, but PHASE emits one file.
+
+### behavior.json schema (emitted by PHASE)
+
+```json
+{
+  "_metadata": {"source": "...", "sup_config": "B0.gemma",
+                "dataset": "axes-summer24", "current_score": 0.4,
+                "target_score": 0.6, "generated_at": "..."},
+  "timing": {
+    "hourly_distribution": [24 floats summing to 1],
+    "activity_probability_per_hour": [24 floats 0..1],
+    "long_idle_probability": 0.05,
+    "long_idle_duration_minutes": {"min": 30, "max": 120},
+    "burst_percentiles": {
+      "connections_per_burst":  {"5":,"25":,"50":,"75":,"95":,"max":},
+      "idle_gap_minutes":       {"5":,"25":,"50":,"75":,"95":},
+      "burst_duration_minutes": {"5":,"25":,"50":,"75":,"95":}
+    },
+    "variance": {
+      "cluster_size_sigma": 0.5, "idle_gap_sigma": 0.5,
+      "hourly_std_targets": {
+        "volume":   {"hourly_std_target": [24 floats]},
+        "duration": {"hourly_std_target": [24 floats]}
+      }
+    }
+  },
+  "content": {
+    "workflow_weights": {"BrowseWeb": 0.3, "GoogleSearch": 0.22, ...},
+    "site_categories":  {"lightweight": 0.55, "medium": 0.3, "heavy": 0.15}
+  },
+  "behavior": {
+    "page_dwell":             {"min_seconds": 2, "max_seconds": 43},
+    "navigation_clicks":      {"min": 10, "max": 30},
+    "keep_alive_probability": 0.8,
+    "max_steps":              10
+  },
+  "diversity": {
+    "background_services": {
+      "dns_per_hour":       [24 ints],
+      "http_head_per_hour": [24 ints],
+      "ntp_checks_per_day": 4
+    },
+    "workflow_rotation": {
+      "max_consecutive_same": 2,
+      "min_distinct_per_cluster": 3
+    }
+  },
+  "prompt_content": "... optional free-form prompt guidance ..."
+}
+```
+
+The loader (`src/common/behavioral_config.py::load_behavioral_config`)
+slices these 5 sections into the 8 dataclass fields with no key
+renaming or re-nesting — every downstream reader matches the shape
+PHASE emits verbatim.
 
 ## Feedback Config Generation
 
@@ -206,16 +260,13 @@ deployments/ruse-controls/runs/<run_id>/
 ├── config.yaml              # Snapshot of deployment config
 ├── inventory.ini            # [sups] host group
 ├── ssh_config_snippet.txt   # SSH access for all VMs
-├── deployment_type          # Marker file containing "sup"
-└── behavioral_configs/      # PHASE configs (if feedback enabled)
-    ├── M2/
-    │   ├── timing_profile.json
-    │   ├── workflow_weights.json
-    │   └── ...
-    ├── B2.llama/
-    │   └── ...
-    └── ...
+└── deployment_type          # Marker file containing "sup"
 ```
+
+Feedback configs are NOT copied into the run dir. The distribute
+playbook reads directly from `{behavior_source}` on localhost (the
+PHASE feedback dir) and ships `behavior.json` straight to each VM
+at `/opt/ruse/deployed_sups/{key}/behavioral_configurations/`.
 
 ## PHASE Registration
 
@@ -314,51 +365,57 @@ CPU BrowserUse can at least make forward progress (slower, but no longer crashes
   via `git clone` during install. Local edits on mlserv don't reach VMs without a
   `git push` first.
 
-## PHASE Feedback Runtime Consumption (2026-04-13 → 2026-04-14)
+## PHASE Feedback Runtime Consumption
 
-RUSE runtime now consumes PHASE-generated feedback fields across D1-D5
-and G1-G3. See `docs/feedback-consumption-plan.md` for the full design
-and `docs/feedback-field-audit.md` for field-by-field audit.
+RUSE runtime reads PHASE-generated feedback from a single `behavior.json`
+per SUP (consolidated 2026-04-16 from 8 separate JSONs). Docs in
+`docs/feedback-consumption-plan.md` and `docs/feedback-field-audit.md`
+describe the pre-consolidation schema and are historical — the live
+field paths are below.
 
-### Implemented items
-- **D1** — per-hour `cluster_size_sigma` / `idle_gap_sigma` from
-  `variance_injection.feature_variance_targets.{volume,duration}.hourly_std_target`
-  (24-element arrays, indexed by `datetime.now().hour`).
-  `src/common/timing/phase_timing.py::CalibratedTiming`.
-- **D2** — `min_distinct_per_cluster` enforcement in workflow rotation.
-  `src/common/emulation_loop.py::_select_workflow_with_rotation`.
-- **D3** — per-hour max cluster size derived from
-  `connections_per_burst.max * hourly_fractions + 3*std` (replaces
-  hardcoded `200`).
-- **D4** — per-hour `dns_queries_per_hour` / `http_head_per_hour`
-  indexing (verified already correct, no changes needed).
-- **D5** — pyhuman `--clustersize-sigma` / `--taskinterval-sigma`
-  lognormal jitter. See `/deploy-rampart` for the full pipeline.
-- **G1** — `prompt_augmentation.prompt_content` injected into
-  BrowserUse + SmolAgents prompts via `_apply_brain_specific_config`.
-  `src/brains/{browseruse,smolagents}/loop.py`.
-- **G2** — `connection_reuse.keep_alive_probability` drives tab reuse
-  in MCHP `BrowseWeb` workflow.
-  `src/brains/mchp/app/workflows/browse_web.py`.
-- **G3** — `activity_pattern.daily_shape.detection_hours` suppresses
-  activity (up to 50% reduction) during high-detection hours in
-  `should_skip_hour()`.
+### Section → BehavioralConfig field → consumer
+
+| behavior.json path | BehavioralConfig field | Consumer |
+|---|---|---|
+| `timing.hourly_distribution` (flat `[24]`) | `timing_profile` | `CalibratedTimingConfig.hourly_fractions` |
+| `timing.burst_percentiles.*` (flat dicts) | `timing_profile` | `CalibratedTimingConfig.{burst_duration,idle_gap,connections_per_burst}` |
+| `timing.variance.cluster_size_sigma` | `variance_injection` | `get_cluster_size()` scalar lognormal noise |
+| `timing.variance.idle_gap_sigma` | `variance_injection` | `get_cluster_delay()` scalar lognormal noise |
+| `timing.variance.hourly_std_targets.{volume,duration}.hourly_std_target` | `variance_injection` | D1 per-hour sigma arrays in `_init_variance_targets` |
+| `timing.activity_probability_per_hour` | `activity_pattern` | `should_skip_hour()` hourly rolldown |
+| `timing.long_idle_probability` + `long_idle_duration_minutes` | `activity_pattern` | `should_take_long_idle()` |
+| `content.workflow_weights` | `workflow_weights` | `build_workflow_weights()` for `random.choices()` |
+| `content.site_categories` | `site_config` | Stored for future use (no active consumer) |
+| `behavior.page_dwell` / `navigation_clicks` | `behavior_modifiers` | MCHP `BrowseWeb.{min,max}_sleep_time`, `max_navigation_clicks` |
+| `behavior.keep_alive_probability` (flat) | `behavior_modifiers` | G2: MCHP `BrowseWeb.keep_alive_probability` |
+| `behavior.max_steps` | `behavior_modifiers` | BrowserUse / SmolAgents per-workflow `max_steps` |
+| `diversity.background_services.dns_per_hour` / `http_head_per_hour` / `ntp_checks_per_day` | `diversity_injection` | `BackgroundServiceGenerator` (D4) |
+| `diversity.workflow_rotation.{max_consecutive_same,min_distinct_per_cluster}` | `diversity_injection` | D2 rotation enforcement in `emulation_loop` |
+| `prompt_content` (top-level string) | `prompt_augmentation.prompt_content` | G1: BrowserUse + SmolAgents prompt prepend |
+
+**G3 detection_hours was removed** — PHASE no longer emits it and
+`should_skip_hour` no longer reads it. Activity suppression is now
+driven solely by `activity_probability_per_hour`.
+
+### Loader contract (2026-04-16)
+- Reads `{behavioral_configurations}/behavior.json`.
+- File missing → empty `BehavioralConfig` (baseline path, V0/V1).
+- File present but malformed JSON → `JSONDecodeError` propagates
+  (service crash-loops, audit NRestarts probe flags it).
+- No translation, no re-keying — sections populate the 8 dataclass
+  fields verbatim and downstream readers were updated to match.
 
 ### Fail-loud semantics
 Every feature prints `[WARNING] {tag} DISABLED — {reason}` to
 `systemd.log` when it can't activate. Baselines emit warnings
 (expected — no feedback). Feedback deploys with complete PHASE configs
-emit silence. Partial configs emit specific warnings telling the
-operator which PHASE field is missing.
+emit silence. Partial / malformed configs emit specific warnings
+naming the PHASE field or section that's missing.
 
-### Transient startup warning fix (commit ebf34d2)
-`_init_calibrated_timing()` used to create `CalibratedTiming` without
-variance/activity configs at `__init__`, triggering D1/D3/G3 warnings,
-before the first `_reload_behavioral_config()` re-created it with the
-proper configs. The deferred init now skips the startup construction
-when `behavior_config_dir` is set — the reload path handles it in one
-shot. Audit no longer surfaces hundreds of false-positive warnings
-from feedback VMs.
+### Distribute playbook JSON validity gate (2026-04-16)
+Before copying to the VM, each matched `behavior.json` is parsed with
+`python3 -m json.tool` on localhost. A corrupt file aborts the deploy
+with the source path in the error — it never reaches any VM.
 
 ## Stage 3 Fail-Loud Assertions (2026-04-14)
 
