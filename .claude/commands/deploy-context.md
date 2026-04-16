@@ -196,9 +196,10 @@ own file layout, identified by glob patterns instead of the old
 ```
 ~/PHASE/feedback_engine/configs/
   axes-ruse-controls_{dataset}_{preset}/
-    {behavior}/{sup}/*.json   # 7–8 RUSE behavioral configs per sup
-                              # e.g. B.gemma/B0.gemma/timing_profile.json
-                              # validator: */*/timing_profile.json
+    {behavior}/{sup}/behavior.json  # single consolidated per-SUP file
+                                    # e.g. B.gemma/B0.gemma/behavior.json
+                                    # validator: */*/behavior.json
+                                    # (2026-04-16 consolidation — was 8 JSONs)
 
   axes-rampart-controls_{dataset}_{preset}/
     {bare_node}/user-roles.json  # self-contained pyhuman configs
@@ -257,9 +258,10 @@ so the step aborts with a clear summary of failure patterns.
 - **spinup.py** (RUSE), **ghosts.py** (GHOSTS), **rampart.py** (RAMPART):
   SSH threshold 90% — abort if fewer VMs reachable than threshold.
 - **provision-vms.yaml**: abort if < 90% VMs reach ACTIVE.
-- **distribute-behavior-configs.yaml**: abort if behavior source missing
-  or no config files matched (previously silently degraded feedback deploy
-  to baseline with no warning).
+- **distribute-behavior-configs.yaml**: abort if behavior source missing,
+  no config files matched, or any behavior.json fails to parse as JSON
+  (previously silently degraded feedback deploy to baseline with no
+  warning; corrupt JSON now fails at localhost before shipping to VMs).
 - **install-sups.yaml**: explicit assert stage2 rc=0, service is-active
   assertion (replacing `|| true` swallow), cron-count assertion for M-series
   maintenance jobs.
@@ -284,9 +286,11 @@ so the step aborts with a clear summary of failure patterns.
   FAIL, recognizing that `os.startfile()` crash is the intentional
   baseline behavior.
 - **Feedback feature probes** (Fdbk, Warn columns) — checks
-  `/opt/ruse/deployed_sups/*/behavioral_configurations/` file count and
-  `[WARNING]` line count in `systemd.log` to surface D1-G3 feature
-  activation state per VM.
+  `/opt/ruse/deployed_sups/*/behavioral_configurations/` file count
+  (post-2026-04-16: expect 1 file, `behavior.json`) and `[WARNING]`
+  line count in `systemd.log` to surface feature activation state
+  per VM. Baselines expected to emit warnings (no feedback); feedback
+  deploys with complete PHASE configs should emit silence.
 
 ### Teardown improvements
 - **Orphan volume cleanup** — `_cleanup_orphaned_volumes(os_client)` in

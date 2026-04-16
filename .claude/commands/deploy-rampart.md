@@ -210,7 +210,7 @@ done
 
 ## Behavioral Configuration
 
-The central orchestrator is **user-roles.json** — equivalent to RUSE's `behavioral_configurations/defaults/` directory:
+The central orchestrator is **user-roles.json** — analogous to RUSE's per-SUP `behavior.json`:
 - Activity timing: hours/day, logins/hour, start hours (per day-of-week)
 - Workflow selection: which workflows each role runs
 - Session behavior: login duration, recursive logins, terminal count
