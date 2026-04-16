@@ -139,14 +139,17 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
     """
     path = config_dir / "behavior.json"
     if not path.exists():
+        # Missing file = baseline / V0 / V1 deploy. Agents fall through to
+        # hardcoded defaults and emit per-feature [WARNING] lines so audit
+        # can distinguish "no feedback intended" from "feedback broken".
         return BehavioralConfig()
 
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"[behavior] Warning: Failed to load {path}: {e}")
-        return BehavioralConfig()
+    # File present = feedback deploy. A malformed JSON here means PHASE
+    # emitted a broken file or the copy corrupted it — fail loud instead
+    # of silently degrading to baseline, which would look identical to an
+    # actual V0/V1 run in the logs.
+    with open(path, "r") as f:
+        data = json.load(f)
 
     timing = data.get("timing") or {}
     content = data.get("content") or {}
