@@ -120,43 +120,32 @@ class MCHPAgent(BaseEmulationLoop):
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:
-        """Apply MCHP-specific behavioral config: page_dwell, nav_clicks, site_weights."""
-        from common.behavioral_config import build_site_weights
+        """Apply MCHP-specific behavioral config: page_dwell, nav_clicks, keep_alive."""
+        if not fc.behavior_modifiers:
+            return
 
-        # Behavior modifiers — apply to BrowseWeb workflow
-        if fc.behavior_modifiers:
-            for w in self.workflows:
-                if getattr(w, 'name', '') == 'BrowseWeb':
-                    page_dwell = fc.behavior_modifiers.get("page_dwell", {})
-                    if "max_seconds" in page_dwell:
-                        w.max_sleep_time = int(page_dwell["max_seconds"])
-                    if "min_seconds" in page_dwell:
-                        w.min_sleep_time = int(page_dwell["min_seconds"])
-                    nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
-                    if "max" in nav_clicks:
-                        w.max_navigation_clicks = int(nav_clicks["max"])
-                    # G2: Connection reuse probability for tab management
-                    conn_reuse = fc.behavior_modifiers.get("connection_reuse", {})
-                    if "keep_alive_probability" in conn_reuse:
-                        w.keep_alive_probability = float(conn_reuse["keep_alive_probability"])
-                    else:
-                        print("[WARNING] G2 keep_alive_probability DISABLED — "
-                              "no behavior_modifiers.connection_reuse.keep_alive_probability, "
-                              f"using default {w.keep_alive_probability}")
-                    if self.logger:
-                        self.logger.info("[behavior] Applied behavior_modifiers to BrowseWeb",
-                                         details=fc.behavior_modifiers)
-                    break
-
-        # Site config — apply site weights to BrowseWeb workflow
-        if fc.site_config:
-            for w in self.workflows:
-                if getattr(w, 'name', '') == 'BrowseWeb':
-                    site_weights = build_site_weights(w.website_list, fc.site_config)
-                    w.site_weights = site_weights
-                    if site_weights and self.logger:
-                        self.logger.info("[behavior] Applied site_weights to BrowseWeb")
-                    break
+        for w in self.workflows:
+            if getattr(w, 'name', '') != 'BrowseWeb':
+                continue
+            page_dwell = fc.behavior_modifiers.get("page_dwell", {})
+            if "max_seconds" in page_dwell:
+                w.max_sleep_time = int(page_dwell["max_seconds"])
+            if "min_seconds" in page_dwell:
+                w.min_sleep_time = int(page_dwell["min_seconds"])
+            nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
+            if "max" in nav_clicks:
+                w.max_navigation_clicks = int(nav_clicks["max"])
+            # G2: Connection reuse probability for tab management
+            if "keep_alive_probability" in fc.behavior_modifiers:
+                w.keep_alive_probability = float(fc.behavior_modifiers["keep_alive_probability"])
+            else:
+                print("[WARNING] G2 keep_alive_probability DISABLED — "
+                      "no behavior.keep_alive_probability, "
+                      f"using default {w.keep_alive_probability}")
+            if self.logger:
+                self.logger.info("[behavior] Applied behavior_modifiers to BrowseWeb",
+                                 details=fc.behavior_modifiers)
+            break
 
 
 def run(cluster_size=DEFAULT_CLUSTER_SIZE, task_interval=DEFAULT_TASK_INTERVAL,

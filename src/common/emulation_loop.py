@@ -189,8 +189,7 @@ class BaseEmulationLoop(ABC):
                 self._phase_timing.update_activity_config(fc.activity_pattern)
                 if self.logger:
                     self.logger.info("[behavior] Applied activity_pattern",
-                                     details={"daily_shape": bool(fc.activity_pattern.get("daily_shape")),
-                                              "idle_behavior": bool(fc.activity_pattern.get("idle_behavior"))})
+                                     details=fc.activity_pattern)
 
         # Diversity injection — workflow rotation + background services
         if fc.diversity_injection:

@@ -34,10 +34,10 @@ class BackgroundServiceGenerator:
     def __init__(self, config: dict = None, logger=None):
         self._config = config or {}
         self._logger = logger
-        self._enabled = self._config.get("enabled", False)
-        self._dns_per_hour = self._config.get("dns_queries_per_hour", [0] * 24)
+        self._dns_per_hour = self._config.get("dns_per_hour", [0] * 24)
         self._ntp_per_day = self._config.get("ntp_checks_per_day", 0)
         self._http_per_hour = self._config.get("http_head_per_hour", [0] * 24)
+        self._enabled = bool(self._config)
         self._dns_count_this_hour = 0
         self._http_count_this_hour = 0
         self._ntp_count_today = 0
@@ -138,7 +138,7 @@ class BackgroundServiceGenerator:
     def update_config(self, config: dict):
         """Hot-update background service config."""
         self._config = config or {}
-        self._enabled = self._config.get("enabled", False)
-        self._dns_per_hour = self._config.get("dns_queries_per_hour", [0] * 24)
+        self._dns_per_hour = self._config.get("dns_per_hour", [0] * 24)
         self._ntp_per_day = self._config.get("ntp_checks_per_day", 0)
         self._http_per_hour = self._config.get("http_head_per_hour", [0] * 24)
+        self._enabled = bool(self._config)

@@ -380,25 +380,23 @@ class CalibratedTiming:
 
         self._init_variance_targets()
         self._init_per_hour_max()
-        self._init_detection_hours()
 
     def _init_variance_targets(self):
-        """D1: Extract per-hour sigma arrays from feature_variance_targets."""
+        """D1: Extract per-hour sigma arrays from hourly_std_targets."""
         self._volume_hourly_std = []
         self._duration_hourly_std = []
 
-        fvt = self._variance_config.get("feature_variance_targets") if self._variance_config else None
-        if fvt:
-            self._volume_hourly_std = fvt.get("volume", {}).get("hourly_std_target", [])
-            self._duration_hourly_std = fvt.get("duration", {}).get("hourly_std_target", [])
+        hstd = (self._variance_config or {}).get("hourly_std_targets") or {}
+        self._volume_hourly_std = hstd.get("volume", {}).get("hourly_std_target", [])
+        self._duration_hourly_std = hstd.get("duration", {}).get("hourly_std_target", [])
 
         if not self._volume_hourly_std:
             print("[WARNING] D1 per-hour volume sigma DISABLED — "
-                  "no feature_variance_targets.volume.hourly_std_target, "
+                  "no variance.hourly_std_targets.volume.hourly_std_target, "
                   "using scalar cluster_size_sigma fallback")
         if not self._duration_hourly_std:
             print("[WARNING] D1 per-hour duration sigma DISABLED — "
-                  "no feature_variance_targets.duration.hourly_std_target, "
+                  "no variance.hourly_std_targets.duration.hourly_std_target, "
                   "using scalar idle_gap_sigma fallback")
 
     def _init_per_hour_max(self):
@@ -420,15 +418,6 @@ class CalibratedTiming:
         else:
             print("[WARNING] D3 per-hour max cap DISABLED — "
                   "using hardcoded 200, no hourly_fractions available")
-
-    def _init_detection_hours(self):
-        """G3: Load detection risk per hour from activity pattern."""
-        daily_shape = self._activity_config.get("daily_shape", {}) if self._activity_config else {}
-        self._detection_hours = daily_shape.get("detection_hours", [])
-
-        if not self._detection_hours:
-            print("[WARNING] G3 detection-hours suppression DISABLED — "
-                  "no activity_pattern.daily_shape.detection_hours")
 
     def _sample_percentile(self, percentiles: dict) -> float:
         """Sample by interpolating between p5/p25/p50/p75/p95 breakpoints."""
@@ -458,13 +447,11 @@ class CalibratedTiming:
         raw = self._sample_percentile(self.config.connections_per_burst)
         scaled = raw * self._get_hourly_scale()
         hour = datetime.now().hour
-        # D1: Per-hour sigma from feature_variance_targets
+        # D1: Per-hour sigma; scalar fallback is variance.cluster_size_sigma
         if self._volume_hourly_std and hour < len(self._volume_hourly_std):
             sigma = self._volume_hourly_std[hour]
         else:
-            # Scalar fallback — only fires if _init_variance_targets already warned
-            vol_var = self._variance_config.get("volume_variance", {})
-            sigma = vol_var.get("cluster_size_sigma", vol_var.get("cluster_size_cv", 0))
+            sigma = self._variance_config.get("cluster_size_sigma", 0)
         if sigma > 0:
             sigma = min(sigma, 1.5)
             scaled *= random.lognormvariate(0, sigma)
@@ -487,12 +474,11 @@ class CalibratedTiming:
         gap_seconds = gap_minutes * 60.0 * scale_factor
         # Variance injection: lognormal noise to idle gaps
         hour = datetime.now().hour
-        # D1: Per-hour sigma from feature_variance_targets, scalar fallback
+        # D1: Per-hour sigma; scalar fallback is variance.idle_gap_sigma
         if self._duration_hourly_std and hour < len(self._duration_hourly_std):
             sigma = self._duration_hourly_std[hour]
         else:
-            vol_var = self._variance_config.get("volume_variance", {})
-            sigma = vol_var.get("idle_gap_sigma", vol_var.get("idle_gap_cv", 0))
+            sigma = self._variance_config.get("idle_gap_sigma", 0)
         if sigma > 0:
             sigma = min(sigma, 1.5)
             gap_seconds *= random.lognormvariate(0, sigma)
@@ -527,36 +513,26 @@ class CalibratedTiming:
             return "peak"
 
     def should_skip_hour(self) -> bool:
-        """Check if current hour should be idle based on activity pattern.
-        Probabilities are peak-normalized (1.0 = peak hour, 0.0 = no activity).
-        Low-intensity hours are probabilistically skipped.
-        G3: Detection risk further reduces activity during high-detection hours."""
+        """Skip the current hour with probability (1 - activity_probability_per_hour[h])."""
         if not self._activity_config:
             return False
-        probs = self._activity_config.get("daily_shape", {}).get(
-            "per_hour_activity_probability", [])
+        probs = self._activity_config.get("activity_probability_per_hour") or []
         if not probs:
             return False
         hour = datetime.now().hour
         if hour < len(probs):
-            prob = probs[hour]
-            # G3: Reduce activity during high-detection hours
-            if self._detection_hours and hour < len(self._detection_hours):
-                detection_risk = self._detection_hours[hour]
-                # Scale: risk=1.0 halves probability, risk=0.0 no change
-                prob *= (1.0 - 0.5 * detection_risk)
-            return random.random() > prob  # 0.0 = always skip, 1.0 = never skip
+            return random.random() > probs[hour]
         return False
 
     def should_take_long_idle(self) -> tuple:
-        """Check if a long idle period should be injected.
+        """Inject a long idle with probability long_idle_probability.
         Returns (should_idle, duration_seconds)."""
         if not self._activity_config:
             return False, 0
-        idle_cfg = self._activity_config.get("idle_behavior", {})
-        prob = idle_cfg.get("long_idle_probability", 0)
+        prob = self._activity_config.get("long_idle_probability", 0)
         if prob > 0 and random.random() < prob:
-            dur_cfg = idle_cfg.get("long_idle_duration_minutes", {"min": 30, "max": 120})
+            dur_cfg = self._activity_config.get(
+                "long_idle_duration_minutes", {"min": 30, "max": 120})
             duration = random.uniform(dur_cfg["min"], dur_cfg["max"]) * 60
             return True, duration
         return False, 0
@@ -570,7 +546,6 @@ class CalibratedTiming:
     def update_activity_config(self, activity_config: dict):
         """Hot-update activity pattern config."""
         self._activity_config = activity_config or {}
-        self._init_detection_hours()
 
     def record_activity(self) -> None:
         self._last_activity_time = time.time()
