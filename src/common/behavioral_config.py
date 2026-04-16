@@ -128,21 +128,189 @@ def resolve_behavioral_config_dir(config_key: str, override_dir: Optional[str] =
 
 def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfig:
     """
-    Load behavioral config files from the behavioral configurations directory.
+    Load behavioral config for a SUP.
 
-    Missing files are silently skipped (fields stay None).
+    Prefers the consolidated `behavior.json` layout emitted by the PHASE
+    Feedback Engine from 2026-04-16 onward. Falls back to the legacy 8-file
+    layout (one JSON per BehavioralConfig field) if behavior.json is absent,
+    so deployments generated before the cutover still load.
+
+    The 8 BehavioralConfig dataclass fields are populated from behavior.json
+    sections per the mapping documented in `_from_behavior_json()` below.
 
     Args:
         config_dir: Path to the behavioral configurations directory
-        config_key: SUP config key for filename prefix
+        config_key: SUP config key (used for legacy filename prefix)
 
     Returns:
         BehavioralConfig with loaded data, or empty config if dir not found
     """
+    if not config_dir.exists():
+        return BehavioralConfig()
+
+    # New consolidated layout: single behavior.json
+    consolidated = config_dir / "behavior.json"
+    if consolidated.exists():
+        try:
+            with open(consolidated, "r") as f:
+                return _from_behavior_json(json.load(f))
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[behavior] Warning: Failed to load {consolidated.name}: {e}")
+            return BehavioralConfig()
+
+    # Legacy 8-file fallback — kept for the transition window. Remove once
+    # all live PHASE feedback sources have been regenerated in the new layout.
+    return _load_legacy_8_file(config_dir, config_key)
+
+
+def _from_behavior_json(data: dict) -> BehavioralConfig:
+    """
+    Unpack a consolidated behavior.json into the 8 BehavioralConfig fields.
+
+    The loader translates the new schema into the exact shape downstream
+    consumers already read — dataclass fields are unchanged, but a few
+    sections are re-keyed/re-nested so CalibratedTiming, emulation_loop,
+    BackgroundServiceGenerator, and the brain loops see the structure they
+    were written against. Keeping the translation here is what lets
+    runtime code stay untouched.
+
+    Section mapping and shape translation:
+
+      timing.hourly_distribution
+        → timing_profile.hourly_distribution.mean_fraction
+      timing.burst_percentiles.{connections_per_burst,idle_gap_minutes,burst_duration_minutes}
+        → timing_profile.burst_characteristics.*.percentiles
+      timing.variance.{cluster_size_sigma,idle_gap_sigma}
+        → variance_injection.* (pass-through scalars)
+      timing.variance.hourly_std_targets.{volume,duration}: [24]
+        → variance_injection.feature_variance_targets.{volume,duration}.hourly_std_target: [24]
+        (re-keyed: plural 'targets' → nested singular 'target' for phase_timing.py D1)
+      timing.activity_probability_per_hour
+        → activity_pattern.daily_shape.per_hour_activity_probability
+      content.workflow_weights
+        → workflow_weights (pass-through)
+      content.site_categories
+        → site_config.site_categories
+      behavior.{page_dwell,navigation_clicks,max_steps,...}
+        → behavior_modifiers.* (pass-through)
+      behavior.keep_alive_probability
+        → behavior_modifiers.connection_reuse.keep_alive_probability
+        (re-nested for MCHP G2 consumer in brains/mchp/agent.py)
+      diversity.background_services.dns_per_hour
+        → diversity_injection.background_services.dns_queries_per_hour
+        (re-keyed for background_services.py)
+      diversity.background_services.{http_head_per_hour,ntp_checks_per_day}
+        → diversity_injection.background_services.* (pass-through)
+      diversity.workflow_rotation
+        → diversity_injection.workflow_rotation (pass-through)
+      prompt_content
+        → prompt_augmentation.prompt_content
+
+    Sections absent from the file leave the corresponding BehavioralConfig
+    field as None (matches the per-file loader's "missing = skipped"
+    semantics). The _metadata section is ignored at runtime.
+    """
     config = BehavioralConfig()
 
-    if not config_dir.exists():
-        return config
+    timing = data.get("timing") or {}
+    if timing:
+        # timing_profile — shape expected by build_calibrated_timing_config()
+        hourly = timing.get("hourly_distribution")
+        burst_pct = timing.get("burst_percentiles") or {}
+        if hourly is not None or burst_pct:
+            config.timing_profile = {
+                "dataset": "feedback",
+                "hourly_distribution": {"mean_fraction": hourly},
+                "burst_characteristics": {
+                    "connections_per_burst": {
+                        "percentiles": burst_pct.get("connections_per_burst", {}),
+                    },
+                    "idle_gap_minutes": {
+                        "percentiles": burst_pct.get("idle_gap_minutes", {}),
+                    },
+                    "burst_duration_minutes": {
+                        "percentiles": burst_pct.get("burst_duration_minutes", {}),
+                    },
+                },
+            }
+
+        # variance_injection — scalar sigmas pass through; hourly arrays are
+        # re-keyed into the feature_variance_targets shape that phase_timing.py
+        # D1 already reads.
+        variance = timing.get("variance")
+        if variance is not None:
+            translated: dict = {}
+            if "cluster_size_sigma" in variance:
+                translated["cluster_size_sigma"] = variance["cluster_size_sigma"]
+            if "idle_gap_sigma" in variance:
+                translated["idle_gap_sigma"] = variance["idle_gap_sigma"]
+            hstd = variance.get("hourly_std_targets") or {}
+            if hstd:
+                fvt: dict = {}
+                if "volume" in hstd:
+                    fvt["volume"] = {"hourly_std_target": hstd["volume"]}
+                if "duration" in hstd:
+                    fvt["duration"] = {"hourly_std_target": hstd["duration"]}
+                if fvt:
+                    translated["feature_variance_targets"] = fvt
+            config.variance_injection = translated
+
+        # activity_pattern — wrap under daily_shape for phase_timing G3 consumer
+        activity_probs = timing.get("activity_probability_per_hour")
+        if activity_probs is not None:
+            config.activity_pattern = {
+                "daily_shape": {
+                    "per_hour_activity_probability": activity_probs,
+                },
+            }
+
+    content = data.get("content") or {}
+    if content:
+        ww = content.get("workflow_weights")
+        if ww is not None:
+            config.workflow_weights = ww
+        site_cats = content.get("site_categories")
+        if site_cats is not None:
+            config.site_config = {"site_categories": site_cats}
+
+    # behavior_modifiers — pass through most keys; re-nest keep_alive_probability
+    # under connection_reuse so MCHP's BrowseWeb G2 wiring still picks it up.
+    behavior = data.get("behavior")
+    if behavior is not None:
+        modifiers = dict(behavior)
+        if "keep_alive_probability" in modifiers:
+            kap = modifiers.pop("keep_alive_probability")
+            conn_reuse = dict(modifiers.get("connection_reuse") or {})
+            conn_reuse["keep_alive_probability"] = kap
+            modifiers["connection_reuse"] = conn_reuse
+        config.behavior_modifiers = modifiers
+
+    # diversity_injection — re-key dns_per_hour → dns_queries_per_hour so
+    # BackgroundServiceGenerator finds the hourly array without change.
+    diversity = data.get("diversity")
+    if diversity is not None:
+        translated_div = dict(diversity)
+        bg = diversity.get("background_services")
+        if bg is not None:
+            bg_translated = dict(bg)
+            if "dns_per_hour" in bg_translated:
+                bg_translated["dns_queries_per_hour"] = bg_translated.pop("dns_per_hour")
+            translated_div["background_services"] = bg_translated
+        config.diversity_injection = translated_div
+
+    if "prompt_content" in data:
+        config.prompt_augmentation = {"prompt_content": data.get("prompt_content", "")}
+
+    return config
+
+
+def _load_legacy_8_file(config_dir: Path, config_key: str) -> BehavioralConfig:
+    """Legacy loader — one JSON file per BehavioralConfig field.
+
+    Kept as a transition fallback. Each field supports both bare filenames
+    (per-behavior directory layout) and prefixed filenames (flat layout).
+    """
+    config = BehavioralConfig()
 
     file_map = {
         "workflow_weights": f"{config_key}_workflow_weights.json",

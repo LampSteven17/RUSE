@@ -178,15 +178,19 @@ def _parse_source_name(source_dir: Path) -> tuple[str, str, str]:
 
 
 def _is_valid_feedback_source(source_dir: Path, deploy_type: str | None) -> bool:
-    """Check whether source_dir contains the expected Stage 2 file layout.
+    """Check whether source_dir contains the expected file layout.
 
-    Post Stage 2 there is no manifest.json marker; validity is inferred
-    from the presence of the generator's output files:
-      RUSE    — {behavior}/{sup}/timing_profile.json  (8 per-SUP files per sup)
-      RAMPART — {bare_node}/user-roles.json          (per-node pyhuman configs)
-      GHOSTS  — npc-*/timeline.json                  (per-NPC timelines)
+    Validity is inferred from the presence of the generator's output files:
+      RUSE    — {behavior}/{sup}/behavior.json        (consolidated per-SUP file)
+                {behavior}/{sup}/timing_profile.json  (legacy 8-file fallback)
+      RAMPART — {bare_node}/user-roles.json           (per-node pyhuman configs)
+      GHOSTS  — npc-*/timeline.json                   (per-NPC timelines)
 
-    If deploy_type is None/unknown, accept any of the three patterns.
+    RUSE consolidated its 8 per-SUP JSONs into a single behavior.json as of
+    2026-04-16. The legacy timing_profile.json glob is kept so feedback
+    sources generated before the cutover still validate and deploy.
+
+    If deploy_type is None/unknown, accept any of the recognised patterns.
     """
     if not source_dir.is_dir():
         return False
@@ -196,14 +200,16 @@ def _is_valid_feedback_source(source_dir: Path, deploy_type: str | None) -> bool
     if deploy_type == "ghosts":
         return any(source_dir.glob("npc-*/timeline.json"))
     if deploy_type in ("ruse", "sup", None):
-        # Matches both new Stage 2 layout and any residual pre-Stage-2 layout
-        # that wrote {behavior}/{sup}/*.json (same path shape).
-        return any(source_dir.glob("*/*/timing_profile.json"))
+        return (
+            any(source_dir.glob("*/*/behavior.json"))
+            or any(source_dir.glob("*/*/timing_profile.json"))
+        )
 
     # Unknown type — accept any marker
     return (
         any(source_dir.glob("*/user-roles.json"))
         or any(source_dir.glob("npc-*/timeline.json"))
+        or any(source_dir.glob("*/*/behavior.json"))
         or any(source_dir.glob("*/*/timing_profile.json"))
     )
 
@@ -339,7 +345,8 @@ def generate_feedback_config(
     if not _is_valid_feedback_source(source_dir, "ruse"):
         output.error(
             f"ERROR: {source_dir} is not a valid RUSE feedback source "
-            f"(no {{behavior}}/{{sup}}/timing_profile.json files found)"
+            f"(no {{behavior}}/{{sup}}/behavior.json or legacy "
+            f"timing_profile.json files found)"
         )
         raise SystemExit(1)
 
