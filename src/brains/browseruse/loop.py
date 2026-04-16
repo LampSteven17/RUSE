@@ -111,20 +111,7 @@ class BrowserUseLoop(BaseEmulationLoop):
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:
-        """Apply BrowserUse-specific behavioral config: task_weights, max_steps."""
-        from common.behavioral_config import build_task_weights
-
-        # Site config — apply task weights to BrowseWeb workflow
-        if fc.site_config:
-            for w in self.workflows:
-                if getattr(w, 'name', '') == 'BrowseWeb':
-                    from brains.browseruse.workflows.browse_web import BROWSE_WEB_TASKS
-                    task_weights = build_task_weights(BROWSE_WEB_TASKS, fc.site_config)
-                    w.task_weights = task_weights
-                    if task_weights and self.logger:
-                        self.logger.info("[behavior] Applied task_weights to BrowseWeb")
-                    break
-
+        """Apply BrowserUse-specific behavioral config: max_steps, prompt augmentation."""
         # Behavior modifiers — max_steps per workflow
         if fc.behavior_modifiers:
             max_steps_global = fc.behavior_modifiers.get("max_steps")
