@@ -510,7 +510,9 @@ def _provision_and_install_neighborhood(
 
     vm_name = f"r-{dep_id}-neighborhood-0"
     rc_file = os.path.expanduser("~/vxn3kr-bot-rc")
-    flavor = "v1.2vcpu.4g"
+    # v1.small = 1 vCPU, 2 GB RAM — a probe daemon needs almost nothing.
+    # Avoids pressure on the v1.14vcpu.28g pool used by the SUPs.
+    flavor = "v1.small"
     image = "noble-amd64"
     network = "ext_net"
     keypair = "bot-desktop"
