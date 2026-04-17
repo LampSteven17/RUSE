@@ -124,11 +124,23 @@ fi
 echo "CRON_COUNT=$(sudo crontab -l 2>/dev/null | grep -cE 'mchp-(daily|weekly)' || echo 0)"
 echo "NOW=$(date +%s)"
 # Feedback feature checks (D1-G3)
+# Post-2026-04-16: PHASE emits exactly one file per SUP — behavior.json. Probe
+# for that filename specifically plus total *.json count so audit can flag:
+#   BC_HAS_BEHAVIOR=1, BC_FILES=1  → healthy feedback deploy
+#   BC_HAS_BEHAVIOR=0, BC_FILES=0  → baseline (V0/V1, no feedback)
+#   BC_HAS_BEHAVIOR=0, BC_FILES>0 → junk/legacy files (pre-consolidation)
+#   BC_HAS_BEHAVIOR=1, BC_FILES>1 → stale legacy JSONs alongside new file
 BC_DIR=$(ls -d /opt/ruse/deployed_sups/*/behavioral_configurations 2>/dev/null | head -1)
 if [ -n "$BC_DIR" ]; then
   echo "BC_FILES=$(ls "$BC_DIR"/*.json 2>/dev/null | wc -l)"
+  if [ -f "$BC_DIR/behavior.json" ]; then
+    echo "BC_HAS_BEHAVIOR=1"
+  else
+    echo "BC_HAS_BEHAVIOR=0"
+  fi
 else
   echo "BC_FILES=0"
+  echo "BC_HAS_BEHAVIOR=0"
 fi
 SYSLOG=$(ls -t /opt/ruse/deployed_sups/*/logs/systemd.log 2>/dev/null | head -1)
 if [ -n "$SYSLOG" ]; then
@@ -264,28 +276,55 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         else:
             checks["cron"] = "MISSING"
 
-    # 8. Behavioral config files present
+    # 8. Behavioral config files present (post-2026-04-16 consolidation)
+    # Expected state:
+    #   V0/V1 baseline: BC_FILES=0, BC_HAS_BEHAVIOR=0 → n/a
+    #   V2+ feedback:   BC_FILES=1, BC_HAS_BEHAVIOR=1 → OK
+    #   Anything else is a misconfiguration that was silently OK'd pre-fix.
+    bc_files = int(probe.get("BC_FILES", "0") or "0")
+    bc_has_behavior = probe.get("BC_HAS_BEHAVIOR", "0") == "1"
+    is_v2_plus = any(c.isdigit() and int(c) >= 2 for c in behavior if c.isdigit())
     if behavior in ("C0", "M0"):
         checks["feedback"] = "n/a"
-    else:
-        bc_files = int(probe.get("BC_FILES", "0") or "0")
-        is_v2_plus = any(c.isdigit() and int(c) >= 2 for c in behavior if c.isdigit())
-        if bc_files > 0:
-            checks["feedback"] = f"OK ({bc_files} files)"
-        elif is_v2_plus:
+    elif is_v2_plus:
+        if bc_files == 1 and bc_has_behavior:
+            checks["feedback"] = "OK"
+        elif bc_files == 0:
             checks["feedback"] = "FAIL (no configs)"
+        elif not bc_has_behavior:
+            checks["feedback"] = f"FAIL (no behavior.json, {bc_files} junk files)"
         else:
-            checks["feedback"] = "n/a"  # V0/V1 baselines don't use feedback
+            checks["feedback"] = f"FAIL (stale: {bc_files} files incl. legacy)"
+    else:
+        # V0/V1 baseline — should have zero feedback files
+        if bc_files == 0:
+            checks["feedback"] = "n/a"
+        else:
+            checks["feedback"] = f"FAIL (baseline has {bc_files} unexpected configs)"
 
-    # 9. Feature warnings from runtime (D1-G3)
+    # 9. Feature warnings from runtime.
+    #
+    # [WARNING] lines are only emitted when load_behavioral_config() finds a
+    # non-empty behavior.json — the runtime's _reload_behavioral_config
+    # early-returns on fc.is_empty() before any warning code runs. So:
+    #   Baseline (bc_has_behavior=False): runtime never reaches warning paths,
+    #     silence is the expected state → n/a. Warnings on a baseline would
+    #     actually indicate an unexpected partial feedback-config load.
+    #   Feedback (bc_has_behavior=True):  runtime reached warning paths; any
+    #     [WARNING] means PHASE emitted a partial/malformed config → FAIL.
+    warn_count = int(probe.get("WARN_COUNT", "0") or "0")
     if behavior in ("C0", "M0"):
         checks["warnings"] = "n/a"
-    else:
-        warn_count = int(probe.get("WARN_COUNT", "0") or "0")
+    elif bc_has_behavior:
         if warn_count == 0:
             checks["warnings"] = "OK"
         else:
-            checks["warnings"] = f"WARN ({warn_count})"
+            checks["warnings"] = f"FAIL ({warn_count} unexpected warnings)"
+    else:
+        if warn_count == 0:
+            checks["warnings"] = "n/a (baseline)"
+        else:
+            checks["warnings"] = f"FAIL ({warn_count} warnings on baseline — unexpected)"
 
     # Post-pass: interpret IDLE correctly.
     # Ollama unloads idle models after OLLAMA_KEEP_ALIVE (default 5m).
@@ -471,8 +510,9 @@ def run_audit(deploy_dir: Path) -> int:
     # Per-VM check failures → issues
     for dep, vm, probe, checks in all_results:
         for check_name, status in checks.items():
-            if (status not in ("OK", "n/a", "?")
+            if (status != "?"
                 and not status.startswith("OK")
+                and not status.startswith("n/a")
                 and not status.startswith("EXPECTED")):
                 issues.append(f"{dep['name']}-{dep['run_id']}/{vm['name']}: {check_name}={status}")
         # Surface warning details from runtime logs
@@ -497,7 +537,7 @@ def run_audit(deploy_dir: Path) -> int:
 
     def _ok(v: str) -> bool:
         # "OK", "OK (idle)", "OK (24 GB)", "OK (12s ago)", "n/a", "EXPECTED ..." all count as pass
-        return v == "n/a" or v.startswith("OK") or v.startswith("EXPECTED")
+        return v.startswith("n/a") or v.startswith("OK") or v.startswith("EXPECTED")
 
     for (name, rid), entries in sorted(by_dep.items()):
         n = len(entries)
@@ -543,7 +583,7 @@ def _row_status(checks: dict) -> str:
     parts = []
     for k in ("ssh", "service", "process", "model", "gpu", "log", "cron", "feedback", "warnings"):
         v = checks.get(k, "?")
-        if v == "OK" or v.startswith("OK") or v == "n/a" or v.startswith("EXPECTED"):
+        if v.startswith("OK") or v.startswith("n/a") or v.startswith("EXPECTED"):
             parts.append(".")
         elif v == "?":
             parts.append("?")
@@ -587,7 +627,7 @@ def _write_markdown(
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     def _ok(v: str) -> bool:
-        return v == "n/a" or v.startswith("OK")
+        return v.startswith("n/a") or v.startswith("OK")
 
     for (name, rid), entries in sorted(by_dep.items()):
         n = len(entries)

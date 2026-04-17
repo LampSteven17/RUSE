@@ -380,6 +380,25 @@ class CalibratedTiming:
 
         self._init_variance_targets()
         self._init_per_hour_max()
+        self._init_activity_warnings()
+
+    def _init_activity_warnings(self):
+        """G5: Emit [WARNING] lines when activity_pattern fields are missing.
+
+        Without this, should_skip_hour/should_take_long_idle silently return
+        False/0 when the activity_config is empty — indistinguishable from a
+        baseline run with no PHASE feedback in systemd.log.
+        """
+        probs = (self._activity_config or {}).get("activity_probability_per_hour") or []
+        if not probs:
+            print("[WARNING] G5 activity_probability_per_hour DISABLED — "
+                  "no activity_pattern.activity_probability_per_hour, "
+                  "hourly activity suppression inactive")
+        prob = (self._activity_config or {}).get("long_idle_probability", 0)
+        if prob <= 0:
+            print("[WARNING] G5 long_idle_probability DISABLED — "
+                  "no activity_pattern.long_idle_probability, "
+                  "long-idle injection inactive")
 
     def _init_variance_targets(self):
         """D1: Extract per-hour sigma arrays from hourly_std_targets."""
@@ -546,6 +565,7 @@ class CalibratedTiming:
     def update_activity_config(self, activity_config: dict):
         """Hot-update activity pattern config."""
         self._activity_config = activity_config or {}
+        self._init_activity_warnings()
 
     def record_activity(self) -> None:
         self._last_activity_time = time.time()

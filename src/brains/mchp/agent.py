@@ -132,9 +132,17 @@ class MCHPAgent(BaseEmulationLoop):
                 w.max_sleep_time = int(page_dwell["max_seconds"])
             if "min_seconds" in page_dwell:
                 w.min_sleep_time = int(page_dwell["min_seconds"])
+            if "max_seconds" not in page_dwell and "min_seconds" not in page_dwell:
+                print("[WARNING] B1 page_dwell DISABLED — "
+                      "no behavior.page_dwell.{min,max}_seconds, "
+                      f"using defaults min={w.min_sleep_time} max={w.max_sleep_time}")
             nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
             if "max" in nav_clicks:
                 w.max_navigation_clicks = int(nav_clicks["max"])
+            else:
+                print("[WARNING] B2 navigation_clicks DISABLED — "
+                      "no behavior.navigation_clicks.max, "
+                      f"using default {w.max_navigation_clicks}")
             # G2: Connection reuse probability for tab management
             if "keep_alive_probability" in fc.behavior_modifiers:
                 w.keep_alive_probability = float(fc.behavior_modifiers["keep_alive_probability"])

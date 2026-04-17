@@ -201,10 +201,18 @@ def run_rampart_spinup(
         output.error("  FAIL: No endpoint VMs with users found — check simulate-logins.py output")
         return 1
 
-    # Register in PHASE experiments.json
+    # P1: PHASE registration is fail-loud — a registered-but-missing deploy
+    # means logs are collected by nothing. Consistent with the spinup.py
+    # fail-loud contract.
     snippet_path = run_dir / "ssh_config_snippet.txt"
     if snippet_path.exists():
-        _register_phase(snippet_path, deployment, run_id, deploy_dir)
+        if not _register_phase(snippet_path, deployment, run_id, deploy_dir):
+            output.error("")
+            output.error("ABORTING: PHASE experiments.json registration failed.")
+            output.error("RAMPART VMs are running but won't appear in PHASE analysis.")
+            return 1
+    else:
+        output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
 
     output.info("")
     output.info(f"DONE: RAMPART deployment {deployment}/{run_id}")
@@ -438,12 +446,18 @@ def _start_emulation(
 
 def _register_phase(
     snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path,
-) -> None:
-    """Register RAMPART deployment in PHASE experiments.json."""
+) -> bool:
+    """Register RAMPART deployment in PHASE experiments.json.
+
+    Returns True on success (or on skips that aren't failures — missing
+    register script = dev env). Returns False when registration was
+    attempted and failed, so the caller can abort.
+    """
     lib_dir = deploy_dir / "lib"
     register_script = lib_dir / "register_experiment.py"
     if not register_script.exists():
-        return
+        output.error(f"  WARNING: {register_script} not found — skipping PHASE registration")
+        return True
 
     inventory_path = snippet_path.parent / "inventory.ini"
 
@@ -466,15 +480,13 @@ def _register_phase(
         )
         if result.returncode == 0:
             output.info("  Registered in PHASE experiments.json")
-        else:
-            # Non-fatal but PHASE analysis won't find this deployment's logs
-            # without the experiments.json entry — surface the actual error.
-            err = (result.stderr or result.stdout or "").strip()[:200]
-            output.error(f"  WARNING: PHASE registration FAILED (rc={result.returncode}): {err}")
-            output.error(f"  Logs from this deploy will not be analyzed by PHASE inference.")
+            return True
+        err = (result.stderr or result.stdout or "").strip()[:400]
+        output.error(f"  ERROR: PHASE registration FAILED (rc={result.returncode}): {err}")
+        return False
     except Exception as e:
-        output.error(f"  WARNING: PHASE registration crashed ({type(e).__name__}): {e}")
-        output.error(f"  Logs from this deploy will not be analyzed by PHASE inference.")
+        output.error(f"  ERROR: PHASE registration crashed ({type(e).__name__}): {e}")
+        return False
 
 
 def _generate_emulation_inventory(

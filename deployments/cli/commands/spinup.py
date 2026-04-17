@@ -136,6 +136,27 @@ def run_ruse_spinup(
         on_event=default_event_handler,
     )
 
+    # I1: Fail-loud on install failures. Ansible exits rc=2 when any host
+    # fails a task — in our install-sups.yaml that means an S3/S4/S5
+    # assertion tripped (stage2 rc, service is-active, MCHP cron count).
+    # Previously spinup.py kept going, distributed configs to every VM
+    # (including the failed ones), registered in PHASE, and printed
+    # "DONE: 7/7 VMs deployed" even when one or more VMs never got a
+    # working service. Abort here so the operator sees the failure
+    # immediately and can diagnose from the Ansible log.
+    if install_result.rc != 0:
+        failed_hosts, succeeded_hosts = _parse_ansible_recap(install_result.log_path)
+        total = len(failed_hosts) + len(succeeded_hosts)
+        output.error("")
+        output.error(f"ABORTING: install-sups.yaml exited with rc={install_result.rc}")
+        if total > 0:
+            output.error(f"  {len(succeeded_hosts)}/{total} VMs passed install assertions")
+            if failed_hosts:
+                output.error(f"  Failed: {', '.join(sorted(failed_hosts))}")
+        output.error(f"  Log: {install_result.log_path}")
+        output.error("  Tear down with: ./teardown " + f"{config_name}-{run_id}")
+        return 1
+
     # Phase 2b: Distribute behavioral configs (if applicable)
     effective_source = behavior_source or config.behavior_source
     if effective_source:
@@ -163,7 +184,18 @@ def run_ruse_spinup(
         output.info("")
         install_ssh_config(snippet_path, f"{config_name}/{run_id}")
 
-    _register_phase(snippet_path, config_name, run_id, deploy_dir)
+    # P1: PHASE registration is fail-loud. Previously a registration failure
+    # printed a WARNING and the deploy continued, leaving VMs running but
+    # invisible to PHASE inference — logs collected but never analyzed. DONE
+    # must mean "every VM functional AND registered" per the fail-loud
+    # contract.
+    phase_ok = _register_phase(snippet_path, config_name, run_id, deploy_dir)
+    if not phase_ok:
+        output.error("")
+        output.error("ABORTING: PHASE experiments.json registration failed.")
+        output.error("VMs are running but logs won't be picked up by PHASE inference.")
+        output.error("Tear down and fix register_experiment.py, or register manually.")
+        return 1
 
     # Final summary
     output.info("")
@@ -174,6 +206,49 @@ def run_ruse_spinup(
 
 
 # --- Helpers ---
+
+def _parse_ansible_recap(log_path: Path) -> tuple[set[str], set[str]]:
+    """Parse PLAY RECAP from an Ansible log. Returns (failed_hosts, succeeded_hosts).
+
+    PLAY RECAP format:
+        hostname : ok=N  changed=N  unreachable=N  failed=N  skipped=N  rescued=N  ignored=N
+
+    A host is considered failed if failed>0 or unreachable>0. Otherwise succeeded.
+    Returns empty sets if log can't be read — caller still aborts on rc != 0.
+    """
+    failed: set[str] = set()
+    succeeded: set[str] = set()
+    if not log_path.exists():
+        return failed, succeeded
+    try:
+        text = log_path.read_text()
+    except OSError:
+        return failed, succeeded
+
+    # Find the PLAY RECAP section — everything after the last "PLAY RECAP"
+    recap_idx = text.rfind("PLAY RECAP")
+    if recap_idx == -1:
+        return failed, succeeded
+
+    recap = text[recap_idx:]
+    pat = re.compile(
+        r"^(\S+)\s*:\s*"
+        r"ok=(\d+)\s+"
+        r"changed=\d+\s+"
+        r"unreachable=(\d+)\s+"
+        r"failed=(\d+)",
+        re.MULTILINE,
+    )
+    for match in pat.finditer(recap):
+        host = match.group(1)
+        unreachable = int(match.group(3))
+        fails = int(match.group(4))
+        if unreachable > 0 or fails > 0:
+            failed.add(host)
+        else:
+            succeeded.add(host)
+    return failed, succeeded
+
 
 def _find_hosts_ini(config_dir: Path, deploy_dir: Path) -> Path | None:
     if (config_dir / "hosts.ini").exists():
@@ -264,52 +339,36 @@ def _test_ssh_all(hosts: list[dict], max_retries: int = 30, timeout: int = 10, d
     return ok_count
 
 
-def _register_phase(snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path) -> None:
-    """Register in PHASE experiments.json if available."""
+def _register_phase(snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path) -> bool:
+    """Register in PHASE experiments.json. Returns True on success, False on failure.
+
+    Returns True when the script is absent or the snippet is missing (no
+    registration was attempted or possible — not a failure). Returns False
+    only when registration was attempted and actually failed.
+    """
     if not snippet_path.exists():
-        return
+        output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
+        return True  # no snippet = earlier stage already aborted, don't double-fail
 
     lib_dir = deploy_dir / "lib"
     register_script = lib_dir / "register_experiment.py"
     if not register_script.exists():
-        return
+        output.error(f"  WARNING: {register_script} not found — skipping PHASE registration")
+        return True  # missing script = dev environment, not a deploy failure
 
     run_dir = snippet_path.parent
     inventory_path = run_dir / "inventory.ini"
 
-    try:
-        # Import register_experiment directly
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("register_experiment", register_script)
-        if spec and spec.loader:
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-
-            # Call main registration logic if the module has the right function
-            if hasattr(mod, "register"):
-                mod.register(
-                    name=config_name,
-                    snippet_path=str(snippet_path),
-                    inventory_path=str(inventory_path),
-                    run_id=run_id,
-                )
-                output.dim("  Registered in PHASE experiments.json")
-            elif hasattr(mod, "main"):
-                # Fall back to subprocess call
-                _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
-            else:
-                _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
-    except Exception as e:
-        # In-process import failed — fall back to subprocess (which will surface
-        # its own errors loudly via _register_phase_subprocess).
-        output.dim(f"  PHASE register import failed ({type(e).__name__}), trying subprocess...")
-        _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
+    # Prefer subprocess — it's the canonical path and surfaces rc directly.
+    # The previous import-based path silently swallowed ImportErrors and fell
+    # through to subprocess, hiding which path actually ran.
+    return _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
 
 
 def _register_phase_subprocess(
     snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path,
-) -> None:
-    """Fall back to subprocess call for PHASE registration."""
+) -> bool:
+    """Register via subprocess. Returns True on rc=0, False otherwise."""
     import subprocess
 
     lib_dir = deploy_dir / "lib"
@@ -330,9 +389,10 @@ def _register_phase_subprocess(
         )
         if result.returncode == 0:
             output.dim("  Registered in PHASE experiments.json")
-        else:
-            err = (result.stderr or result.stdout or "").strip()[:200]
-            output.error(f"  WARNING: PHASE registration FAILED (rc={result.returncode}): {err}")
-            output.error(f"  Logs from this deploy will not be analyzed by PHASE inference.")
+            return True
+        err = (result.stderr or result.stdout or "").strip()[:400]
+        output.error(f"  ERROR: PHASE registration FAILED (rc={result.returncode}): {err}")
+        return False
     except Exception as e:
-        output.error(f"  WARNING: PHASE registration crashed ({type(e).__name__}): {e}")
+        output.error(f"  ERROR: PHASE registration crashed ({type(e).__name__}): {e}")
+        return False

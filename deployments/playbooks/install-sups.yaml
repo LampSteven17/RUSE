@@ -121,12 +121,29 @@
       failed_when: false
 
     - name: Assert SUP service is active
+      # M0 exemption: M0 is unmodified upstream MITRE pyhuman. On Linux it
+      # crash-loops intentionally (os.startfile is Windows-only;
+      # /root/Downloads path hardcoded; pyhuman's Chrome session flakes).
+      # Mirrors audit.py which reports M0 service as
+      # "EXPECTED (M0 upstream crashes on Linux)". Without this exemption
+      # the S4 assertion races the crash-restart cycle and fails whenever
+      # Ansible catches the service in "activating" instead of "active".
       fail:
         msg: >-
           SUP service {{ sup_behavior | lower | replace('.', '_') }}.service is
           '{{ service_status.stdout }}' on {{ inventory_hostname }} (expected: active).
           Check: journalctl, /opt/ruse/deployed_sups/{{ sup_behavior }}/logs/systemd.log
-      when: service_status.stdout != "active"
+      when:
+        - service_status.stdout != "active"
+        - sup_behavior != "M0"
+
+    - name: Note M0 service state (crash-loop expected)
+      debug:
+        msg: >-
+          M0 service is '{{ service_status.stdout }}' on {{ inventory_hostname }}.
+          This is the expected baseline — upstream pyhuman is Linux-incompatible
+          and crash-loops. Audit will report 'EXPECTED (M0 upstream crashes on Linux)'.
+      when: sup_behavior == "M0"
 
     # MCHP brains have a slow Selenium/pyautogui memory leak. Schedule a daily
     # service restart at 03:00 UTC + a weekly full VM reboot Sundays at 04:00 UTC
