@@ -109,12 +109,17 @@
       when: compose_result.rc != 0 or 'ERROR' in (compose_result.stdout | default(''))
 
     - name: Wait for GHOSTS API health
+      # Upstream CMU-SEI GHOSTS removed /api/home — Kestrel now returns 404
+      # on that path even when the API is healthy. /api/machines is the
+      # oldest, most stable REST endpoint: returns 200 with [] on empty DB.
+      # 404 → API up but routes missing (upstream breakage); 500 → API up
+      # but DB not migrated. Both correctly fail this check.
       uri:
-        url: "http://localhost:5000/api/home"
+        url: "http://localhost:5000/api/machines"
         method: GET
-        status_code: [200, 302]
+        status_code: [200]
       register: api_health
-      until: api_health.status is defined and api_health.status in [200, 302]
+      until: api_health.status is defined and api_health.status == 200
       retries: 30
       delay: 10
       # No ignore_errors: if API never starts after 5 minutes that's a deploy
@@ -123,8 +128,8 @@
 
     - name: Assert GHOSTS API is responding
       fail:
-        msg: "GHOSTS API failed to start after 5 minutes. Check: docker logs on {{ inventory_hostname }}, port 5000 availability, image pull."
-      when: api_health.status is not defined or api_health.status not in [200, 302]
+        msg: "GHOSTS API failed to respond healthy on /api/machines after 5 minutes. Check: 'docker ps' + 'docker logs ghosts-api' on {{ inventory_hostname }}, port 5000 availability, image pull, DB migration."
+      when: api_health.status is not defined or api_health.status != 200
 
     - name: Report API status
       debug:
