@@ -32,7 +32,7 @@ from typing import Optional, Literal
 
 BrainType = Literal["mchp", "browseruse", "smolagents"]
 ContentType = Literal["none", "llm"]
-ModelType = Literal["llama", "gemma", "deepseek", "lfm", "ministral", "qwen"]
+ModelType = Literal["llama", "gemma", "gemmac", "deepseek", "lfm", "ministral", "qwen"]
 
 @dataclass
 class SUPConfig:

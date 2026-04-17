@@ -42,7 +42,8 @@ Configuration Keys:
         help="Configuration key (e.g., M1, B3.gemma, S2.llama)")
     parser.add_argument("--brain", choices=["mchp", "browseruse", "smolagents"], default=None)
     parser.add_argument("--content", choices=["none", "llm"], default="none")
-    parser.add_argument("--model", choices=["llama", "gemma"], default="llama")
+    parser.add_argument("--model", choices=["llama", "gemma", "gemmac"], default="llama",
+        help="llama=llama3.1:8b (GPU), gemma=gemma4:26b (V100), gemmac=gemma4:e2b (CPU)")
     parser.add_argument("--calibration", choices=["summer24", "fall24", "spring25"], default=None,
         help="Calibration timing profile (semester)")
     parser.add_argument("--phase", action="store_true",

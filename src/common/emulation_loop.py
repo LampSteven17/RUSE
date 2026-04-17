@@ -224,6 +224,19 @@ class BaseEmulationLoop(ABC):
         if not has_prompt_aug:
             print("[WARNING] G1 prompt_augmentation DISABLED — "
                   "no prompt_augmentation.prompt_content")
+        # W4: workflow_weights absent on a non-empty feedback config = partial
+        # PHASE output (content.workflow_weights missing). Agent falls back to
+        # uniform random — indistinguishable from baseline without this warning.
+        if not fc.workflow_weights:
+            print("[WARNING] W4 workflow_weights DISABLED — "
+                  "no content.workflow_weights, using uniform random selection")
+        # W3: site_config is loaded from content.site_categories but currently
+        # has no runtime consumer. Emit a warning when PHASE provides it so
+        # operators know their effort isn't reaching the agent. Remove this
+        # warning when site-category filtering is wired into _select_workflow.
+        if fc.site_config:
+            print("[WARNING] W3 site_config UNUSED — "
+                  "content.site_categories loaded but no runtime consumer yet")
 
     # ── Workflow selection ────────────────────────────────────────────
 
