@@ -474,6 +474,10 @@ def run_audit(deploy_dir: Path) -> int:
         inv_names = {vm["name"] for vm in dep["vms"]}
         os_for_dep = {n for n in all_os_servers if n.startswith(_dep_prefix(dep))}
         orphans = os_for_dep - inv_names
+        # Neighborhood sidecars are legitimately in OpenStack but not in the
+        # main sup_hosts inventory (they're in neighborhood-inventory.ini).
+        # Exclude them from the orphan list.
+        orphans = {n for n in orphans if not n.endswith("-neighborhood-0")}
         missing = inv_names - os_for_dep
         for vm_name in orphans:
             issues.append(f"{dep['name']}-{dep['run_id']}: ORPHAN on OpenStack: {vm_name}")

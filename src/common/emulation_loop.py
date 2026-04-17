@@ -175,11 +175,19 @@ class BaseEmulationLoop(ABC):
         elif self.calibration_profile and self._phase_timing is None:
             # Deferred startup init: behavior_config_dir was set but no timing_profile
             # in the feedback configs. Fall back to baseline calibration profile.
-            self._init_calibrated_timing()
-            if self._phase_timing and fc.variance_injection:
-                self._phase_timing.update_variance_config(fc.variance_injection)
-            if self._phase_timing and fc.activity_pattern:
-                self._phase_timing.update_activity_config(fc.activity_pattern)
+            # Pass ablation_gated so the D1/D3/G5 warnings emit as [INFO] when
+            # PHASE deliberately omitted the timing section (sum24 / vt-fall22).
+            # Without this the fallback CalibratedTiming() call re-fires WARNINGs
+            # that audit counts as unexpected.
+            from common.timing.phase_timing import CalibratedTiming, load_calibration_profile
+            config = load_calibration_profile(self.calibration_profile)
+            self._phase_timing = CalibratedTiming(
+                config,
+                variance_config=fc.variance_injection,
+                activity_config=fc.activity_pattern,
+                ablation_gated=fc.is_ablation_gated(),
+            )
+            print(f"Calibrated timing ({self.calibration_profile}) - activity level: {self._phase_timing.get_activity_level()}")
         elif self._phase_timing:
             if fc.variance_injection:
                 self._phase_timing.update_variance_config(fc.variance_injection)
