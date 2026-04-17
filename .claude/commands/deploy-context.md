@@ -98,10 +98,14 @@ and `/deploy-ghosts` for the new read-direct flows.
 ./deploy --rampart                           # Enterprise baseline
 ./deploy --ghosts                            # GHOSTS NPCs baseline
 
-# Batch deploy: deploys ALL available PHASE feedback configs for a type
-./deploy --ruse --feedback --batch           # all RUSE feedback variants
-./deploy --rampart --feedback --batch        # all RAMPART feedback variants
-./deploy --ghosts --feedback --batch         # all GHOSTS feedback variants
+# Batch deploy is the DEFAULT when --feedback (or granular flag) is given
+# without a single-target selector (--target / --source / positional name).
+./deploy --ruse --feedback                   # all RUSE feedback variants (batch)
+./deploy --rampart --feedback                # all RAMPART feedback variants (batch)
+./deploy --ghosts --feedback                 # all GHOSTS feedback variants (batch)
+# Single-dataset deploys (explicit selectors — skip batch):
+./deploy --ruse --feedback --target sum24    # single RUSE deploy
+./deploy --ruse --feedback --source /p       # explicit PHASE source (single)
 # (Discovers via find_all_feedback_sources() in feedback.py — scans
 #  ~/PHASE/feedback_engine/configs/ for matching dirs, shows them,
 #  prompts for confirmation, then deploys each in sequence with a final summary.)
