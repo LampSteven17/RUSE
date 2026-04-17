@@ -39,7 +39,7 @@ class BehavioralConfig:
     timing_profile: Optional[dict] = None       # calibrated timing profile
     # Feedback engine v2 configs
     variance_injection: Optional[dict] = None   # volume/timing variance targets
-    diversity_injection: Optional[dict] = None   # service entropy + workflow rotation
+    diversity_injection: Optional[dict] = None   # service entropy + workflow rotation + topology mimicry
     activity_pattern: Optional[dict] = None      # daily activity shape
     # PHASE ablation gate metadata — explains why sections may be intentionally
     # absent. When present, missing sections are not bugs but deliberate
@@ -55,6 +55,21 @@ class BehavioralConfig:
                     self.timing_profile,
                     self.variance_injection, self.diversity_injection,
                     self.activity_pattern])
+
+    def topology_mimicry(self) -> Optional[dict]:
+        """Return PHASE's topology_mimicry rates for this SUP, or None.
+
+        Populated by PHASE as diversity.topology_mimicry. Consumed off-host
+        by the per-deploy neighborhood sidecar VM — the SUP itself does not
+        act on these values. Sidecar aggregates each SUP's rates into a
+        sups.json master config and synthesizes inbound TCP/UDP probes
+        targeting each SUP IP.
+
+        See docs/topology-mimicry.md for the full rate schema and rationale.
+        """
+        if not self.diversity_injection:
+            return None
+        return self.diversity_injection.get("topology_mimicry")
 
     def is_ablation_gated(self) -> bool:
         """True if PHASE's ablation engine gated any sections off.
