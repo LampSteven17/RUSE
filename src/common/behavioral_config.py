@@ -41,6 +41,12 @@ class BehavioralConfig:
     variance_injection: Optional[dict] = None   # volume/timing variance targets
     diversity_injection: Optional[dict] = None   # service entropy + workflow rotation
     activity_pattern: Optional[dict] = None      # daily activity shape
+    # PHASE ablation gate metadata — explains why sections may be intentionally
+    # absent. When present, missing sections are not bugs but deliberate
+    # omissions by PHASE's feedback engine (ablation showed that section's
+    # knobs don't move the score on this dataset's target model). Runtime
+    # code should emit [INFO] instead of [WARNING] in that case.
+    ablation_gate: Optional[dict] = None
 
     def is_empty(self) -> bool:
         return all(v is None for v in
@@ -49,6 +55,23 @@ class BehavioralConfig:
                     self.timing_profile,
                     self.variance_injection, self.diversity_injection,
                     self.activity_pattern])
+
+    def is_ablation_gated(self) -> bool:
+        """True if PHASE's ablation engine gated any sections off.
+
+        Used by warning emitters to distinguish intentional omissions
+        from unexpected ones.
+        """
+        if not self.ablation_gate:
+            return False
+        # ablation is active if any feature is in inactive/flat_zero OR
+        # gating_features is set (the presence of gate metadata at all
+        # means PHASE consciously decided what to include).
+        return bool(
+            self.ablation_gate.get("inactive")
+            or self.ablation_gate.get("flat_zero")
+            or self.ablation_gate.get("gating_features")
+        )
 
 
 def config_key_to_behavior_dir(config_key: str) -> str:
@@ -172,6 +195,10 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
     if "prompt_content" in data:
         prompt = {"prompt_content": data["prompt_content"]}
 
+    # Pull ablation gate metadata if PHASE emitted it. Presence signals
+    # that missing sections are deliberate omissions, not generator bugs.
+    ablation_gate = (data.get("_metadata") or {}).get("ablation_gate")
+
     return BehavioralConfig(
         timing_profile=timing or None,
         variance_injection=timing.get("variance"),
@@ -181,6 +208,7 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         behavior_modifiers=data.get("behavior"),
         diversity_injection=data.get("diversity"),
         prompt_augmentation=prompt,
+        ablation_gate=ablation_gate,
     )
 
 

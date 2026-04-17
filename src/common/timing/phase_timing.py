@@ -365,11 +365,15 @@ class CalibratedTiming:
     _PERCENTILE_KEYS = ["5", "25", "50", "75", "95"]
 
     def __init__(self, config: CalibratedTimingConfig, variance_config: dict = None,
-                 activity_config: dict = None):
+                 activity_config: dict = None, ablation_gated: bool = False):
         self.config = config
         self._last_activity_time: Optional[float] = None
         self._variance_config = variance_config or {}
         self._activity_config = activity_config or {}
+        # When ablation_gated, missing fields are intentional PHASE omissions
+        # (the ablation engine proved the lever doesn't move score). Warnings
+        # get downgraded to INFO so operators/audit can distinguish.
+        self._ablation_gated = ablation_gated
 
         # Normalize hourly fractions so peak hour = 1.0
         max_fraction = max(config.hourly_fractions)
@@ -387,18 +391,22 @@ class CalibratedTiming:
 
         Without this, should_skip_hour/should_take_long_idle silently return
         False/0 when the activity_config is empty — indistinguishable from a
-        baseline run with no PHASE feedback in systemd.log.
+        baseline run with no PHASE feedback in systemd.log. Downgraded to
+        [INFO] when ablation-gated.
         """
+        tag = "[INFO]" if self._ablation_gated else "[WARNING]"
+        suffix = " (ablation-gated)" if self._ablation_gated else ""
+
         probs = (self._activity_config or {}).get("activity_probability_per_hour") or []
         if not probs:
-            print("[WARNING] G5 activity_probability_per_hour DISABLED — "
-                  "no activity_pattern.activity_probability_per_hour, "
-                  "hourly activity suppression inactive")
+            print(f"{tag} G5 activity_probability_per_hour DISABLED — "
+                  f"no activity_pattern.activity_probability_per_hour, "
+                  f"hourly activity suppression inactive{suffix}")
         prob = (self._activity_config or {}).get("long_idle_probability", 0)
         if prob <= 0:
-            print("[WARNING] G5 long_idle_probability DISABLED — "
-                  "no activity_pattern.long_idle_probability, "
-                  "long-idle injection inactive")
+            print(f"{tag} G5 long_idle_probability DISABLED — "
+                  f"no activity_pattern.long_idle_probability, "
+                  f"long-idle injection inactive{suffix}")
 
     def _init_variance_targets(self):
         """D1: Extract per-hour sigma arrays from hourly_std_targets."""
@@ -409,14 +417,17 @@ class CalibratedTiming:
         self._volume_hourly_std = hstd.get("volume", {}).get("hourly_std_target", [])
         self._duration_hourly_std = hstd.get("duration", {}).get("hourly_std_target", [])
 
+        tag = "[INFO]" if self._ablation_gated else "[WARNING]"
+        suffix = " (ablation-gated)" if self._ablation_gated else ""
+
         if not self._volume_hourly_std:
-            print("[WARNING] D1 per-hour volume sigma DISABLED — "
-                  "no variance.hourly_std_targets.volume.hourly_std_target, "
-                  "using scalar cluster_size_sigma fallback")
+            print(f"{tag} D1 per-hour volume sigma DISABLED — "
+                  f"no variance.hourly_std_targets.volume.hourly_std_target, "
+                  f"using scalar cluster_size_sigma fallback{suffix}")
         if not self._duration_hourly_std:
-            print("[WARNING] D1 per-hour duration sigma DISABLED — "
-                  "no variance.hourly_std_targets.duration.hourly_std_target, "
-                  "using scalar idle_gap_sigma fallback")
+            print(f"{tag} D1 per-hour duration sigma DISABLED — "
+                  f"no variance.hourly_std_targets.duration.hourly_std_target, "
+                  f"using scalar idle_gap_sigma fallback{suffix}")
 
     def _init_per_hour_max(self):
         """D3: Compute per-hour cluster size cap from profile data."""
@@ -432,11 +443,15 @@ class CalibratedTiming:
             for h in range(24):
                 hour_scale = self.config.hourly_fractions[h] / peak_fraction
                 self._per_hour_max[h] = max(5, int(profile_max * hour_scale))
-            print("[WARNING] D3 per-hour max using hourly_fractions only — "
-                  "no per-hour std data for tighter caps")
+            tag = "[INFO]" if self._ablation_gated else "[WARNING]"
+            suffix = " (ablation-gated)" if self._ablation_gated else ""
+            print(f"{tag} D3 per-hour max using hourly_fractions only — "
+                  f"no per-hour std data for tighter caps{suffix}")
         else:
-            print("[WARNING] D3 per-hour max cap DISABLED — "
-                  "using hardcoded 200, no hourly_fractions available")
+            tag = "[INFO]" if self._ablation_gated else "[WARNING]"
+            suffix = " (ablation-gated)" if self._ablation_gated else ""
+            print(f"{tag} D3 per-hour max cap DISABLED — "
+                  f"using hardcoded 200, no hourly_fractions available{suffix}")
 
     def _sample_percentile(self, percentiles: dict) -> float:
         """Sample by interpolating between p5/p25/p50/p75/p95 breakpoints."""

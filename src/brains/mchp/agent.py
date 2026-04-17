@@ -121,7 +121,16 @@ class MCHPAgent(BaseEmulationLoop):
 
     def _apply_brain_specific_config(self, fc) -> None:
         """Apply MCHP-specific behavioral config: page_dwell, nav_clicks, keep_alive."""
+        # Ablation-gated omissions get INFO-level logs; real gaps stay WARNING
+        gated = fc.is_ablation_gated() if fc and hasattr(fc, "is_ablation_gated") else False
+        tag = "[INFO]" if gated else "[WARNING]"
+        suffix = " (ablation-gated)" if gated else ""
         if not fc.behavior_modifiers:
+            # Whole section missing — one message instead of three below
+            print(f"{tag} behavior_modifiers DISABLED — "
+                  f"no behavior section in behavior.json, "
+                  f"using MCHP defaults for page_dwell, navigation_clicks, keep_alive_probability"
+                  f"{suffix}")
             return
 
         for w in self.workflows:
@@ -133,23 +142,26 @@ class MCHPAgent(BaseEmulationLoop):
             if "min_seconds" in page_dwell:
                 w.min_sleep_time = int(page_dwell["min_seconds"])
             if "max_seconds" not in page_dwell and "min_seconds" not in page_dwell:
-                print("[WARNING] B1 page_dwell DISABLED — "
-                      "no behavior.page_dwell.{min,max}_seconds, "
-                      f"using defaults min={w.min_sleep_time} max={w.max_sleep_time}")
+                print(f"{tag} B1 page_dwell DISABLED — "
+                      f"no behavior.page_dwell.{{min,max}}_seconds, "
+                      f"using defaults min={w.min_sleep_time} max={w.max_sleep_time}"
+                      f"{suffix}")
             nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
             if "max" in nav_clicks:
                 w.max_navigation_clicks = int(nav_clicks["max"])
             else:
-                print("[WARNING] B2 navigation_clicks DISABLED — "
-                      "no behavior.navigation_clicks.max, "
-                      f"using default {w.max_navigation_clicks}")
+                print(f"{tag} B2 navigation_clicks DISABLED — "
+                      f"no behavior.navigation_clicks.max, "
+                      f"using default {w.max_navigation_clicks}"
+                      f"{suffix}")
             # G2: Connection reuse probability for tab management
             if "keep_alive_probability" in fc.behavior_modifiers:
                 w.keep_alive_probability = float(fc.behavior_modifiers["keep_alive_probability"])
             else:
-                print("[WARNING] G2 keep_alive_probability DISABLED — "
-                      "no behavior.keep_alive_probability, "
-                      f"using default {w.keep_alive_probability}")
+                print(f"{tag} G2 keep_alive_probability DISABLED — "
+                      f"no behavior.keep_alive_probability, "
+                      f"using default {w.keep_alive_probability}"
+                      f"{suffix}")
             if self.logger:
                 self.logger.info("[behavior] Applied behavior_modifiers to BrowseWeb",
                                  details=fc.behavior_modifiers)
