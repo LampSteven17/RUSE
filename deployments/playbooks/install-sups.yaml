@@ -49,15 +49,26 @@
       changed_when: false
       timeout: 300
 
+    # Retry the early fetch tasks — apt mirrors and github.com both flake
+    # with "unknown reason" on fresh VMs. These retries don't mask failure:
+    # after N attempts the task still fails loud and spinup.py aborts.
     - name: Update apt cache
       apt:
         update_cache: yes
         cache_valid_time: 3600
+      register: apt_cache_update
+      until: apt_cache_update is succeeded
+      retries: 3
+      delay: 30
 
     - name: Install prerequisites
       apt:
         name: [git, curl, wget]
         state: present
+      register: apt_prereqs
+      until: apt_prereqs is succeeded
+      retries: 3
+      delay: 30
 
     - name: Clone RUSE repo
       git:
@@ -65,6 +76,10 @@
         dest: "{{ ruse_path }}"
         version: "{{ ruse_branch }}"
         force: yes
+      register: clone_ruse
+      until: clone_ruse is succeeded
+      retries: 3
+      delay: 15
 
     - name: Make INSTALL_SUP.sh executable
       file:
