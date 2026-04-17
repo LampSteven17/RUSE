@@ -89,6 +89,53 @@
         executable: /bin/bash
       changed_when: true
 
+    # Optional Docker Hub login — bypasses the 100-pull/6hr unauthenticated
+    # rate limit that bit the 7th deploy in a batch run. If ~/.docker-hub-token
+    # exists on the mlserv controller (not on the VM), it's copied over and
+    # used for authenticated pulls (200/6hr limit). Missing file = unauth pulls
+    # and a clearer error on rate-limit trip.
+    - name: Check for Docker Hub token on controller
+      stat:
+        path: "{{ lookup('env', 'HOME') }}/.docker-hub-token"
+      delegate_to: localhost
+      register: dh_token_file
+      become: false
+
+    - name: Check for Docker Hub username on controller
+      stat:
+        path: "{{ lookup('env', 'HOME') }}/.docker-hub-token-user"
+      delegate_to: localhost
+      register: dh_user_file
+      become: false
+
+    - name: Stage Docker Hub credentials on VM
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dst }}"
+        mode: '0600'
+      loop:
+        - { src: "{{ lookup('env', 'HOME') }}/.docker-hub-token",      dst: /tmp/.dh-token }
+        - { src: "{{ lookup('env', 'HOME') }}/.docker-hub-token-user", dst: /tmp/.dh-user }
+      when: dh_token_file.stat.exists and dh_user_file.stat.exists
+
+    - name: Authenticate to Docker Hub
+      shell: |
+        set -euo pipefail
+        USER=$(cat /tmp/.dh-user)
+        cat /tmp/.dh-token | docker login -u "$USER" --password-stdin
+      args:
+        executable: /bin/bash
+      when: dh_token_file.stat.exists and dh_user_file.stat.exists
+
+    - name: Remove staged Docker Hub credentials
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/.dh-token
+        - /tmp/.dh-user
+      when: dh_token_file.stat.exists and dh_user_file.stat.exists
+
     - name: Start GHOSTS API stack
       shell: |
         set -euo pipefail
@@ -99,13 +146,35 @@
       async: 900
       poll: 15
       register: compose_result
+      # Retry once on transient pull failures. Docker Hub rate-limit
+      # errors may clear on their own; image pulls from slow mirrors
+      # sometimes flake. Second attempt skips build cache so it's a
+      # genuine retry, not a replay of cached failure.
+      until: compose_result.rc == 0
+      retries: 1
+      delay: 60
+
+    - name: Detect Docker Hub rate-limit in compose output
+      # When the rate limit trips, compose exits rc=1 with a very specific
+      # stderr. Surface that verbatim so the operator knows what happened
+      # without digging through the Ansible log.
+      fail:
+        msg: >-
+          Docker Hub UNAUTH RATE LIMIT hit on {{ inventory_hostname }}.
+          Images couldn't pull: {{ compose_result.stderr | default('') | regex_search('Image [^ ]+ Error[^\\n]+', multiline=True) }}
+          Wait 6h, or place a Docker Hub PAT at ~/.docker-hub-token on mlserv
+          (with username in ~/.docker-hub-token-user) to switch to 200/6hr auth.
+      when:
+        - compose_result.rc is defined
+        - compose_result.rc != 0
+        - "'pull rate limit' in (compose_result.stderr | default(''))"
 
     - name: Assert docker compose build + up succeeded
       # With set -euo pipefail in the shell the task would already fail on
       # non-zero rc, but docker compose sometimes returns rc=0 while emitting
       # "ERROR" during the build phase. Catch that too.
       fail:
-        msg: "docker compose up reported errors (rc={{ compose_result.rc }}): {{ compose_result.stdout | default('') | regex_search('ERROR.*', multiline=True) }}"
+        msg: "docker compose up reported errors (rc={{ compose_result.rc }}): {{ compose_result.stderr | default(compose_result.stdout) | default('') | regex_search('ERROR.*', multiline=True) }}"
       when: compose_result.rc != 0 or 'ERROR' in (compose_result.stdout | default(''))
 
     - name: Wait for GHOSTS API health
