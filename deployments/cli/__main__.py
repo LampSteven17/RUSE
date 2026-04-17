@@ -41,22 +41,19 @@ RUSE-only granular flags (combine any):
   --variance            variance_injection.json
   --all-feedback        all of the above (same as --feedback)
 
+Feedback without --target/--source = batch over every discovered dataset.
+Pass --target or --source to deploy a single dataset.
+
 examples:
   ./deploy --ruse                          baseline controls (no feedback)
-  ./deploy --ruse --feedback               all PHASE behavioral configs
-  ./deploy --ruse --timing                 timing feedback only
-  ./deploy --ruse --timing --workflow      timing + workflow weights
-  ./deploy --ruse --all-feedback           all behavioral configs (same as --feedback)
-  ./deploy --ruse --feedback --source ~/p  explicit PHASE source
-  ./deploy --ghosts --feedback             GHOSTS + PHASE feedback
-  ./deploy --rampart                       RAMPART enterprise network
-  ./deploy --rampart --feedback            RAMPART + PHASE per-node roles
-
-batch deploy (all available feedback configs):
-  ./deploy --rampart --feedback --batch    deploy all RAMPART feedback configs
-  ./deploy --ghosts --feedback --batch     deploy all GHOSTS feedback configs
-  ./deploy --ruse --feedback --batch       deploy all RUSE feedback configs
-  ./deploy --ruse --timing --batch         deploy all RUSE timing-only configs""",
+  ./deploy --ruse --feedback               ALL PHASE feedback datasets (batch)
+  ./deploy --ruse --feedback --target sum24  single dataset
+  ./deploy --ruse --timing                 ALL datasets, timing-only (batch)
+  ./deploy --ruse --timing --target sum24  single dataset, timing-only
+  ./deploy --ruse --feedback --source ~/p  explicit PHASE source (single)
+  ./deploy --ghosts --feedback             ALL GHOSTS feedback datasets (batch)
+  ./deploy --rampart                       RAMPART baseline (no feedback)
+  ./deploy --rampart --feedback            ALL RAMPART feedback datasets (batch)""",
     )
     p.add_argument("--ruse", action="store_true", help="Deploy RUSE SUP agents (default)")
     p.add_argument("--rampart", action="store_true", help="Deploy RAMPART enterprise network")
@@ -77,9 +74,8 @@ batch deploy (all available feedback configs):
     p.add_argument("--variance", action="store_true", help="Include variance_injection.json (RUSE only)")
     p.add_argument("--all-feedback", action="store_true", dest="all_configs", help="All behavioral configs (same as --feedback)")
 
-    p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory")
-    p.add_argument("--target", type=str, help="Dataset target (e.g., summer24, fall24, vt-50gb, cptc8)")
-    p.add_argument("--batch", action="store_true", help="Deploy all available PHASE feedback configs (requires --feedback)")
+    p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory (single)")
+    p.add_argument("--target", type=str, help="Dataset target, e.g. summer24, fall24, vt-50gb, cptc8 (single)")
     return p
 
 
@@ -222,12 +218,15 @@ def _cmd_deploy(argv: list[str]) -> int:
     else:
         configs_spec = None
 
-    # Batch mode: deploy all available PHASE feedback configs for the type
-    if args.batch:
-        if not configs_spec:
-            output.error("ERROR: --batch requires --feedback or granular config flags")
-            return 1
-        deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "ruse")
+    # Batch-by-default: if feedback is requested but no single-target selector
+    # was given (--target, --source, or a positional config_name), deploy
+    # every PHASE source the system discovers for this deploy_type. To hit
+    # one dataset, pass --target or --source. Previously this required an
+    # explicit --batch flag which was easy to forget and led to operators
+    # accidentally deploying just the most-recent dir when they wanted all.
+    deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "ruse")
+    single_selector = args.target or args.source or args.config_name
+    if configs_spec and not single_selector:
         return _cmd_batch_deploy(deploy_type, configs_spec, args.config_name)
 
     if args.rampart:

@@ -70,24 +70,21 @@ Feedback variant template (5 VMs per ./deploy --ruse --feedback):
 # Baseline controls (7 VMs per lean template)
 ./deploy --ruse                            # 7 VMs, no PHASE feedback
 
-# With PHASE feedback (all config files) — 5 VMs per lean template
-./deploy --ruse --feedback                 # auto-detects most recent PHASE source for ruse
-./deploy --ruse --feedback --target sum24  # specific dataset (autocompletes summer24)
-./deploy --ruse --all-feedback             # alias for --feedback
+# With PHASE feedback — batch is the default when no --target/--source given.
+./deploy --ruse --feedback                 # BATCH: all discovered PHASE sources
+./deploy --ruse --feedback --target sum24  # single dataset (autocompletes summer24)
+./deploy --ruse --all-feedback             # alias for --feedback (still batch default)
 
-# Batch deploy: ALL available PHASE feedback configs in sequence
-./deploy --ruse --feedback --batch         # discovers all axes-ruse-* PHASE dirs, deploys each
-./deploy --ruse --timing --batch           # batch with granular flags works too
-
-# Granular feedback flags (RUSE-only, combine any)
-./deploy --ruse --timing                   # timing_profile.json only
-./deploy --ruse --timing --workflow        # timing + workflow weights
-./deploy --ruse --modifiers                # behavior_modifiers.json
-./deploy --ruse --sites                    # site_config.json
-./deploy --ruse --prompts                  # prompt_augmentation.json
-./deploy --ruse --activity                 # activity_pattern.json
-./deploy --ruse --diversity                # diversity_injection.json
-./deploy --ruse --variance                 # variance_injection.json
+# Granular feedback flags (RUSE-only, combine any) — also batch-by-default
+./deploy --ruse --timing                   # BATCH: timing-only for all datasets
+./deploy --ruse --timing --target sum24    # single dataset, timing-only
+./deploy --ruse --timing --workflow        # BATCH: timing + workflow weights
+./deploy --ruse --modifiers                # BATCH: behavior_modifiers.json
+./deploy --ruse --sites                    # BATCH: site_config.json
+./deploy --ruse --prompts                  # BATCH: prompt_augmentation.json
+./deploy --ruse --activity                 # BATCH: activity_pattern.json
+./deploy --ruse --diversity                # BATCH: diversity_injection.json
+./deploy --ruse --variance                 # BATCH: variance_injection.json
 
 # Explicit PHASE source
 ./deploy --ruse --feedback --source ~/PHASE/feedback_engine/configs/some-path
