@@ -144,10 +144,14 @@ else
 fi
 SYSLOG=$(ls -t /opt/ruse/deployed_sups/*/logs/systemd.log 2>/dev/null | head -1)
 if [ -n "$SYSLOG" ]; then
+  # Count only REAL warnings — ablation-gated INFO lines are intentional
+  # and should not count against the VM. [INFO] tag explicitly excluded.
   echo "WARN_COUNT=$(grep -c '\\[WARNING\\]' "$SYSLOG" 2>/dev/null || echo 0)"
+  echo "INFO_COUNT=$(grep -c '\\[INFO\\].*ablation-gated' "$SYSLOG" 2>/dev/null || echo 0)"
   echo "WARN_LINES=$(grep '\\[WARNING\\]' "$SYSLOG" 2>/dev/null | tail -10 | tr '\\n' '|')"
 else
   echo "WARN_COUNT=0"
+  echo "INFO_COUNT=0"
   echo "WARN_LINES="
 fi
 """
@@ -304,20 +308,24 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
 
     # 9. Feature warnings from runtime.
     #
-    # [WARNING] lines are only emitted when load_behavioral_config() finds a
-    # non-empty behavior.json — the runtime's _reload_behavioral_config
-    # early-returns on fc.is_empty() before any warning code runs. So:
-    #   Baseline (bc_has_behavior=False): runtime never reaches warning paths,
-    #     silence is the expected state → n/a. Warnings on a baseline would
-    #     actually indicate an unexpected partial feedback-config load.
-    #   Feedback (bc_has_behavior=True):  runtime reached warning paths; any
-    #     [WARNING] means PHASE emitted a partial/malformed config → FAIL.
+    # [WARNING] lines = unexpected; [INFO] ablation-gated lines = intentional
+    # (PHASE's ablation engine deliberately omitted sections whose knobs don't
+    # move the score on the target model). We count WARNING and INFO
+    # separately so an operator can see "this deploy ran clean" vs
+    # "this deploy had PHASE-intentional omissions" vs "this deploy has bugs".
+    #
+    # Baseline deploys: no feedback attempted, so runtime never reaches the
+    # warning paths (fc.is_empty() short-circuits). Silence is correct.
+    # Feedback deploys: warnings UNEXPECTED, INFOs expected iff ablation-gated.
     warn_count = int(probe.get("WARN_COUNT", "0") or "0")
+    info_count = int(probe.get("INFO_COUNT", "0") or "0")
     if behavior in ("C0", "M0"):
         checks["warnings"] = "n/a"
     elif bc_has_behavior:
-        if warn_count == 0:
+        if warn_count == 0 and info_count == 0:
             checks["warnings"] = "OK"
+        elif warn_count == 0 and info_count > 0:
+            checks["warnings"] = f"OK ({info_count} ablation-gated)"
         else:
             checks["warnings"] = f"FAIL ({warn_count} unexpected warnings)"
     else:

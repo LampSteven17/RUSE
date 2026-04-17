@@ -166,6 +166,7 @@ class BaseEmulationLoop(ABC):
                 config,
                 variance_config=fc.variance_injection,
                 activity_config=fc.activity_pattern,
+                ablation_gated=fc.is_ablation_gated(),
             )
             self._phase_timing._last_activity_time = old_last_activity
             if self.logger:
@@ -212,28 +213,45 @@ class BaseEmulationLoop(ABC):
         has_bg_svc = self._background_svc is not None
         has_prompt_aug = bool(fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"))
 
+        # Ablation-gated omissions are intentional, not bugs. PHASE's
+        # feedback engine runs per-feature ablation against the target
+        # detection model; sections whose knobs don't move the score are
+        # deliberately left out. Distinguish:
+        #   [INFO]    ... ablation-gated (PHASE dropped it on purpose)
+        #   [WARNING] ... DISABLED (unexpected omission, treat as bug)
+        gated = fc.is_ablation_gated() if fc else False
+        tag = "[INFO]" if gated else "[WARNING]"
+        reason_suffix = (" (ablation-gated — no behavioral lever for this model)"
+                         if gated else "")
+
         if min_distinct == 0:
-            print("[WARNING] D2 min_distinct_per_cluster DISABLED — "
-                  "no diversity_injection.workflow_rotation.min_distinct_per_cluster")
+            print(f"{tag} D2 min_distinct_per_cluster DISABLED — "
+                  f"no diversity_injection.workflow_rotation.min_distinct_per_cluster"
+                  f"{reason_suffix}")
         if max_consec == 0:
-            print("[WARNING] D2 max_consecutive_same DISABLED — "
-                  "no diversity_injection.workflow_rotation.max_consecutive_same")
+            print(f"{tag} D2 max_consecutive_same DISABLED — "
+                  f"no diversity_injection.workflow_rotation.max_consecutive_same"
+                  f"{reason_suffix}")
         if not has_bg_svc:
-            print("[WARNING] D4 background services DISABLED — "
-                  "no diversity_injection.background_services")
+            print(f"{tag} D4 background services DISABLED — "
+                  f"no diversity_injection.background_services"
+                  f"{reason_suffix}")
         if not has_prompt_aug:
-            print("[WARNING] G1 prompt_augmentation DISABLED — "
-                  "no prompt_augmentation.prompt_content")
+            print(f"{tag} G1 prompt_augmentation DISABLED — "
+                  f"no prompt_augmentation.prompt_content"
+                  f"{reason_suffix}")
         # W4: workflow_weights absent on a non-empty feedback config = partial
         # PHASE output (content.workflow_weights missing). Agent falls back to
         # uniform random — indistinguishable from baseline without this warning.
         if not fc.workflow_weights:
-            print("[WARNING] W4 workflow_weights DISABLED — "
-                  "no content.workflow_weights, using uniform random selection")
+            print(f"{tag} W4 workflow_weights DISABLED — "
+                  f"no content.workflow_weights, using uniform random selection"
+                  f"{reason_suffix}")
         # W3: site_config is loaded from content.site_categories but currently
         # has no runtime consumer. Emit a warning when PHASE provides it so
         # operators know their effort isn't reaching the agent. Remove this
         # warning when site-category filtering is wired into _select_workflow.
+        # This is orthogonal to ablation gating — always warn if present.
         if fc.site_config:
             print("[WARNING] W3 site_config UNUSED — "
                   "content.site_categories loaded but no runtime consumer yet")
