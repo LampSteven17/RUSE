@@ -178,6 +178,27 @@ def run_ruse_spinup(
             on_event=default_event_handler,
         )
 
+    # Phase 2c: Neighborhood sidecar (topology-mimicry layer).
+    # FEEDBACK ONLY. Controls never reach this branch because:
+    #   (a) effective_source is None on controls, and
+    #   (b) we gate on topology_mimicry rates existing in the PHASE source.
+    # See docs/topology-mimicry.md for design rationale.
+    if effective_source:
+        sups_json = _synthesize_neighborhood_config(
+            Path(effective_source), inventory_path, run_dir,
+        )
+        if sups_json is not None:
+            rc = _provision_and_install_neighborhood(
+                runner, dep_id, run_dir, deploy_dir,
+            )
+            if rc != 0:
+                output.error("")
+                output.error("ABORTING: neighborhood sidecar failed.")
+                output.error("Topology-mimicry layer is not active — feedback deploy "
+                             "would be running without the network-layer feature.")
+                output.error(f"  Tear down with: ./teardown {config_name}-{run_id}")
+                return 1
+
     # Post-deploy: SSH config + PHASE registration
     snippet_path = run_dir / "ssh_config_snippet.txt"
     if snippet_path.exists():
@@ -396,3 +417,230 @@ def _register_phase_subprocess(
     except Exception as e:
         output.error(f"  ERROR: PHASE registration crashed ({type(e).__name__}): {e}")
         return False
+
+
+# ─── Neighborhood sidecar (topology-mimicry) ───────────────────────────────
+
+def _resolve_sup_behavior_json(behavior_source: Path, behavior: str,
+                               baseline_config: str) -> Path | None:
+    """Locate the behavior.json for a SUP in the PHASE source tree.
+
+    Mirrors the derivation the distribute playbook does on-VM:
+      behavior_dir = {first_letter}{.model_suffix?}  (e.g. B.gemma, M)
+      path = {source}/{behavior_dir}/{baseline_config}/behavior.json
+    """
+    # Strip trailing C (CPU-variant) for behavior_dir derivation — PHASE
+    # generates one config per {brain_letter}{.model} regardless of CPU/GPU.
+    m = re.match(r'^([A-Z])\d+[CR]?(?:\.(\w+))?$', behavior)
+    if not m:
+        return None
+    behavior_dir = f"{m.group(1)}.{m.group(2)}" if m.group(2) else m.group(1)
+    path = behavior_source / behavior_dir / baseline_config / "behavior.json"
+    return path if path.exists() else None
+
+
+def _synthesize_neighborhood_config(behavior_source: Path, inventory_path: Path,
+                                    run_dir: Path) -> dict | None:
+    """Read each SUP's behavior.json topology_mimicry rates and write
+    run_dir/neighborhood-sups.json.
+
+    Returns the config dict if at least one SUP has non-zero rates; None
+    if no topology_mimicry was configured anywhere (daemon would be idle —
+    don't bother provisioning the sidecar).
+    """
+    import json
+
+    # Parse inventory for SUP name/ip/behavior tuples
+    sups = []
+    for line in inventory_path.read_text().splitlines():
+        m = re.match(r'^(\S+)\s+ansible_host=(\S+)\s+sup_behavior=(\S+)', line)
+        if not m:
+            continue
+        name, ip, behavior = m.group(1), m.group(2), m.group(3)
+        if behavior in ("C0", "M0"):
+            # Controls within a feedback deploy aren't feedback-driven.
+            continue
+        # Derive baseline config key (B2.gemma -> B0.gemma, M2 -> M1, etc.)
+        baseline_version = "1" if behavior[0] == "M" else "0"
+        baseline = re.sub(r'^([A-Z])\d+', r'\g<1>' + baseline_version, behavior)
+        bjson = _resolve_sup_behavior_json(behavior_source, behavior, baseline)
+        if bjson is None:
+            continue
+        try:
+            data = json.loads(bjson.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        rates = ((data.get("diversity") or {}).get("topology_mimicry") or {})
+        # Filter to int-ish positive values only
+        clean_rates = {}
+        for k, v in rates.items():
+            try:
+                n = int(v)
+                if n > 0:
+                    clean_rates[k] = n
+            except (TypeError, ValueError):
+                continue
+        sups.append({"name": name, "ip": ip, "rates": clean_rates})
+
+    has_active = any(s["rates"] for s in sups)
+    if not has_active:
+        output.dim("  No topology_mimicry rates in PHASE source — skipping neighborhood sidecar")
+        return None
+
+    cfg = {"sups": sups}
+    out_path = run_dir / "neighborhood-sups.json"
+    out_path.write_text(json.dumps(cfg, indent=2) + "\n")
+    output.info("")
+    output.info("--- Synthesized neighborhood config ---")
+    output.info(f"  SUPs with topology_mimicry: {sum(1 for s in sups if s['rates'])}/{len(sups)}")
+    total_ph = sum(sum(s['rates'].values()) for s in sups)
+    output.info(f"  Total probes / hour (all SUPs): {total_ph}")
+    output.info(f"  Config: {out_path}")
+    return cfg
+
+
+def _provision_and_install_neighborhood(
+    runner: AnsibleRunner, dep_id: str, run_dir: Path, deploy_dir: Path,
+) -> int:
+    """Provision 1 neighborhood VM, write neighborhood-inventory.ini, run
+    install-neighborhood.yaml. Returns 0 on success, non-zero on failure."""
+    import subprocess
+    import shlex
+    import json
+
+    vm_name = f"r-{dep_id}-neighborhood-0"
+    rc_file = os.path.expanduser("~/vxn3kr-bot-rc")
+    flavor = "v1.2vcpu.4g"
+    image = "noble-amd64"
+    network = "ext_net"
+    keypair = "bot-desktop"
+    security_group = "default"
+
+    output.info("")
+    output.info("--- Provisioning neighborhood sidecar VM ---")
+    output.info(f"  Name: {vm_name}")
+
+    # Create VM (idempotent: exit 0 if already exists)
+    create_cmd = (
+        f"source {shlex.quote(rc_file)} && "
+        f"if openstack server show {shlex.quote(vm_name)} &>/dev/null; then "
+        f"  echo EXISTS; exit 0; "
+        f"else "
+        f"  openstack server create "
+        f"    --flavor {flavor} --image {image} --boot-from-volume 40 "
+        f"    --network {network} --key-name {keypair} "
+        f"    --security-group {security_group} "
+        f"    --property deployment={dep_id} "
+        f"    -f value -c id {shlex.quote(vm_name)}; "
+        f"fi"
+    )
+    r = subprocess.run(["bash", "-c", create_cmd], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        output.error(f"  FAIL: VM create: {(r.stderr or '').strip()[:200]}")
+        return 1
+    output.info(f"  [{time.strftime('%H:%M:%S')}]    OK  {vm_name} provisioned")
+
+    # Wait for ACTIVE
+    for attempt in range(60):
+        rs = subprocess.run(
+            ["bash", "-c",
+             f"source {shlex.quote(rc_file)} && "
+             f"openstack server show {shlex.quote(vm_name)} -f value -c status"],
+            capture_output=True, text=True, timeout=30,
+        )
+        status = (rs.stdout or "").strip()
+        if status == "ACTIVE":
+            break
+        if status == "ERROR":
+            output.error(f"  FAIL: neighborhood VM in ERROR state")
+            return 1
+        time.sleep(5)
+    else:
+        output.error(f"  FAIL: neighborhood VM never reached ACTIVE ({status})")
+        return 1
+
+    # Get IP
+    ri = subprocess.run(
+        ["bash", "-c",
+         f"source {shlex.quote(rc_file)} && "
+         f"openstack server show {shlex.quote(vm_name)} -f value -c addresses "
+         f"| grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+'"],
+        capture_output=True, text=True, timeout=30,
+    )
+    vm_ip = (ri.stdout or "").strip().splitlines()[0] if ri.stdout.strip() else ""
+    if not vm_ip:
+        output.error(f"  FAIL: could not resolve IP for {vm_name}")
+        return 1
+    output.info(f"  [{time.strftime('%H:%M:%S')}]    OK  {vm_name} => {vm_ip}")
+
+    # Write inventory
+    inv_path = run_dir / "neighborhood-inventory.ini"
+    inv_path.write_text(
+        f"# Auto-generated neighborhood inventory\n"
+        f"# Generated: {time.strftime('%Y-%m-%dT%H:%M:%S%z')}\n\n"
+        f"[neighborhood_hosts]\n"
+        f"{vm_name} ansible_host={vm_ip}\n\n"
+        f"[neighborhood_hosts:vars]\n"
+        f"ansible_user=ubuntu\n"
+        f"ansible_python_interpreter=/usr/bin/python3\n"
+        f"ansible_ssh_common_args=-o StrictHostKeyChecking=no\n"
+    )
+
+    # Wait for SSH to be reachable
+    ssh_ok = False
+    for attempt in range(30):
+        rp = subprocess.run(
+            ["ssh",
+             "-i", os.path.expanduser("~/.ssh/id_ed25519"),
+             "-o", "IdentitiesOnly=yes",
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", "ConnectTimeout=10",
+             "-o", "BatchMode=yes",
+             f"ubuntu@{vm_ip}", "echo ok"],
+            capture_output=True, timeout=15,
+            env={**os.environ, "SSH_AUTH_SOCK": ""},
+        )
+        if rp.returncode == 0:
+            ssh_ok = True
+            break
+        time.sleep(5)
+    if not ssh_ok:
+        output.error(f"  FAIL: SSH never reachable on {vm_name}")
+        return 1
+
+    # Add to ~/.ssh/config so operator can SSH by name
+    snippet_path = run_dir / "neighborhood-ssh-snippet.txt"
+    snippet_path.write_text(
+        f"############# Neighborhood - {dep_id} #############\n\n"
+        f"Host n-*\n"
+        f"    User ubuntu\n"
+        f"    PreferredAuthentications publickey\n"
+        f"    IdentityFile ~/.ssh/id_ed25519\n"
+        f"    IdentitiesOnly yes\n"
+        f"    StrictHostKeyChecking no\n"
+        f"    UserKnownHostsFile /dev/null\n\n"
+        f"Host {vm_name}\n"
+        f"    HostName {vm_ip}\n\n"
+        f"#############################################\n"
+    )
+
+    # Run install playbook
+    output.info("")
+    output.info("--- Installing neighborhood daemon ---")
+    result = runner.run_playbook(
+        "install-neighborhood.yaml",
+        inv_path,
+        extra_vars={
+            "deployment_dir": str(run_dir.parent.parent),
+            "run_dir": str(run_dir),
+        },
+        on_event=default_event_handler,
+    )
+    if result.rc != 0:
+        output.error(f"  FAIL: install-neighborhood.yaml rc={result.rc}")
+        output.error(f"  Log: {result.log_path}")
+        return 1
+
+    output.info(f"  Neighborhood sidecar active at {vm_ip}")
+    return 0
