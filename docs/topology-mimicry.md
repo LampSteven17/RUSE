@@ -165,7 +165,7 @@ typically off-subnet).
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- **1 neighborhood VM per RUSE deploy** (`count: 1`, flavor `v1.2vcpu.4g`)
+- **1 neighborhood VM per RUSE deploy** (`count: 1`, flavor `v1.small` — 1 vCPU, 2 GB)
 - **Name pattern** `n-{deploy_hash}-neighborhood-0`
 - **OpenStack keypair** `bot-desktop` (same as RUSE SUPs)
 - **Packages** `samba-common-bin ldap-utils ntpdate avahi-utils`
