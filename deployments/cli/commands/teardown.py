@@ -513,30 +513,65 @@ def _close_phase_experiment(config_name: str) -> None:
     as if they were active and try to dredge their (now-deleted) VM IPs.
     Setting end_date marks the deploy as ended without deleting the
     historical registration record.
+
+    Uses fcntl-locked read-modify-write + atomic rename so concurrent
+    teardowns and deploy registrations can't clobber each other. A race
+    on 2026-04-17 wiped 12 entries before the lock went in.
     """
+    import fcntl
     import json
+    import os
+    import tempfile
     if not EXPERIMENTS_JSON.exists():
         return
+
+    lock_path = EXPERIMENTS_JSON.with_suffix(EXPERIMENTS_JSON.suffix + ".lock")
     try:
-        data = json.loads(EXPERIMENTS_JSON.read_text())
-    except (OSError, json.JSONDecodeError) as e:
-        output.error(f"  WARNING: cannot read experiments.json: {e}")
-        return
-
-    entry = data.get(config_name)
-    if not entry:
-        return  # nothing to close
-
-    if entry.get("end_date"):
-        return  # already closed
-
-    today = time.strftime("%Y-%m-%d")
-    entry["end_date"] = today
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    lock_fd = None
     try:
-        EXPERIMENTS_JSON.write_text(json.dumps(data, indent=4) + "\n")
-        output.info(f"  Closed experiments.json entry: {config_name} end_date={today}")
-    except OSError as e:
-        output.error(f"  WARNING: cannot write experiments.json: {e}")
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        try:
+            data = json.loads(EXPERIMENTS_JSON.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            output.error(f"  WARNING: cannot read experiments.json: {e}")
+            return
+
+        entry = data.get(config_name)
+        if not entry:
+            return  # nothing to close
+        if entry.get("end_date"):
+            return  # already closed
+
+        today = time.strftime("%Y-%m-%d")
+        entry["end_date"] = today
+
+        # Atomic replace — write to temp in same dir, fsync, rename.
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", dir=str(EXPERIMENTS_JSON.parent),
+                prefix=f".{EXPERIMENTS_JSON.name}.", suffix=".tmp",
+                delete=False,
+            )
+            tmp.write(json.dumps(data, indent=4) + "\n")
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp.close()
+            os.replace(tmp.name, EXPERIMENTS_JSON)
+            output.info(f"  Closed experiments.json entry: {config_name} end_date={today}")
+        except OSError as e:
+            output.error(f"  WARNING: cannot write experiments.json: {e}")
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_fd)
 
 
 def _safe_rmtree(path: Path) -> None:

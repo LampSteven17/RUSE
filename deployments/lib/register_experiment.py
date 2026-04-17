@@ -12,10 +12,65 @@ Usage:
 """
 
 import argparse
+import fcntl
 import json
+import os
 import re
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def _locked_read_write(path: Path):
+    """Advisory file lock + atomic replace.
+
+    Opens a sibling lock file, takes an exclusive fcntl lock, then yields
+    (read_fn, write_fn). write_fn does a rename-based atomic replace so a
+    crash mid-write never leaves a truncated experiments.json.
+
+    Without this, register_experiment.py's read-modify-write raced with
+    itself during batch deploys: 14 deploys got wiped down to 2 on
+    2026-04-17 because concurrent writers clobbered each other's views.
+    """
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        def _read():
+            if path.exists():
+                return json.loads(path.read_text())
+            return {}
+
+        def _write(data):
+            # Atomic replace: write to temp in same dir, fsync, rename
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            )
+            try:
+                tmp.write(json.dumps(data, indent=4) + "\n")
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp.close()
+                os.replace(tmp.name, path)
+            except Exception:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+                raise
+
+        yield _read, _write
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
 # Canonical field order for experiment entries
 FIELD_ORDER = [
@@ -134,44 +189,46 @@ def main():
         "output_type": "inference",
     }
 
-    # Read existing experiments.json
-    exp_path = Path(args.experiments_json)
-    if exp_path.exists():
-        data = json.loads(exp_path.read_text())
-    else:
-        data = {}
-
     # Set sup_logs_db if run_id provided
     if args.run_id:
         entry["sup_logs_db"] = f"{name}-{args.run_id}.duckdb"
 
-    # Upsert: merge with existing entry, preserving user-added fields
-    if name in data:
-        existing = data[name]
-        for key in (
-            "ips",
-            "output_file",
-            "inference_file",
-            "interface",
-            "start_date",
-            "output_type",
-        ):
-            existing[key] = entry[key]
-        # Set end_date only if not already present
-        if "end_date" not in existing:
-            existing["end_date"] = None
-        # Update sup_logs_db if provided
-        if "sup_logs_db" in entry:
-            existing["sup_logs_db"] = entry["sup_logs_db"]
-        data[name] = order_entry(existing)
-        action = "Updated"
-    else:
-        entry["description"] = ""
-        data[name] = order_entry(entry)
-        action = "Added"
+    # Atomic read-modify-write under a file lock. Without the lock, two
+    # deploys running register_experiment.py concurrently could each
+    # load their own stale view and write back — the later writer's
+    # view wins and clobbers entries it didn't know about. This actually
+    # happened 2026-04-17: a batch of rampart + ruse deploys interleaved
+    # and 14 entries got wiped to 2.
+    exp_path = Path(args.experiments_json)
+    with _locked_read_write(exp_path) as (read, write):
+        data = read()
 
-    # Write back
-    exp_path.write_text(json.dumps(data, indent=4) + "\n")
+        # Upsert: merge with existing entry, preserving user-added fields
+        if name in data:
+            existing = data[name]
+            for key in (
+                "ips",
+                "output_file",
+                "inference_file",
+                "interface",
+                "start_date",
+                "output_type",
+            ):
+                existing[key] = entry[key]
+            # Set end_date only if not already present
+            if "end_date" not in existing:
+                existing["end_date"] = None
+            # Update sup_logs_db if provided
+            if "sup_logs_db" in entry:
+                existing["sup_logs_db"] = entry["sup_logs_db"]
+            data[name] = order_entry(existing)
+            action = "Updated"
+        else:
+            entry["description"] = ""
+            data[name] = order_entry(entry)
+            action = "Added"
+
+        write(data)
 
     # Summary
     print(f'{action} "{name}" in {exp_path}')
