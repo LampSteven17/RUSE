@@ -402,12 +402,36 @@ driven solely by `activity_probability_per_hour`.
 - No translation, no re-keying — sections populate the 8 dataclass
   fields verbatim and downstream readers were updated to match.
 
-### Fail-loud semantics
+### Fail-loud semantics + ablation gating (2026-04-17)
 Every feature prints `[WARNING] {tag} DISABLED — {reason}` to
-`systemd.log` when it can't activate. Baselines emit warnings
-(expected — no feedback). Feedback deploys with complete PHASE configs
-emit silence. Partial / malformed configs emit specific warnings
-naming the PHASE field or section that's missing.
+`systemd.log` when it can't activate, UNLESS PHASE marked the deploy
+as ablation-gated via `_metadata.ablation_gate`. Then the tag
+downgrades to `[INFO] ... (ablation-gated)` — a deliberate PHASE
+omission, not a bug.
+
+**When ablation-gated**: PHASE's feedback engine ran per-feature
+ablation against the target detection model and found
+|Δscore| < 0.10 for the section's knobs. Omitting it avoids setting
+knobs the model ignores. For summer24 and vt-fall22, `timing` and
+`behavior` are gated off entirely because those models key on
+topology features (see topology-mimicry below).
+
+Baselines: runtime short-circuits on `fc.is_empty()` before reaching
+warning paths — silence is correct.
+Feedback deploys: all-INFO expected when ablation-gated; all-silence
+expected when PHASE ships complete sections.
+
+`BehavioralConfig.is_ablation_gated()` reads the gate metadata.
+Warning emitters in:
+- `src/common/emulation_loop.py::_reload_behavioral_config` (D2/D4/G1/W4)
+- `src/common/timing/phase_timing.py::CalibratedTiming` (D1/D3/G5, via
+  `ablation_gated=True` constructor kwarg — must be threaded through
+  the fallback path at line ~175 too, else warnings leak at WARNING
+  level)
+- `src/brains/mchp/agent.py::_apply_brain_specific_config` (B1/B2/G2)
+
+`W3 site_config UNUSED` is `[INFO]` always — our-side TODO (no
+site-category consumer yet), orthogonal to ablation.
 
 ### Distribute playbook JSON validity gate (2026-04-16)
 Before copying to the VM, each matched `behavior.json` is parsed with
@@ -428,7 +452,109 @@ swallowing failures):
 reachable VMs (previously a warning and install continued against
 unreachable hosts).
 
+**M0 S4 exemption (2026-04-17)** — M0 is exempt from the S4 is-active
+assertion. Upstream pyhuman crash-loops on Linux by design
+(os.startfile is Windows-only, hardcoded `/root/Downloads/` paths,
+flaky Chrome session). Without the exemption S4 races the
+activating→active→fail→restart cycle and fails depending on when
+the check fires. Mirrors audit.py's `EXPECTED (M0 upstream crashes
+on Linux)` status.
+
+**Install recap parsing (2026-04-17)** — if `install-sups.yaml`
+exits rc!=0, `spinup.py::_parse_ansible_recap(log_path)` parses
+PLAY RECAP to report which hosts failed which assertion, then
+aborts with `return 1` before distributing configs or registering
+in PHASE. Previously spinup.py continued and reported DONE despite
+1+ failed VMs.
+
+**Transient-flake retries** — `Update apt cache`, `Install prerequisites`,
+and `Clone RUSE repo` have `retries: 3 delay: 30/15 until: succeeded`.
+Survives single-VM apt-mirror and GitHub rate-limit flakes without
+silencing real failures.
+
 See `/deploy-context` for the full catalog of fail-loud assertions
 across the deploy system.
+
+## Topology Mimicry — neighborhood sidecar (2026-04-17, phase A)
+
+For summer24 and vt-fall22 target models, PHASE ablation showed
+behavioral knobs produce |Δscore| < 0.10 but five non-behavioral
+topology features move the score by 0.27-1.00:
+
+  local_orig, id.orig_p, id.resp_p, local_resp, conn_state
+
+The model is detecting sandbox-VM environment, not behavior —
+sandbox SUPs receive no inbound LAN traffic (no SMB polling,
+LDAP, WSUS, IPMI, mDNS, printer polls) so every Zeek row has
+`local_orig=1`, ephemeral `id.orig_p`, `conn_state=SF` dominant.
+Workstations have the opposite distribution.
+
+### Architecture (components 1 + 3 shipped)
+- **1 neighborhood VM per feedback deploy** (FEEDBACK ONLY —
+  controls get no neighborhood). Name:
+  `r-{dep_id}-neighborhood-0`, flavor `v1.small` (1 vCPU / 2 GB),
+  same `bot-desktop` keypair as SUPs.
+- **Data-driven daemon** `common.network.neighborhood_traffic`
+  reads `/etc/ruse-neighborhood/sups.json` and synthesizes real
+  TCP/UDP probes at each SUP IP on the subnet. Strictly data-
+  driven: empty/zero rates → zero probes. Daemon stays alive but
+  idle (heartbeat only). This is what lets controls safely carry
+  the same code without emitting traffic.
+- **10 probe types** in `src/common/network/probes.py`:
+  `inbound_smb_per_hour`, `inbound_ldap_per_hour`, `inbound_wsus_per_hour`,
+  `inbound_ntp_receive_per_hour`, `inbound_printer_per_hour`,
+  `inbound_ipmi_per_hour`, `inbound_winrm_per_hour`,
+  `inbound_mdns_per_hour`, `inbound_ssdp_per_hour`,
+  `inbound_scan_per_hour`. Produce mixed conn_state
+  (SF / S0 / REJ / RSTO / unidir) on Zeek rows from the SUP.
+- **PHASE contract (component 3)** — writes
+  `diversity.topology_mimicry.inbound_*_per_hour` into each SUP's
+  `behavior.json`. RUSE's `BehavioralConfig.topology_mimicry()`
+  helper reads verbatim via `diversity_injection`.
+
+### Deploy flow
+`spinup.py` phase 2c runs AFTER `distribute-behavior-configs.yaml`:
+1. `_synthesize_neighborhood_config(behavior_source, inventory_path,
+   run_dir)` reads each SUP's `behavior.json` and collects
+   `topology_mimicry` rates. Writes `neighborhood-sups.json` if any
+   rate is non-zero; else returns None (→ skip sidecar entirely).
+2. `_provision_and_install_neighborhood(...)` creates the VM via
+   OpenStack CLI, writes `neighborhood-inventory.ini`, runs
+   `install-neighborhood.yaml` (asserts `ruse-neighborhood`
+   systemd service active + NRestarts ≤ 5).
+
+Fail-loud: if any step fails, spinup.py aborts before PHASE
+registration — a feedback deploy without the topology layer
+would be experimentally worse than no deploy at all.
+
+### Teardown
+The neighborhood VM is named `r-{dep_id}-neighborhood-0` so the
+existing `r-` prefix sweep in `teardown.yaml` / `teardown-all.yaml`
+deletes it automatically. No special handling needed.
+
+### Audit
+`./audit` currently probes SUP VMs only. Neighborhood VMs are
+excluded from the orphan check but their service status is NOT
+audited by the main `./audit` command yet. Ad-hoc probe script
+at `/tmp/audit_ghosts.py` has the right template; promote to
+`./audit --neighborhoods` in phase B.
+
+### Observed performance (2026-04-17 overnight)
+7 neighborhood sidecars running 12+ hours: all `active`, 0
+restarts, 2800-3300 probes emitted each. At 360/hr target that's
+~235/hr observed (~65%) — scheduler's jitter-sleep accumulation
+burns ~35% of each 60s tick. Not broken; rate still produces the
+topology signal. Can tune later.
+
+### Deferred (phase B)
+- **Component 2** — SUP listening services (sshd/node-exporter/
+  cockpit/http) for `id.orig_p` diversity.
+- **Component 4** — subnet chatter (mDNS/SSDP/NetBIOS multicast)
+  from SUPs for `local_orig=0` rows.
+- **Phase C** — PHASE re-runs knob ablation with the topology
+  layer live. Target: five topology features' max|Δ| drops below
+  0.10 threshold.
+
+Full design: `docs/topology-mimicry.md`.
 
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.
