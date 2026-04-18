@@ -262,8 +262,10 @@ at every step (was previously silently continuing past failures):
   PHASE tuning with no warning.
 
 `install-ghosts-api.yaml` assertions (was using `ignore_errors: yes`):
-- **C3 — API health**: explicit `fail:` task when the `/api/home`
-  health check doesn't return 200/302 after 5 minutes of retries.
+- **C3 — API health**: explicit `fail:` task when the `/api/machines`
+  health check doesn't return 200 after 5 minutes of retries (switched
+  from `/api/home` on 2026-04-17 — upstream CMU-SEI removed that
+  endpoint; Kestrel now returns 404 even when the API is healthy).
   Previously logged "NOT RESPONDING (may still be starting)" as an
   INFO and continued.
 - **G7 — shell `set -euo pipefail`**: Docker install shell now aborts
@@ -293,5 +295,44 @@ at every step (was previously silently continuing past failures):
   sets `end_date` on the matching PHASE registration. Previously
   `PHASE.py --ghosts` batch pipeline picked up torn-down deploys as
   active and tried to dredge their IPs.
+
+### Docker Hub rate-limit auth (2026-04-17)
+
+Unauthenticated Docker Hub pulls are capped at 100/6hr per source
+IP. A 7-deploy batch run hit that limit on deploy #7 pulling
+`postgres:16.8`, `grafana/grafana`, and `docker.n8n.io/n8nio/n8n`.
+`install-ghosts-api.yaml` now:
+- Reads `~/.docker-hub-token` + `~/.docker-hub-token-user` on mlserv
+  if present, copies to VM `/tmp/.dh-token` + `/tmp/.dh-user`, runs
+  `docker login`, then deletes the staged creds. Missing files = no
+  login = unauth pulls (same behavior as before).
+- Retries `docker compose up` once after 60s for transient flakes.
+- Dedicated `Detect Docker Hub rate-limit` assertion surfaces the
+  specific error with remediation ("wait 6h, or add PAT").
+
+Setup (one-time):
+```bash
+echo 'YOUR_PAT' > ~/.docker-hub-token && chmod 600 ~/.docker-hub-token
+echo 'YOUR_USER' > ~/.docker-hub-token-user && chmod 600 ~/.docker-hub-token-user
+```
+
+### Known: ghosts-client .NET memory leak
+
+Upstream `Ghosts.Client.Universal.dll` grows unbounded in RAM. On a
+28GB VM the process reaches ~25GB (89%) in a few hours. Once memory
+pressure starts, sshd becomes unresponsive and the VM looks hung
+(ACTIVE on OpenStack, responds to ICMP, SSH connects drop or hang).
+
+Remediation:
+```bash
+source ~/vxn3kr-bot-rc
+openstack server reboot --hard g-<hash>-npc-N
+```
+
+Not patching locally — this is upstream CMU-SEI's code. If experiments
+start hitting this regularly, add `MemoryMax=8G` to
+`install-ghosts-clients.yaml`'s systemd unit + daily restart cron
+(mirrors MCHP pattern in install-sups.yaml S5). See
+`memory/project_ghosts_client_memleak.md` for full notes.
 
 After reading these files, provide a brief summary of the current state and any recent changes visible in the code.

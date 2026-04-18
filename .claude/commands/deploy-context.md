@@ -289,12 +289,15 @@ so the step aborts with a clear summary of failure patterns.
   pyhuman) reports `EXPECTED (M0 upstream crashes on Linux)` instead of
   FAIL, recognizing that `os.startfile()` crash is the intentional
   baseline behavior.
-- **Feedback feature probes** (Fdbk, Warn columns) — checks
-  `/opt/ruse/deployed_sups/*/behavioral_configurations/` file count
-  (post-2026-04-16: expect 1 file, `behavior.json`) and `[WARNING]`
-  line count in `systemd.log` to surface feature activation state
-  per VM. Baselines expected to emit warnings (no feedback); feedback
-  deploys with complete PHASE configs should emit silence.
+- **Feedback feature probes** (Fdbk, Warn columns) — Fdbk checks for
+  exactly 1 file named `behavior.json` in
+  `/opt/ruse/deployed_sups/*/behavioral_configurations/` (post-2026-04-16
+  consolidation). Flags legacy 8-file sources, junk files, and
+  baseline-with-unexpected-configs. Warn counts `[WARNING]` vs `[INFO]`
+  lines in `systemd.log` separately (see *Ablation gating* below).
+- **Neighborhood sidecar orphan exclusion** — VMs ending in
+  `-neighborhood-0` live in `neighborhood-inventory.ini` (not `sup_hosts`)
+  and are excluded from the orphan check.
 
 ### Teardown improvements
 - **Orphan volume cleanup** — `_cleanup_orphaned_volumes(os_client)` in
@@ -305,6 +308,95 @@ so the step aborts with a clear summary of failure patterns.
   so PHASE batch pipelines (`PHASE.py --ruse`, `--rampart`, `--ghosts`)
   don't pick up torn-down deploys as active. Historical registration
   preserved for analysis correlation; only `end_date` is set.
+
+## Stage 3c: PHASE registration fail-loud + fcntl lock (2026-04-17)
+
+### PHASE registration is fail-loud
+`spinup.py`, `rampart.py`, and `ghosts.py` all call `_register_phase(...)`
+at the end of a successful deploy. If the register returns False the
+deploy exits with rc=1 — VMs are still running but the operator knows
+to tear down or register manually. Previously a registration failure
+printed WARNING and the deploy reported `DONE: N/N VMs deployed`
+anyway, leaving VMs whose logs PHASE inference never picked up.
+
+### Install fail-loud (spinup.py)
+After `install-sups.yaml` runs, if Ansible exits rc!=0, spinup.py
+calls `_parse_ansible_recap(log_path)` to parse PLAY RECAP and report
+which hosts failed which assertion. Aborts with `return 1` before
+distributing behavioral configs, installing SSH config, or registering
+in PHASE. Previously spinup.py continued and reported "DONE: 7/7"
+even when 1/7 failed.
+
+### fcntl lock on experiments.json (race fix 2026-04-17)
+`register_experiment.py` and `teardown.py::_close_phase_experiment`
+both take an exclusive `fcntl.LOCK_EX` on
+`/mnt/AXES2U1/experiments.json.lock` for the full read-modify-write
+cycle, then write via tempfile + fsync + `os.replace`. Atomic,
+serialized, no torn writes on crash.
+
+Prior to this, a batch of 7 rampart + 8 ruse + 1 ghosts deploys
+interleaved on 2026-04-17 and wiped 14 entries down to 2 — each
+writer loaded its own stale view and clobbered whatever the others
+had added. PHASE.py errored: "Not found in experiments.json".
+
+If a batch run ever loses entries again (e.g. code regression),
+recover by iterating active deploys and running
+`register_experiment.py --name <dep> --snippet {run}/ssh_config_snippet.txt
+--inventory {run}/inventory.ini --run-id {run}` for each.
+
+### Install-sups retry on transient apt/git blips
+`install-sups.yaml` wraps `Update apt cache`, `Install prerequisites`,
+and `Clone RUSE repo` in `retries: 3 delay: 30/15 until: succeeded`.
+Survives single-VM transient flakes ("Failed to update apt cache:
+unknown reason", GitHub rate-limit) without degrading fail-loud —
+task still fails after 3 attempts.
+
+## Ablation gating (2026-04-17)
+
+PHASE's feedback engine runs per-feature ablation against the target
+detection model and deliberately omits behavior.json sections whose
+knobs produce |Δscore| < 0.10. For summer24 and vt-fall22, this
+gates off `timing` and `behavior` entirely because those models key
+on network topology (local_orig, conn_state, id.orig_p), not on
+behavioral knobs.
+
+### `_metadata.ablation_gate` in behavior.json
+PHASE writes an `ablation_gate` subtree into `_metadata` with
+`inactive`, `flat_zero`, `gating_features`, and `per_sup_active`.
+When `inactive` or `flat_zero` or `gating_features` is non-empty,
+RUSE treats all missing sections as deliberate omissions.
+
+### Runtime: [WARNING] → [INFO] downgrade
+`BehavioralConfig.ablation_gate` + `.is_ablation_gated()` are
+populated from `_metadata.ablation_gate`. All downstream warning
+emitters check the flag:
+- `emulation_loop.py::_reload_behavioral_config` — D2 / D4 / G1 / W4
+- `timing/phase_timing.py::CalibratedTiming` — D1 / D3 / G5 (via
+  `ablation_gated=True` constructor kwarg)
+- `brains/mchp/agent.py::_apply_brain_specific_config` — B1 / B2 / G2
+
+Emitted tag becomes `[INFO] ... DISABLED ... (ablation-gated)` so
+audit.py can distinguish the two cases.
+
+### W3 site_config is our-side
+`[INFO] W3 site_config UNUSED` fires whenever PHASE ships
+`content.site_categories` (always, since PHASE emits it). It's not
+an ablation thing — RUSE hasn't wired site-category filtering into
+`_select_workflow` yet. Remove the line once the consumer lands.
+
+### audit.py semantics
+Warnings column:
+- Baseline (bc_has_behavior=0): `n/a (baseline)` — runtime short-
+  circuits on `fc.is_empty()` before reaching warning paths.
+- Feedback, 0 warnings + N INFO: `OK (N ablation-gated)` — PHASE
+  emitted a valid config and deliberately omitted some sections.
+- Feedback, N warnings: `FAIL (N unexpected warnings)` — real bug
+  (PHASE generated a malformed config, or RUSE has a regression
+  before the INFO downgrade fires).
+
+The probe bash on each VM reports `WARN_COUNT` and `INFO_COUNT` as
+separate variables sourced from `grep '\[WARNING\]'` and
+`grep '\[INFO\].*ablation-gated'` against `systemd.log`.
 
 ## Stage 3b: Operator observability (2026-04-14)
 

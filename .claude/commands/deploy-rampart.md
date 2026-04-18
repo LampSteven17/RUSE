@@ -381,9 +381,17 @@ Windows SSH in `_deploy_windows_emulation` now also uses
 Windows sshd's `MaxAuthTries` before the password attempt).
 
 ### PHASE registration + teardown
-- `register_experiment.py` — uses FQDN in experiments.json
+- `register_experiment.py` — uses FQDN in experiments.json. Now takes
+  `fcntl.LOCK_EX` on `experiments.json.lock` and writes via tempfile
+  + fsync + `os.replace` (2026-04-17 — see `/deploy-context`). A batch
+  deploy interleaved with teardowns wiped 14 entries down to 2 before
+  the lock went in.
+- `rampart.py::_register_phase` now returns `bool` and caller aborts
+  with `return 1` on failure — previously printed WARNING and
+  continued, leaving VMs invisible to PHASE inference.
 - `_close_phase_experiment(config_name)` — teardown sets `end_date`
-  so PHASE batch pipelines skip ended deploys
+  so PHASE batch pipelines skip ended deploys. Same lock + atomic
+  write semantics.
 
 ### D5 sigma (RAMPART-specific)
 PHASE generates `clustersize_sigma` / `taskinterval_sigma` per-node
