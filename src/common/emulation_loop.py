@@ -256,12 +256,13 @@ class BaseEmulationLoop(ABC):
                   f"no content.workflow_weights, using uniform random selection"
                   f"{reason_suffix}")
         # W3: site_config is loaded from content.site_categories but currently
-        # has no runtime consumer. Emit a warning when PHASE provides it so
-        # operators know their effort isn't reaching the agent. Remove this
-        # warning when site-category filtering is wired into _select_workflow.
-        # This is orthogonal to ablation gating — always warn if present.
+        # has no runtime consumer. Emit an INFO line (not WARNING) so operators
+        # can still see PHASE is shipping the field — but it doesn't count
+        # against audit.py's warnings column (it's our-side TODO, not a
+        # PHASE bug). Remove the line entirely when site-category filtering
+        # is wired into _select_workflow.
         if fc.site_config:
-            print("[WARNING] W3 site_config UNUSED — "
+            print("[INFO] W3 site_config UNUSED — "
                   "content.site_categories loaded but no runtime consumer yet")
 
     # ── Workflow selection ────────────────────────────────────────────
