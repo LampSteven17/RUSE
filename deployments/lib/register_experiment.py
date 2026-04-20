@@ -203,7 +203,13 @@ def main():
     with _locked_read_write(exp_path) as (read, write):
         data = read()
 
-        # Upsert: merge with existing entry, preserving user-added fields
+        # Upsert: merge with existing entry, preserving user-added fields.
+        # end_date is ALWAYS reset to None on re-registration: a fresh
+        # spinup means the deploy is active again, regardless of any
+        # stale end_date left by a prior teardown. Previously this was
+        # conditional on "end_date not in existing", which never fired
+        # after the first teardown — resulting in inverted ranges like
+        # start=2026-04-17, end=2026-04-16 on every re-deploy.
         if name in data:
             existing = data[name]
             for key in (
@@ -215,10 +221,7 @@ def main():
                 "output_type",
             ):
                 existing[key] = entry[key]
-            # Set end_date only if not already present
-            if "end_date" not in existing:
-                existing["end_date"] = None
-            # Update sup_logs_db if provided
+            existing["end_date"] = None
             if "sup_logs_db" in entry:
                 existing["sup_logs_db"] = entry["sup_logs_db"]
             data[name] = order_entry(existing)
