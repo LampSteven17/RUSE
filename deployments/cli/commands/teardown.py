@@ -518,6 +518,7 @@ def _close_phase_experiment(config_name: str) -> None:
     teardowns and deploy registrations can't clobber each other. A race
     on 2026-04-17 wiped 12 entries before the lock went in.
     """
+    import datetime
     import fcntl
     import json
     import os
@@ -547,8 +548,12 @@ def _close_phase_experiment(config_name: str) -> None:
         if entry.get("end_date"):
             return  # already closed
 
-        today = time.strftime("%Y-%m-%d")
-        entry["end_date"] = today
+        # Yesterday, not today: teardown-day Zeek captures are partial
+        # (VMs stop emitting traffic mid-day, some rows may be truncated
+        # by the teardown sequence). Using the day before gives PHASE a
+        # clean last-full-day boundary for log dredging.
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        entry["end_date"] = yesterday
 
         # Atomic replace — write to temp in same dir, fsync, rename.
         try:
@@ -562,7 +567,7 @@ def _close_phase_experiment(config_name: str) -> None:
             os.fsync(tmp.fileno())
             tmp.close()
             os.replace(tmp.name, EXPERIMENTS_JSON)
-            output.info(f"  Closed experiments.json entry: {config_name} end_date={today}")
+            output.info(f"  Closed experiments.json entry: {config_name} end_date={yesterday}")
         except OSError as e:
             output.error(f"  WARNING: cannot write experiments.json: {e}")
     finally:
