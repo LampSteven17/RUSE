@@ -210,7 +210,11 @@ def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: P
     _cleanup_orphaned_volumes(os_client)
     _close_phase_experiment(config_name)
 
-    # Cleanup local state — remove this run, then remove feedback config dir if empty
+    # Cleanup local state — remove this run, then remove feedback config dir if empty.
+    # run_dir contains both main inventory.ini AND neighborhood-inventory.ini /
+    # neighborhood-ssh-snippet.txt when a sidecar was provisioned, so rmtree
+    # clears everything. VMs themselves (including r-{dep_id}-neighborhood-0)
+    # are already deleted above by the teardown.yaml r-{prefix} sweep.
     if run_dir.is_dir():
         _safe_rmtree(run_dir)
 

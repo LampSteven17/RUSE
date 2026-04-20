@@ -366,6 +366,11 @@ def _register_phase(snippet_path: Path, config_name: str, run_id: str, deploy_di
     Returns True when the script is absent or the snippet is missing (no
     registration was attempted or possible — not a failure). Returns False
     only when registration was attempted and actually failed.
+
+    If a neighborhood sidecar was provisioned, its IP is appended to the
+    registration via --extra-ip so it shows up in experiments.json alongside
+    the SUPs. Without this, anon-pipelines that key off experiments.json
+    never see the neighborhood traffic (what bit us 2026-04-20).
     """
     if not snippet_path.exists():
         output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
@@ -377,13 +382,28 @@ def _register_phase(snippet_path: Path, config_name: str, run_id: str, deploy_di
         output.error(f"  WARNING: {register_script} not found — skipping PHASE registration")
         return True  # missing script = dev environment, not a deploy failure
 
-    run_dir = snippet_path.parent
-    inventory_path = run_dir / "inventory.ini"
-
     # Prefer subprocess — it's the canonical path and surfaces rc directly.
     # The previous import-based path silently swallowed ImportErrors and fell
     # through to subprocess, hiding which path actually ran.
     return _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
+
+
+def _neighborhood_extra_ips(run_dir: Path) -> list[str]:
+    """Scan run_dir/neighborhood-inventory.ini for neighborhood VMs.
+
+    Returns a list of 'IP=HOSTNAME' strings for --extra-ip. Empty list if
+    no neighborhood inventory exists (controls + non-topology-gated feedback).
+    """
+    inv = run_dir / "neighborhood-inventory.ini"
+    if not inv.exists():
+        return []
+    pairs = []
+    for line in inv.read_text().splitlines():
+        m = re.match(r"^(\S+)\s+ansible_host=(\S+)", line)
+        if m:
+            host, ip = m.group(1), m.group(2)
+            pairs.append(f"{ip}={host}")
+    return pairs
 
 
 def _register_phase_subprocess(
@@ -396,18 +416,18 @@ def _register_phase_subprocess(
     run_dir = snippet_path.parent
     inventory_path = run_dir / "inventory.ini"
 
+    cmd = [
+        "python3", str(lib_dir / "register_experiment.py"),
+        "--name", config_name,
+        "--snippet", str(snippet_path),
+        "--inventory", str(inventory_path),
+        "--run-id", run_id,
+    ]
+    for pair in _neighborhood_extra_ips(run_dir):
+        cmd.extend(["--extra-ip", pair])
+
     try:
-        result = subprocess.run(
-            [
-                "python3", str(lib_dir / "register_experiment.py"),
-                "--name", config_name,
-                "--snippet", str(snippet_path),
-                "--inventory", str(inventory_path),
-                "--run-id", run_id,
-            ],
-            capture_output=True, text=True,
-            timeout=30,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             output.dim("  Registered in PHASE experiments.json")
             return True
