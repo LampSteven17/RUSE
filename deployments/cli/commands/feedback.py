@@ -8,7 +8,122 @@ from pathlib import Path
 from .. import output
 
 
-FEEDBACK_BASE = Path.home() / "PHASE" / "feedback_engine" / "configs"
+FEEDBACK_BASE = Path("/mnt/AXES2U1/feedback")
+
+# Post 2026-04-23 layout:
+#   /mnt/AXES2U1/feedback/
+#     ├── ruse-controls/{dataset}/...
+#     ├── rampart-controls/{dataset}/...
+#     └── ghosts-controls/{dataset}/...
+# Each dataset dir contains a manifest.json + per-SUP/NPC/node configs.
+# The type subtree is selected via _type_root(deploy_type).
+
+
+# ── Manifest helpers (post 2026-04-23 /mnt/AXES2U1/feedback layout) ─────
+#
+# PHASE now writes a manifest.json alongside each generated feedback source.
+# It's a provenance index — deploy_key, training_dataset, version_preset,
+# model_name, generated_at_utc, active_features_union, per-SUP ok/skipped
+# status. Not a config itself (nested per-SUP files still carry the knobs),
+# but indispensable for operator confirmation: "am I about to deploy the
+# right feedback, freshly generated, for the right target?"
+
+def load_manifest(source: Path) -> dict | None:
+    """Load manifest.json from a PHASE source dir. Returns None if missing/malformed.
+
+    Missing manifest is not a failure — older sources (and hand-built dev
+    dirs) won't have one. Caller decides how strict to be.
+    """
+    mf = source / "manifest.json"
+    if not mf.exists():
+        return None
+    try:
+        return json.loads(mf.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _format_age(iso_ts: str) -> str:
+    """Format how long ago an ISO-8601 UTC timestamp was, as '(12m ago)' etc."""
+    import datetime
+    try:
+        gen_dt = datetime.datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return ""
+    if gen_dt.tzinfo is None:
+        gen_dt = gen_dt.replace(tzinfo=datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    secs = int((now - gen_dt).total_seconds())
+    if secs < 60:
+        return f"({secs}s ago)"
+    if secs < 3600:
+        return f"({secs // 60}m ago)"
+    if secs < 86400:
+        return f"({secs // 3600}h ago)"
+    return f"({secs // 86400}d ago)"
+
+
+def manifest_summary_lines(
+    source: Path, manifest: dict | None, indent: str = "    ",
+) -> list[str]:
+    """Return lines summarizing a manifest for user display.
+
+    Shape (indent applied to each line):
+      source:     /mnt/AXES2U1/feedback/ruse-controls/axes-summer24
+      dataset:    axes-summer24       preset: std-ctrls
+      model:      v7.1.2_double_bilstm_min_axes-summer24-ctrl
+      generated:  2026-04-23T16:15:19Z  (12m ago)
+      active:     ['service']          (other features ablation-gated)
+      sup_runs:   5 ok, 2 skipped
+    """
+    lines = [f"{indent}source:     {source}"]
+    if not manifest:
+        lines.append(f"{indent}(no manifest.json — legacy / dev source)")
+        return lines
+
+    dataset = manifest.get("training_dataset", "?")
+    preset = manifest.get("version_preset", "?")
+    model = manifest.get("model_name", "?")
+    generated = manifest.get("generated_at_utc", "")
+    active = manifest.get("active_features_union", [])
+    sup_runs = manifest.get("sup_runs", [])
+    ok = sum(1 for r in sup_runs if r.get("status") == "ok")
+    skipped = sum(1 for r in sup_runs if r.get("status") == "skipped")
+
+    age = _format_age(generated) if generated else ""
+    age_suffix = f"  {age}" if age else ""
+    active_suffix = "  (other features ablation-gated)" if not active else ""
+
+    lines.append(f"{indent}dataset:    {dataset}       preset: {preset}")
+    lines.append(f"{indent}model:      {model}")
+    lines.append(f"{indent}generated:  {generated}{age_suffix}")
+    lines.append(f"{indent}active:     {active}{active_suffix}")
+    lines.append(f"{indent}sup_runs:   {ok} ok, {skipped} skipped")
+    return lines
+
+
+def validate_manifest_target(
+    manifest: dict | None, deploy_type: str,
+) -> str | None:
+    """Assert manifest.target matches the deploy type. Returns error msg or None.
+
+    Catches the class of bugs where an operator points a ruse deploy at a
+    rampart source (the file-layout globs would still match because each
+    type validates its own nested shape, but the manifest is authoritative).
+    """
+    if not manifest:
+        return None  # no manifest = can't check, defer to layout glob
+    target = manifest.get("target")
+    if not target:
+        return None
+    expected = "ruse" if deploy_type in ("ruse", "sup", None) else deploy_type
+    if target != expected:
+        return (
+            f"manifest.target={target!r} does not match deploy type {expected!r} — "
+            f"source at {manifest.get('deploy_key', '?')} was generated for a "
+            f"different target"
+        )
+    return None
 
 # GPU-conserving 5-VM feedback template (gemma4 cutover 2026-04-08):
 # gemma only, V100 only (no RTX) — V100 uses gemma4:26b, CPU uses gemma4:e2b.
@@ -122,35 +237,42 @@ def resolve_feedback_args(
     return behavior_source, configs_spec
 
 
-def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
-    """Find the most recent PHASE feedback config directory.
+def _type_root(deploy_type: str | None) -> Path | None:
+    """Return the per-type subtree under FEEDBACK_BASE, e.g. ruse-controls.
 
-    If deploy_type is set, prefers directories matching that type
-    (e.g., deploy_type="ghosts" prefers dirs containing "ghosts").
-    Falls back to any directory if no type-specific match exists.
+    Returns None if FEEDBACK_BASE doesn't exist or the subtree is missing.
+    deploy_type=None / "ruse" / "sup" all resolve to ruse-controls.
     """
     if not FEEDBACK_BASE.is_dir():
         return None
+    kind = _deploy_type_prefix(deploy_type)  # "ruse" | "rampart" | "ghosts"
+    root = FEEDBACK_BASE / f"{kind}-controls"
+    return root if root.is_dir() else None
 
-    type_prefix = _deploy_type_prefix(deploy_type)
 
-    best_typed = None
-    best_typed_mtime = 0.0
-    best_any = None
-    best_any_mtime = 0.0
+def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
+    """Find the most recent dataset subdir under {type}-controls/.
 
-    for d in FEEDBACK_BASE.iterdir():
+    New layout (/mnt/AXES2U1/feedback/{type}-controls/{dataset}/) is scoped
+    per-type, so there's no cross-type fallback like the old flat layout.
+    """
+    root = _type_root(deploy_type)
+    if root is None:
+        return None
+
+    best = None
+    best_mtime = 0.0
+    for d in root.iterdir():
         if not d.is_dir():
             continue
+        if not _is_valid_feedback_source(d, deploy_type):
+            continue
         mtime = d.stat().st_mtime
-        if mtime > best_any_mtime:
-            best_any_mtime = mtime
-            best_any = d
-        if type_prefix and type_prefix in d.name and mtime > best_typed_mtime:
-            best_typed_mtime = mtime
-            best_typed = d
+        if mtime > best_mtime:
+            best_mtime = mtime
+            best = d
 
-    return best_typed or best_any
+    return best
 
 
 # ── PHASE source validation & metadata extraction (post Stage 2) ───────────
@@ -161,20 +283,27 @@ def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
 
 
 def _parse_source_name(source_dir: Path) -> tuple[str, str, str]:
-    """Extract (experiment, dataset, preset) from a PHASE source dir name.
+    """Extract (experiment, dataset, preset) from a feedback source dir.
 
-    PHASE source dirs are named {experiment}_{dataset}_{preset}, e.g.:
-      axes-ruse-controls_axes-summer24_std-ctrls
-      → ("axes-ruse-controls", "axes-summer24", "std-ctrls")
+    Post 2026-04-23 layout: source_dir.name IS the dataset (e.g.
+    "axes-summer24"), and preset + deploy_key live in manifest.json. When
+    available, the manifest is authoritative — dataset/preset come from it
+    and experiment is synthesized as "axes-{deploy_key}".
 
-    Experiment, dataset, and preset each use hyphens internally, so an
-    underscore split yields exactly three parts. Falls back to "unknown"
-    tuple on malformed names.
+    Falls back to directory-name-only parsing when manifest is missing,
+    using `std-ctrls` as the default preset (matches the only preset PHASE
+    currently emits). This keeps hand-built dev sources working without a
+    manifest.
     """
-    parts = source_dir.name.split("_")
-    if len(parts) != 3:
-        return ("unknown", "unknown", "unknown")
-    return parts[0], parts[1], parts[2]
+    manifest = load_manifest(source_dir)
+    if manifest:
+        deploy_key = manifest.get("deploy_key", source_dir.parent.name)
+        dataset = manifest.get("training_dataset", source_dir.name)
+        preset = manifest.get("version_preset", "std-ctrls")
+        return (f"axes-{deploy_key}", dataset, preset)
+
+    # Fallback: dir name is the dataset, parent dir name is the deploy_key.
+    return (f"axes-{source_dir.parent.name}", source_dir.name, "std-ctrls")
 
 
 def _is_valid_feedback_source(source_dir: Path, deploy_type: str | None) -> bool:
@@ -215,26 +344,23 @@ def _is_valid_feedback_source(source_dir: Path, deploy_type: str | None) -> bool
 
 
 def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
-    """Find all PHASE feedback config directories matching deploy type.
+    """Find all PHASE feedback dataset dirs under {type}-controls/.
 
     Returns list of dicts sorted by dataset name:
         [{"path": Path, "name": str, "preset": str, "dataset": str}, ...]
 
-    A directory is included if its name contains the deploy-type prefix
-    (e.g. "ghosts") AND its file layout matches the Stage 2 generator
-    output for that type. Metadata (preset, dataset) is parsed from the
-    source directory name.
+    A directory is included if its file layout matches the generator
+    output for that type. Metadata (preset, dataset) comes from
+    manifest.json when present; otherwise directory name is treated as
+    the dataset with preset defaulting to "std-ctrls".
     """
-    if not FEEDBACK_BASE.is_dir():
+    root = _type_root(deploy_type)
+    if root is None:
         return []
 
-    type_prefix = _deploy_type_prefix(deploy_type)
     results = []
-
-    for d in sorted(FEEDBACK_BASE.iterdir()):
+    for d in sorted(root.iterdir()):
         if not d.is_dir():
-            continue
-        if type_prefix and type_prefix not in d.name:
             continue
         if not _is_valid_feedback_source(d, deploy_type):
             continue
@@ -251,7 +377,8 @@ def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
 
 
 # Known dataset targets — maps short/friendly names to search strings
-# used against PHASE feedback directory names in ~/PHASE/feedback_engine/configs/.
+# used against feedback dataset directory names under
+# /mnt/AXES2U1/feedback/{type}-controls/.
 # The search string must appear somewhere in the directory name.
 DATASET_TARGETS = {
     # AXES seasonal
@@ -286,39 +413,32 @@ DATASET_TARGETS = {
 
 
 def find_feedback_by_target(target: str, deploy_type: str | None = None) -> Path | None:
-    """Find a PHASE feedback directory matching the given dataset target.
+    """Find a feedback dataset dir matching the given target name.
 
-    Matches against directory names in ~/PHASE/feedback_engine/configs/.
-    e.g., target="summer24" matches "axes-ruse-controls_axes-summer24_std-ctrls".
-
-    If deploy_type is set, prefers directories matching that type
-    (e.g., deploy_type="ghosts" prefers "axes-ghosts-*" over "axes-ruse-*").
-    Falls back to any match if no type-specific match exists.
+    e.g. target="summer24" or "sum24" resolves to dir "axes-summer24"
+    under {FEEDBACK_BASE}/{type}-controls/. DATASET_TARGETS normalizes
+    short aliases. Most-recent mtime wins if multiple dirs match.
     """
-    if not FEEDBACK_BASE.is_dir():
+    root = _type_root(deploy_type)
+    if root is None:
         return None
 
-    # Normalize target name
+    # Normalize target name to its canonical dataset substring
     search = DATASET_TARGETS.get(target, target)
-    type_prefix = _deploy_type_prefix(deploy_type)
 
-    best_typed = None
-    best_typed_mtime = 0.0
-    best_any = None
-    best_any_mtime = 0.0
-
-    for d in FEEDBACK_BASE.iterdir():
+    best = None
+    best_mtime = 0.0
+    for d in root.iterdir():
         if not d.is_dir() or search not in d.name:
             continue
+        if not _is_valid_feedback_source(d, deploy_type):
+            continue
         mtime = d.stat().st_mtime
-        if mtime > best_any_mtime:
-            best_any_mtime = mtime
-            best_any = d
-        if type_prefix and type_prefix in d.name and mtime > best_typed_mtime:
-            best_typed_mtime = mtime
-            best_typed = d
+        if mtime > best_mtime:
+            best_mtime = mtime
+            best = d
 
-    return best_typed or best_any
+    return best
 
 
 def _deploy_type_prefix(deploy_type: str | None) -> str | None:

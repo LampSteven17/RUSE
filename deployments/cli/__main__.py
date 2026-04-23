@@ -238,6 +238,8 @@ def _cmd_deploy(argv: list[str]) -> int:
             target=args.target,
             deploy_type="rampart",
         )
+        if not _confirm_single_feedback(behavior_source, "rampart"):
+            return 0
         return run_rampart_spinup(args.config_name, DEPLOY_DIR, behavior_source, resolved_configs)
 
     if args.ghosts:
@@ -249,6 +251,8 @@ def _cmd_deploy(argv: list[str]) -> int:
             target=args.target,
             deploy_type="ghosts",
         )
+        if not _confirm_single_feedback(behavior_source, "ghosts"):
+            return 0
         return run_ghosts_spinup(args.config_name, DEPLOY_DIR, behavior_source, resolved_configs)
 
     # Default: RUSE SUP deployment
@@ -262,25 +266,75 @@ def _cmd_deploy(argv: list[str]) -> int:
         target=args.target,
         deploy_type="ruse",  # default deploy type
     )
+    if not _confirm_single_feedback(behavior_source, "ruse"):
+        return 0
     return run_ruse_spinup(config_name, DEPLOY_DIR, behavior_source, resolved_configs)
+
+
+def _confirm_single_feedback(behavior_source: str | None, deploy_type: str) -> bool:
+    """Show manifest details + y/N prompt before a single feedback deploy.
+
+    Baseline (no-feedback) deploys pass behavior_source=None and skip the
+    prompt entirely — controls never needed a confirmation. Returns True
+    when the deploy should proceed (either no feedback, or user said yes).
+    Returns False on target mismatch (hard fail) or user decline.
+    """
+    if not behavior_source:
+        return True  # baseline, nothing to confirm
+    from pathlib import Path as _Path
+    from .commands.feedback import (
+        load_manifest, manifest_summary_lines, validate_manifest_target,
+    )
+    src_path = _Path(behavior_source)
+    mf = load_manifest(src_path)
+    err = validate_manifest_target(mf, deploy_type)
+    output.banner("PHASE feedback manifest")
+    output.info("")
+    for line in manifest_summary_lines(src_path, mf):
+        output.info(line)
+    output.info("")
+    if err:
+        output.error(f"  FAIL: {err}")
+        output.error("Aborting: manifest target does not match deploy type.")
+        return False
+    if not output.confirm("Proceed with deploy?"):
+        output.info("Cancelled.")
+        return False
+    return True
 
 
 def _cmd_batch_deploy(deploy_type: str, configs_spec: str, config_name: str | None) -> int:
     """Deploy all available PHASE feedback configs for the given type."""
-    from .commands.feedback import find_all_feedback_sources
+    from .commands.feedback import (
+        find_all_feedback_sources, load_manifest, manifest_summary_lines,
+        validate_manifest_target,
+    )
 
     sources = find_all_feedback_sources(deploy_type)
     if not sources:
         output.error(f"ERROR: No PHASE feedback configs found for '{deploy_type}'")
-        output.info(f"  Searched: ~/PHASE/feedback_engine/configs/ for dirs containing '{deploy_type}'")
+        output.info(f"  Searched: /mnt/AXES2U1/feedback/{deploy_type}-controls/")
         return 1
 
-    # Show what will be deployed
+    # Show what will be deployed, with manifest details per source so the
+    # operator can confirm freshness + target + preset in one prompt.
     output.banner(f"BATCH DEPLOY ({deploy_type}, {configs_spec})")
     output.info("")
+    any_mismatch = False
     for i, src in enumerate(sources, 1):
-        output.info(f"  {i}. {src['dataset']}  (preset: {src['preset']}, source: {src['name']})")
-    output.info("")
+        mf = load_manifest(src["path"])
+        err = validate_manifest_target(mf, deploy_type)
+        output.info(f"  {i}. {src['dataset']}  (preset: {src['preset']})")
+        for line in manifest_summary_lines(src["path"], mf, indent="      "):
+            output.info(line)
+        if err:
+            output.error(f"      FAIL: {err}")
+            any_mismatch = True
+        output.info("")
+
+    if any_mismatch:
+        output.error("Aborting batch: one or more manifests don't match deploy type.")
+        return 1
 
     if not output.confirm(f"Deploy these {len(sources)} feedback config(s)?"):
         output.info("Cancelled.")
