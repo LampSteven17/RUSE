@@ -27,41 +27,40 @@ def _deploy_parser() -> argparse.ArgumentParser:
         prog="deploy",
         description="Deploy RUSE SUP agents, RAMPART enterprise networks, or GHOSTS NPCs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""unified feedback flag:
-  --feedback            deploy with PHASE behavioral feedback (all types)
+        epilog="""default behavior (no scope flags):
+  Deploys BOTH controls AND every discovered PHASE feedback dataset for the
+  chosen type. Use --controls or --feedback to narrow.
 
-RUSE-only granular flags (combine any):
-  --timing              timing_profile.json
-  --workflow            workflow_weights.json
-  --modifiers           behavior_modifiers.json
-  --sites               site_config.json
-  --prompts             prompt_augmentation.json
-  --activity            activity_pattern.json
-  --diversity           diversity_injection.json
-  --variance            variance_injection.json
+scope flags:
+  --controls            deploy baseline controls only
+  --feedback            deploy feedback variants (all, or --target/--source one)
+
+RUSE-only granular flags (combine any; each implies --feedback):
+  --timing --workflow --modifiers --sites --prompts
+  --activity --diversity --variance
   --all-feedback        all of the above (same as --feedback)
 
-Feedback without --target/--source = batch over every discovered dataset.
+Feedback without --target/--source = batch every discovered dataset.
 Pass --target or --source to deploy a single dataset.
 
 examples:
-  ./deploy --ruse                          baseline controls (no feedback)
-  ./deploy --ruse --feedback               ALL PHASE feedback datasets (batch)
-  ./deploy --ruse --feedback --target sum24  single dataset
-  ./deploy --ruse --timing                 ALL datasets, timing-only (batch)
-  ./deploy --ruse --timing --target sum24  single dataset, timing-only
-  ./deploy --ruse --feedback --source ~/p  explicit PHASE source (single)
-  ./deploy --ghosts --feedback             ALL GHOSTS feedback datasets (batch)
-  ./deploy --rampart                       RAMPART baseline (no feedback)
-  ./deploy --rampart --feedback            ALL RAMPART feedback datasets (batch)""",
+  ./deploy --ruse                          controls + ALL feedback datasets
+  ./deploy --ruse --controls               baseline controls only
+  ./deploy --ruse --feedback               ALL feedback datasets (no controls)
+  ./deploy --ruse --feedback --target sum24  single dataset (no controls)
+  ./deploy --ruse --controls --feedback    controls + ALL feedback (explicit)
+  ./deploy --ruse --controls --target sum24  controls + single feedback
+  ./deploy --ghosts                        controls + ALL GHOSTS feedback
+  ./deploy --rampart --controls            RAMPART baseline only""",
     )
     p.add_argument("--ruse", action="store_true", help="Deploy RUSE SUP agents (default)")
     p.add_argument("--rampart", action="store_true", help="Deploy RAMPART enterprise network")
     p.add_argument("--ghosts", action="store_true", help="Deploy GHOSTS NPC traffic generators")
-    p.add_argument("config_name", nargs="?", help="Deployment config name (default: ruse-controls)")
+    p.add_argument("config_name", nargs="?", help="Deployment config name (default: {type}-controls)")
 
-    # Unified feedback flag — works for all deployment types
-    p.add_argument("--feedback", action="store_true", help="Deploy with PHASE behavioral feedback")
+    # Scope flags — opt into just controls, just feedback, or (default) both.
+    p.add_argument("--controls", action="store_true", help="Deploy baseline controls (no feedback)")
+    p.add_argument("--feedback", action="store_true", help="Deploy PHASE feedback variants")
 
     # RUSE-only granular config flags — one per config file
     p.add_argument("--timing", action="store_true", help="Include timing_profile.json (RUSE only)")
@@ -207,9 +206,10 @@ def _cmd_deploy(argv: list[str]) -> int:
     parser = _deploy_parser()
     args = parser.parse_args(argv)
 
-    # Build configs_spec: granular flags always win when present.
-    # --feedback alone = "all", --feedback --timing = timing only,
-    # --all-feedback = "all" regardless of granular flags.
+    # --- Resolve deploy type and configs_spec ---
+    deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "ruse")
+
+    # Granular flags always win; bare --feedback / --all-feedback = "all".
     selected = [fname for flag, fname in _CONFIG_FLAGS.items() if getattr(args, flag, False)]
     if selected:
         configs_spec = ",".join(selected)
@@ -218,129 +218,170 @@ def _cmd_deploy(argv: list[str]) -> int:
     else:
         configs_spec = None
 
-    # Batch-by-default: if feedback is requested but no single-target selector
-    # was given (--target, --source, or a positional config_name), deploy
-    # every PHASE source the system discovers for this deploy_type. To hit
-    # one dataset, pass --target or --source. Previously this required an
-    # explicit --batch flag which was easy to forget and led to operators
-    # accidentally deploying just the most-recent dir when they wanted all.
-    deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "ruse")
-    single_selector = args.target or args.source or args.config_name
-    if configs_spec and not single_selector:
-        return _cmd_batch_deploy(deploy_type, configs_spec, args.config_name)
+    # --- Resolve intent: controls? feedback? ---
+    # --target / --source imply feedback (harmless shorthand).
+    explicit_feedback = bool(configs_spec) or bool(args.source) or bool(args.target)
+    explicit_controls = args.controls
+    single_selector = args.target or args.source
 
-    if args.rampart:
-        from .commands.rampart import run_rampart_spinup
-        from .commands.feedback import resolve_feedback_args
-        behavior_source, resolved_configs = resolve_feedback_args(
-            configs_spec=configs_spec,
-            source=args.source,
-            target=args.target,
-            deploy_type="rampart",
-        )
-        if not _confirm_single_feedback(behavior_source, "rampart"):
-            return 0
-        return run_rampart_spinup(args.config_name, DEPLOY_DIR, behavior_source, resolved_configs)
+    # Default (neither flag specified): deploy BOTH controls and all feedback.
+    # This matches the "full experimental run" mental model and is the new
+    # behavior as of 2026-04-23. Use --controls or --feedback to narrow.
+    if not explicit_feedback and not explicit_controls:
+        want_controls = True
+        want_feedback = True
+        configs_spec = "all"
+    else:
+        want_controls = explicit_controls
+        want_feedback = explicit_feedback
+        if want_feedback and not configs_spec:
+            configs_spec = "all"
 
-    if args.ghosts:
-        from .commands.ghosts import run_ghosts_spinup
-        from .commands.feedback import resolve_feedback_args
-        behavior_source, resolved_configs = resolve_feedback_args(
-            configs_spec=configs_spec,
-            source=args.source,
-            target=args.target,
-            deploy_type="ghosts",
-        )
-        if not _confirm_single_feedback(behavior_source, "ghosts"):
-            return 0
-        return run_ghosts_spinup(args.config_name, DEPLOY_DIR, behavior_source, resolved_configs)
-
-    # Default: RUSE SUP deployment
-    config_name = args.config_name or "ruse-controls"
-
-    from .commands.spinup import run_ruse_spinup
-    from .commands.feedback import resolve_feedback_args
-    behavior_source, resolved_configs = resolve_feedback_args(
+    # --- Build plan: list of (label, behavior_source, configs_spec) tasks ---
+    plan = _build_deploy_plan(
+        deploy_type=deploy_type,
+        config_name=args.config_name,
+        want_controls=want_controls,
+        want_feedback=want_feedback,
         configs_spec=configs_spec,
-        source=args.source,
+        single_selector=single_selector,
         target=args.target,
-        deploy_type="ruse",  # default deploy type
+        source=args.source,
     )
-    if not _confirm_single_feedback(behavior_source, "ruse"):
+    if plan is None:
+        return 1
+    if not plan:
+        output.error("Nothing to deploy. Use --controls and/or --feedback.")
+        return 1
+
+    # --- Show plan + single confirm prompt ---
+    if not _show_plan_and_confirm(plan, deploy_type):
         return 0
-    return run_ruse_spinup(config_name, DEPLOY_DIR, behavior_source, resolved_configs)
+
+    # --- Execute ---
+    return _execute_plan(plan, deploy_type, args.config_name)
 
 
-def _confirm_single_feedback(behavior_source: str | None, deploy_type: str) -> bool:
-    """Show manifest details + y/N prompt before a single feedback deploy.
+def _build_deploy_plan(
+    deploy_type: str,
+    config_name: str | None,
+    want_controls: bool,
+    want_feedback: bool,
+    configs_spec: str | None,
+    single_selector: str | None,
+    target: str | None,
+    source: str | None,
+) -> list[dict] | None:
+    """Resolve controls + feedback intent into an ordered list of deploy tasks.
 
-    Baseline (no-feedback) deploys pass behavior_source=None and skip the
-    prompt entirely — controls never needed a confirmation. Returns True
-    when the deploy should proceed (either no feedback, or user said yes).
-    Returns False on target mismatch (hard fail) or user decline.
+    Each task is a dict: {label, behavior_source (Path|None), configs_spec,
+    manifest (dict|None), is_controls (bool)}.
+
+    Returns None on hard failure (e.g. feedback requested but source can't
+    be resolved). Returns empty list if nothing to do.
     """
-    if not behavior_source:
-        return True  # baseline, nothing to confirm
-    from pathlib import Path as _Path
     from .commands.feedback import (
-        load_manifest, manifest_summary_lines, validate_manifest_target,
+        find_all_feedback_sources, find_feedback_by_target, load_manifest,
     )
-    src_path = _Path(behavior_source)
-    mf = load_manifest(src_path)
-    err = validate_manifest_target(mf, deploy_type)
-    output.banner("PHASE feedback manifest")
+
+    plan: list[dict] = []
+
+    if want_controls:
+        plan.append({
+            "label": f"{deploy_type}-controls (baseline)",
+            "behavior_source": None,
+            "configs_spec": None,
+            "manifest": None,
+            "is_controls": True,
+        })
+
+    if want_feedback:
+        sources: list[dict] = []
+        if single_selector:
+            # Resolve single selector to one source
+            if source:
+                from pathlib import Path as _Path
+                src_path = _Path(source)
+                if not src_path.is_dir():
+                    output.error(f"ERROR: --source not a directory: {src_path}")
+                    return None
+                sources = [{"path": src_path, "dataset": src_path.name, "preset": "?"}]
+            elif target:
+                src_path = find_feedback_by_target(target, deploy_type=deploy_type)
+                if not src_path:
+                    output.error(f"ERROR: No feedback source for target '{target}' "
+                                 f"under /mnt/AXES2U1/feedback/{deploy_type}-controls/")
+                    return None
+                sources = [{"path": src_path, "dataset": src_path.name, "preset": "?"}]
+        else:
+            sources = find_all_feedback_sources(deploy_type)
+            if not sources:
+                output.error(f"ERROR: No PHASE feedback configs found for '{deploy_type}'")
+                output.info(f"  Searched: /mnt/AXES2U1/feedback/{deploy_type}-controls/")
+                return None
+
+        for src in sources:
+            mf = load_manifest(src["path"])
+            plan.append({
+                "label": f"{deploy_type}-feedback: {src['dataset']}",
+                "behavior_source": src["path"],
+                "configs_spec": configs_spec,
+                "manifest": mf,
+                "is_controls": False,
+            })
+
+    return plan
+
+
+def _show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
+    """Render the combined plan (controls + feedback manifests) and ask y/N.
+
+    Fails loud (returns False) if any feedback task's manifest.target
+    doesn't match deploy_type. Skips the prompt when the plan is a single
+    controls task — no ambiguity there.
+    """
+    from .commands.feedback import manifest_summary_lines, validate_manifest_target
+
+    n = len(plan)
+    output.banner(f"DEPLOY PLAN ({deploy_type}, {n} task{'s' if n != 1 else ''})")
     output.info("")
-    for line in manifest_summary_lines(src_path, mf):
-        output.info(line)
-    output.info("")
-    if err:
-        output.error(f"  FAIL: {err}")
-        output.error("Aborting: manifest target does not match deploy type.")
+
+    any_mismatch = False
+    for i, task in enumerate(plan, 1):
+        output.info(f"  {i}. {task['label']}")
+        if task["is_controls"]:
+            output.info(f"      (baseline controls — no PHASE feedback)")
+        else:
+            mf = task["manifest"]
+            err = validate_manifest_target(mf, deploy_type)
+            for line in manifest_summary_lines(
+                task["behavior_source"], mf, indent="      ",
+            ):
+                output.info(line)
+            if err:
+                output.error(f"      FAIL: {err}")
+                any_mismatch = True
+        output.info("")
+
+    if any_mismatch:
+        output.error("Aborting: one or more manifests don't match deploy type.")
         return False
-    if not output.confirm("Proceed with deploy?"):
+
+    # Don't prompt for a single controls-only deploy — legacy behavior and
+    # there's nothing to confirm beyond the banner.
+    if n == 1 and plan[0]["is_controls"]:
+        return True
+
+    if not output.confirm(f"Deploy these {n} config(s)?"):
         output.info("Cancelled.")
         return False
     return True
 
 
-def _cmd_batch_deploy(deploy_type: str, configs_spec: str, config_name: str | None) -> int:
-    """Deploy all available PHASE feedback configs for the given type."""
-    from .commands.feedback import (
-        find_all_feedback_sources, load_manifest, manifest_summary_lines,
-        validate_manifest_target,
-    )
-
-    sources = find_all_feedback_sources(deploy_type)
-    if not sources:
-        output.error(f"ERROR: No PHASE feedback configs found for '{deploy_type}'")
-        output.info(f"  Searched: /mnt/AXES2U1/feedback/{deploy_type}-controls/")
-        return 1
-
-    # Show what will be deployed, with manifest details per source so the
-    # operator can confirm freshness + target + preset in one prompt.
-    output.banner(f"BATCH DEPLOY ({deploy_type}, {configs_spec})")
-    output.info("")
-    any_mismatch = False
-    for i, src in enumerate(sources, 1):
-        mf = load_manifest(src["path"])
-        err = validate_manifest_target(mf, deploy_type)
-        output.info(f"  {i}. {src['dataset']}  (preset: {src['preset']})")
-        for line in manifest_summary_lines(src["path"], mf, indent="      "):
-            output.info(line)
-        if err:
-            output.error(f"      FAIL: {err}")
-            any_mismatch = True
-        output.info("")
-
-    if any_mismatch:
-        output.error("Aborting batch: one or more manifests don't match deploy type.")
-        return 1
-
-    if not output.confirm(f"Deploy these {len(sources)} feedback config(s)?"):
-        output.info("Cancelled.")
-        return 0
-
-    # Select the right spinup function and default config
+def _execute_plan(
+    plan: list[dict], deploy_type: str, config_name: str | None,
+) -> int:
+    """Run each task in the plan sequentially. Returns 0 iff all succeed."""
     if deploy_type == "rampart":
         from .commands.rampart import run_rampart_spinup as spinup
         default_config = "rampart-controls"
@@ -352,39 +393,40 @@ def _cmd_batch_deploy(deploy_type: str, configs_spec: str, config_name: str | No
         default_config = "ruse-controls"
 
     base_config = config_name or default_config
-
-    # Deploy each feedback source
-    failed = 0
     results: list[tuple[str, int]] = []
-    for i, src in enumerate(sources, 1):
+
+    for i, task in enumerate(plan, 1):
         output.info("")
-        output.info(f"[{i}/{len(sources)}] Deploying {src['dataset']} ({src['preset']})...")
+        output.info(f"[{i}/{len(plan)}] Deploying {task['label']}...")
+        src = task["behavior_source"]
         try:
-            rc = spinup(base_config, DEPLOY_DIR, str(src["path"]), configs_spec)
+            rc = spinup(
+                base_config, DEPLOY_DIR,
+                str(src) if src else None,
+                task["configs_spec"],
+            )
         except SystemExit as e:
             rc = e.code if isinstance(e.code, int) else 1
         except Exception as e:
             output.error(f"  ERROR: {e}")
             rc = 1
-
-        results.append((src["dataset"], rc))
+        results.append((task["label"], rc))
         if rc != 0:
-            output.error(f"  FAILED: {src['dataset']} (rc={rc})")
-            failed += 1
+            output.error(f"  FAILED: {task['label']} (rc={rc})")
 
-    # Final summary
-    output.info("")
-    output.banner("BATCH DEPLOY SUMMARY")
-    for dataset, rc in results:
-        status = "OK" if rc == 0 else f"FAILED (rc={rc})"
-        output.info(f"  {dataset}: {status}")
-    output.info("")
+    if len(results) > 1:
+        output.info("")
+        output.banner("DEPLOY SUMMARY")
+        for label, rc in results:
+            status = "OK" if rc == 0 else f"FAILED (rc={rc})"
+            output.info(f"  {label}: {status}")
+        output.info("")
 
+    failed = sum(1 for _, rc in results if rc != 0)
     if failed:
-        output.info(f"DONE: {len(sources) - failed}/{len(sources)} succeeded, {failed} failed")
+        output.info(f"DONE: {len(results) - failed}/{len(results)} succeeded, {failed} failed")
         return 1
-
-    output.info(f"DONE: all {len(sources)} deployment(s) launched")
+    output.info(f"DONE: all {len(results)} deployment(s) launched")
     return 0
 
 
