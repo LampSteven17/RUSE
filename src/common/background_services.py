@@ -20,11 +20,25 @@ BACKGROUND_DOMAINS = [
     "api.github.com", "registry.npmjs.org",
 ]
 
-# Common URLs for HTTP HEAD requests (lightweight, common services)
+# Common URLs for HTTP HEAD requests (lightweight, common services).
+# Diversified 2026-04-27: original 3 URLs gave http_head_per_hour traffic only
+# 3 destinations — Zeek-detectable signature. Real workstations emit
+# captive-portal probes + lightweight HTTP/80 fetches across many hosts.
+# All HTTP/80 (knob is named http_head_per_hour); the original lone HTTPS
+# entry was spurious and removed (HTTPS connectivity probes go through
+# DDG/visit_webpage, not the http_head_per_hour rate).
 BACKGROUND_URLS = [
     "http://connectivity-check.ubuntu.com",
     "http://detectportal.firefox.com/canonical.html",
-    "https://www.google.com/generate_204",
+    "http://www.msftconnecttest.com/connecttest.txt",
+    "http://www.gstatic.com/generate_204",
+    "http://clients3.google.com/generate_204",
+    "http://nmcheck.gnome.org/check_network_status.txt",
+    "http://captive.apple.com",
+    "http://neverssl.com",
+    "http://example.com",
+    "http://httpbin.org/get",
+    "http://info.cern.ch",
 ]
 
 

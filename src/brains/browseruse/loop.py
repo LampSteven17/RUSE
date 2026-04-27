@@ -111,8 +111,8 @@ class BrowserUseLoop(BaseEmulationLoop):
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:
-        """Apply BrowserUse-specific behavioral config: max_steps, prompt augmentation."""
-        # Behavior modifiers — max_steps per workflow
+        """Apply BrowserUse-specific behavioral config: max_steps, page_dwell, prompt augmentation."""
+        # Behavior modifiers — max_steps per workflow + page_dwell
         if fc.behavior_modifiers:
             max_steps_global = fc.behavior_modifiers.get("max_steps")
             per_workflow = fc.behavior_modifiers.get("per_workflow", {})
@@ -121,6 +121,24 @@ class BrowserUseLoop(BaseEmulationLoop):
                 new_max = per_workflow.get(wname, max_steps_global)
                 if new_max is not None and hasattr(w, 'max_steps'):
                     w.max_steps = int(new_max)
+
+            # page_dwell: previously MCHP-only. Now BU honors it via a per-step
+            # callback registered on Agent. min/max sampled fresh per step so
+            # each action gets a new uniform draw in [min, max] seconds.
+            pd = fc.behavior_modifiers.get("page_dwell")
+            if pd:
+                try:
+                    pd_tuple = (
+                        float(pd.get("min_seconds", 0.0)),
+                        float(pd.get("max_seconds", 0.0)),
+                    )
+                except (TypeError, ValueError):
+                    pd_tuple = None
+                if pd_tuple and pd_tuple[1] > 0:
+                    for w in self.workflows:
+                        if hasattr(w, "page_dwell"):
+                            w.page_dwell = pd_tuple
+
             if self.logger:
                 self.logger.info("[behavior] Applied behavior_modifiers",
                                  details=fc.behavior_modifiers)
