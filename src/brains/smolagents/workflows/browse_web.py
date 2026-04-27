@@ -8,7 +8,7 @@ from typing import Optional, TYPE_CHECKING
 
 from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool, VisitWebpageTool
 
-from brains.smolagents.tools import WhoisLookupTool
+from brains.smolagents.tools import DownloadFileTool, WhoisLookupTool
 from brains.smolagents.workflows.base import SmolWorkflow
 from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
 from common.logging.llm_callbacks import setup_litellm_callbacks
@@ -134,7 +134,12 @@ class BrowseWebWorkflow(SmolWorkflow):
                 instructions = self.prompts.build_system_prompt()
 
             self._agent = CodeAgent(
-                tools=[DuckDuckGoSearchTool(), VisitWebpageTool(), WhoisLookupTool()],
+                tools=[
+                    DuckDuckGoSearchTool(),
+                    VisitWebpageTool(),
+                    WhoisLookupTool(),
+                    DownloadFileTool(),
+                ],
                 model=llm,
                 instructions=instructions,
                 max_steps=self.max_steps,
