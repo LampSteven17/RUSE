@@ -72,6 +72,10 @@ class WebSearchWorkflow(BUWorkflow):
         self.max_steps = max_steps
         self._llm = None
         self._logger = None
+        # page_dwell: (min_seconds, max_seconds) tuple. Set by
+        # BrowserUseLoop._apply_brain_specific_config from PHASE
+        # behavior_modifiers.page_dwell. None = no per-step delay.
+        self.page_dwell = None
 
     def _get_llm(self, logger: Optional["AgentLogger"] = None):
         """Lazy-load the LLM with logging callbacks."""
@@ -108,11 +112,18 @@ class WebSearchWorkflow(BUWorkflow):
 
         try:
             browser_session = self._get_browser_session()
-            agent = Agent(
-                task=full_prompt,
-                llm=self._get_llm(logger),
-                browser_session=browser_session,
-            )
+            agent_kwargs = {
+                "task": full_prompt,
+                "llm": self._get_llm(logger),
+                "browser_session": browser_session,
+            }
+            if self.page_dwell:
+                lo, hi = self.page_dwell
+                async def _page_dwell_cb(*_args, **_kwargs):
+                    # Fresh uniform draw per step — captures lo/hi by closure.
+                    await asyncio.sleep(random.uniform(lo, hi))
+                agent_kwargs["register_new_step_callback"] = _page_dwell_cb
+            agent = Agent(**agent_kwargs)
             result = await agent.run(max_steps=self.max_steps)
             return result
         except Exception as e:
