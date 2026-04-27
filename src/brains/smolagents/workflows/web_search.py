@@ -6,7 +6,7 @@ Performs explicit web searches using CodeAgent + DuckDuckGoSearchTool.
 import random
 from typing import Optional, TYPE_CHECKING
 
-from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool
+from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool, VisitWebpageTool
 
 from brains.smolagents.workflows.base import SmolWorkflow
 from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
@@ -63,7 +63,10 @@ class WebSearchWorkflow(SmolWorkflow):
         self.model_name = get_model(model)
         self.prompts = prompts
         self._agent = None
-        self.max_steps = 6
+        # Floor bumped 6 → 10 (2026-04-27): with VisitWebpageTool added, gemma
+        # has more reason to keep going past a single search. PHASE
+        # behavior_modifiers.max_steps still overrides per-deploy.
+        self.max_steps = 10
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -82,7 +85,7 @@ class WebSearchWorkflow(SmolWorkflow):
                 instructions = self.prompts.build_system_prompt()
 
             self._agent = CodeAgent(
-                tools=[DuckDuckGoSearchTool()],
+                tools=[DuckDuckGoSearchTool(), VisitWebpageTool()],
                 model=llm,
                 instructions=instructions,
                 max_steps=self.max_steps,
