@@ -255,15 +255,12 @@ class BaseEmulationLoop(ABC):
             print(f"{tag} W4 workflow_weights DISABLED — "
                   f"no content.workflow_weights, using uniform random selection"
                   f"{reason_suffix}")
-        # W3: site_config is loaded from content.site_categories but currently
-        # has no runtime consumer. Emit an INFO line (not WARNING) so operators
-        # can still see PHASE is shipping the field — but it doesn't count
-        # against audit.py's warnings column (it's our-side TODO, not a
-        # PHASE bug). Remove the line entirely when site-category filtering
-        # is wired into _select_workflow.
-        if fc.site_config:
-            print("[INFO] W3 site_config UNUSED — "
-                  "content.site_categories loaded but no runtime consumer yet")
+        # W3 site_config: consumer wired 2026-04-27 (SmolAgents BrowseWebWorkflow
+        # filters its task pool by category using content.site_categories
+        # weights — see SmolAgentLoop._apply_brain_specific_config). Previous
+        # "UNUSED" INFO line removed. BrowserUse + MCHP do not consume
+        # site_config; if wired later, the [INFO] guard belongs in their
+        # respective _apply_brain_specific_config paths, not here.
 
     # ── Workflow selection ────────────────────────────────────────────
 

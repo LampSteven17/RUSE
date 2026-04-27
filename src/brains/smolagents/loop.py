@@ -103,7 +103,21 @@ class SmolAgentLoop(BaseEmulationLoop):
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:
-        """Apply SmolAgents-specific behavioral config: max_steps, prompt augmentation."""
+        """Apply SmolAgents-specific behavioral config: max_steps, prompt augmentation, site_config."""
+        # W3 site_config — propagate content.site_categories to BrowseWebWorkflow.
+        # Only BrowseWebWorkflow consumes site_weights; WebSearch + YouTube
+        # ignore the field by design (search-result diversity comes from the
+        # search engine, not category steering; YouTube is uniformly heavy).
+        if fc.site_config:
+            applied = 0
+            for w in self.workflows:
+                if getattr(w, "name", "") == "BrowseWeb" and hasattr(w, "site_weights"):
+                    w.site_weights = dict(fc.site_config)
+                    applied += 1
+            if self.logger:
+                self.logger.info("[behavior] Applied site_config",
+                                 details={"weights": fc.site_config, "workflows": applied})
+
         # Behavior modifiers — max_steps per workflow (force agent re-creation on change)
         if fc.behavior_modifiers:
             max_steps_global = fc.behavior_modifiers.get("max_steps")
