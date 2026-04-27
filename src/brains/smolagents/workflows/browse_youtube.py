@@ -22,23 +22,62 @@ _litellm_callbacks_registered = False
 WORKFLOW_NAME = 'BrowseYouTube'
 WORKFLOW_DESCRIPTION = 'Research YouTube video content'
 
-# YouTube research tasks - queries about video content
+# YouTube research tasks - queries about video content.
+# Tagged 2026-04-27 with site categories for schema consistency. All tasks
+# are "heavy" by content type (video research) but the field is preserved
+# so the data shape matches BROWSE_WEB_TASKS / WEB_SEARCH_TASKS. YouTube
+# workflow does not consume site_weights. 50 entries.
 BROWSE_YOUTUBE_TASKS = [
-    "What are the most popular tech YouTube channels right now?",
-    "Find trending machine learning video content on YouTube",
-    "What cooking tutorial channels are popular on YouTube?",
-    "Search for the best Python programming tutorial series on YouTube",
-    "What are the top science education YouTube channels?",
-    "Find popular travel vlog channels on YouTube",
-    "What gaming content is trending on YouTube this month?",
-    "Search for highly rated music production tutorial videos",
-    "What fitness and workout channels are popular on YouTube?",
-    "Find the best DIY and home improvement YouTube channels",
-    "What documentary-style YouTube channels cover history?",
-    "Search for popular product review channels on YouTube",
-    "What space and astronomy content is trending on YouTube?",
-    "Find educational math tutorial YouTube channels",
-    "What photography tutorial content is popular on YouTube?",
+    ("What are the most popular tech YouTube channels right now?", "heavy"),
+    ("Find trending machine learning video content on YouTube", "heavy"),
+    ("What cooking tutorial channels are popular on YouTube?", "heavy"),
+    ("Search for the best Python programming tutorial series on YouTube", "heavy"),
+    ("What are the top science education YouTube channels?", "heavy"),
+    ("Find popular travel vlog channels on YouTube", "heavy"),
+    ("What gaming content is trending on YouTube this month?", "heavy"),
+    ("Search for highly rated music production tutorial videos", "heavy"),
+    ("What fitness and workout channels are popular on YouTube?", "heavy"),
+    ("Find the best DIY and home improvement YouTube channels", "heavy"),
+    ("What documentary-style YouTube channels cover history?", "heavy"),
+    ("Search for popular product review channels on YouTube", "heavy"),
+    ("What space and astronomy content is trending on YouTube?", "heavy"),
+    ("Find educational math tutorial YouTube channels", "heavy"),
+    ("What photography tutorial content is popular on YouTube?", "heavy"),
+    ("Find popular woodworking channels on YouTube", "heavy"),
+    ("What 3D printing channels are trending on YouTube?", "heavy"),
+    ("Search for popular language learning YouTube channels", "heavy"),
+    ("What are the top chess instruction YouTube channels?", "heavy"),
+    ("Find video essays on classic literature on YouTube", "heavy"),
+    ("What are the most popular news commentary YouTube channels?", "heavy"),
+    ("Search for car review YouTube channels", "heavy"),
+    ("Find popular electronics teardown YouTube channels", "heavy"),
+    ("What art tutorial channels are popular on YouTube?", "heavy"),
+    ("Search for nature documentary creators on YouTube", "heavy"),
+    ("Find popular astrophotography YouTube channels", "heavy"),
+    ("What classical music performance channels are popular on YouTube?", "heavy"),
+    ("Search for jazz tutorial YouTube channels", "heavy"),
+    ("Find popular guitar lesson YouTube channels", "heavy"),
+    ("What stand-up comedy clip channels are popular on YouTube?", "heavy"),
+    ("Search for popular short-film YouTube channels", "heavy"),
+    ("Find popular animation creators on YouTube", "heavy"),
+    ("What history-explainer YouTube channels are popular?", "heavy"),
+    ("Search for chemistry experiment YouTube channels", "heavy"),
+    ("Find popular astronomy YouTube channels for beginners", "heavy"),
+    ("What philosophy lecture series are popular on YouTube?", "heavy"),
+    ("Search for popular podcast clips on YouTube", "heavy"),
+    ("Find popular conference recording archives on YouTube", "heavy"),
+    ("What aviation and flight YouTube channels are popular?", "heavy"),
+    ("Search for popular sailing-vlog YouTube channels", "heavy"),
+    ("Find popular blacksmithing channels on YouTube", "heavy"),
+    ("What kayaking and outdoor adventure channels are popular on YouTube?", "heavy"),
+    ("Search for popular indoor gardening YouTube channels", "heavy"),
+    ("Find popular speed-running channels on YouTube", "heavy"),
+    ("What live-coding YouTube channels are popular?", "heavy"),
+    ("Search for security research YouTube talks", "heavy"),
+    ("Find popular reverse-engineering YouTube channels", "heavy"),
+    ("What CTF walkthrough YouTube channels are popular?", "heavy"),
+    ("Search for popular synth-music tutorial YouTube channels", "heavy"),
+    ("Find popular field-recording channels on YouTube", "heavy"),
 ]
 
 
@@ -104,11 +143,13 @@ class BrowseYouTubeWorkflow(SmolWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            task = random.choice(BROWSE_YOUTUBE_TASKS)
+            # Tasks are (query, category) tuples since 2026-04-27. YouTube
+            # does not consume site_weights — flat random over all tasks.
+            task = random.choice(BROWSE_YOUTUBE_TASKS)[0]
             if logger:
                 logger.decision(
                     choice="browse_youtube_task",
-                    options=BROWSE_YOUTUBE_TASKS[:5],
+                    options=[t for t, _ in BROWSE_YOUTUBE_TASKS[:5]],
                     selected=task,
                     context=f"Task from {len(BROWSE_YOUTUBE_TASKS)} available tasks",
                     method="random"

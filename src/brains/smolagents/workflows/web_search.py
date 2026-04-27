@@ -22,23 +22,66 @@ _litellm_callbacks_registered = False
 WORKFLOW_NAME = 'WebSearch'
 WORKFLOW_DESCRIPTION = 'Search the web for information'
 
-# Web search tasks - explicit search-oriented queries
+# Web search tasks - explicit search-oriented queries.
+# Tagged 2026-04-27 with site categories for schema consistency with
+# BROWSE_WEB_TASKS / BROWSE_YOUTUBE_TASKS. WebSearch does not consume
+# site_weights (only BrowseWeb does), but tuples keep the data shape uniform.
+# 50 entries.
 WEB_SEARCH_TASKS = [
-    "Find the latest cybersecurity vulnerabilities reported this month",
-    "Compare React vs Vue vs Angular for web development",
-    "Search for the best Python libraries for data analysis",
-    "Find recent developments in large language models",
-    "Search for cloud computing cost optimization strategies",
-    "Find the top programming languages by popularity in 2024",
-    "Search for best practices in API design and REST endpoints",
-    "Find comparisons of different database systems for web apps",
-    "Search for recent breakthroughs in quantum computing",
-    "Find the latest trends in DevOps and CI/CD pipelines",
-    "Search for machine learning model deployment best practices",
-    "Find recent open source projects gaining traction",
-    "Search for web application security testing methodologies",
-    "Find comparisons of containerization tools and platforms",
-    "Search for the latest updates in the JavaScript ecosystem",
+    # === lightweight (reference / news search) ===
+    ("Find the latest cybersecurity vulnerabilities reported this month", "lightweight"),
+    ("Search for recent IETF RFC publications", "lightweight"),
+    ("Find recent CVE entries on the NVD database", "lightweight"),
+    ("Search for current major news headlines", "lightweight"),
+    ("Find the most recent Linux kernel release notes", "lightweight"),
+    ("Search for recent earthquake events worldwide", "lightweight"),
+    ("Find the latest weather advisories from NOAA", "lightweight"),
+    ("Search for recent space mission updates from NASA", "lightweight"),
+    ("Find new entries in the Wikipedia featured-articles list", "lightweight"),
+    ("Search for the latest economic indicators released by the Fed", "lightweight"),
+    ("Find recent FDA drug approvals", "lightweight"),
+    ("Search for the latest UN Security Council meeting summaries", "lightweight"),
+    ("Find current rankings of universities worldwide", "lightweight"),
+    ("Search for the latest CDC public-health bulletins", "lightweight"),
+    ("Find recent peer-reviewed papers on climate change", "lightweight"),
+    ("Search for the most-cited papers of the past year on arxiv", "lightweight"),
+    ("Find recent statistics on global internet usage", "lightweight"),
+    # === medium (tutorial / Q&A / dev research) ===
+    ("Compare React vs Vue vs Angular for web development", "medium"),
+    ("Search for the best Python libraries for data analysis", "medium"),
+    ("Find recent developments in large language models", "medium"),
+    ("Search for cloud computing cost optimization strategies", "medium"),
+    ("Find the top programming languages by popularity in 2024", "medium"),
+    ("Search for best practices in API design and REST endpoints", "medium"),
+    ("Find comparisons of different database systems for web apps", "medium"),
+    ("Search for recent breakthroughs in quantum computing", "medium"),
+    ("Find the latest trends in DevOps and CI/CD pipelines", "medium"),
+    ("Search for machine learning model deployment best practices", "medium"),
+    ("Find recent open source projects gaining traction", "medium"),
+    ("Search for web application security testing methodologies", "medium"),
+    ("Find comparisons of containerization tools and platforms", "medium"),
+    ("Search for the latest updates in the JavaScript ecosystem", "medium"),
+    ("Compare popular IDEs for Rust development", "medium"),
+    ("Search for tutorials on Kubernetes operators", "medium"),
+    ("Find guides on building zero-trust network architectures", "medium"),
+    ("Search for performance benchmarks of NoSQL databases", "medium"),
+    ("Compare authentication libraries across major web frameworks", "medium"),
+    ("Search for tutorials on writing custom Linux kernel modules", "medium"),
+    ("Find guides on optimizing PostgreSQL query performance", "medium"),
+    # === heavy (video-research / streaming-related searches) ===
+    ("Search for popular conference talk videos this year", "heavy"),
+    ("Find streaming platform comparisons for indie filmmakers", "heavy"),
+    ("Search for trending livestream events online", "heavy"),
+    ("Find documentaries available on free streaming services", "heavy"),
+    ("Search for tutorials on video editing in DaVinci Resolve", "heavy"),
+    ("Find live-coding streams on programming languages", "heavy"),
+    ("Search for the most-watched gaming streams of the week", "heavy"),
+    ("Find recent music album releases on streaming platforms", "heavy"),
+    ("Search for podcast episodes about cybersecurity", "heavy"),
+    ("Find video archives of academic conferences", "heavy"),
+    ("Search for free online film festival programs", "heavy"),
+    ("Find the most popular Twitch categories right now", "heavy"),
+    ("Search for archived NASA mission video footage", "heavy"),
 ]
 
 
@@ -104,11 +147,13 @@ class WebSearchWorkflow(SmolWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            task = random.choice(WEB_SEARCH_TASKS)
+            # Tasks are (query, category) tuples since 2026-04-27. WebSearch
+            # does not consume site_weights — flat random over all tasks.
+            task = random.choice(WEB_SEARCH_TASKS)[0]
             if logger:
                 logger.decision(
                     choice="web_search_task",
-                    options=WEB_SEARCH_TASKS[:5],
+                    options=[t for t, _ in WEB_SEARCH_TASKS[:5]],
                     selected=task,
                     context=f"Task from {len(WEB_SEARCH_TASKS)} available tasks",
                     method="random"

@@ -22,23 +22,66 @@ _litellm_callbacks_registered = False
 WORKFLOW_NAME = 'BrowseWeb'
 WORKFLOW_DESCRIPTION = 'Browse the web and read content'
 
-# Web browsing tasks - general knowledge queries that simulate reading websites
+# Web browsing tasks - general knowledge queries that simulate reading websites.
+# Tagged 2026-04-27 with site categories for content.site_categories steering:
+#   lightweight = Wikipedia, BBC News, blog, mostly-text reference
+#   medium      = forum/Q&A, tutorial, magazine-format
+#   heavy       = video, streaming, image-heavy
+# Format: (query_string, category). 50 entries.
 BROWSE_WEB_TASKS = [
-    "What is the history of the internet?",
-    "Describe the human immune system",
-    "What are the major features of Wikipedia?",
-    "Summarize how Reddit works as a social platform",
-    "What is Hacker News and what kind of stories appear there?",
-    "Describe the BBC's news coverage areas",
-    "What topics does TechCrunch cover?",
-    "Summarize what ESPN covers in sports news",
-    "What kind of reporting does Reuters focus on?",
-    "Describe the main sections of a typical news website",
-    "What are the most popular content categories on Medium?",
-    "Describe how Stack Overflow helps programmers",
-    "What types of articles does Ars Technica publish?",
-    "Summarize what The Verge covers in technology",
-    "What are the main features of Wired magazine's website?",
+    # === lightweight (reference / news / blog text) ===
+    ("What is the history of the internet?", "lightweight"),
+    ("Describe the human immune system", "lightweight"),
+    ("What are the major features of Wikipedia?", "lightweight"),
+    ("Describe the BBC's news coverage areas", "lightweight"),
+    ("What kind of reporting does Reuters focus on?", "lightweight"),
+    ("Describe the main sections of a typical news website", "lightweight"),
+    ("Summarize what AP News covers", "lightweight"),
+    ("What is The Guardian's editorial focus?", "lightweight"),
+    ("Describe NPR's content categories", "lightweight"),
+    ("What sections appear on Britannica.com?", "lightweight"),
+    ("Summarize the structure of arxiv.org", "lightweight"),
+    ("What is the layout of a typical encyclopedia entry?", "lightweight"),
+    ("Describe what Project Gutenberg offers", "lightweight"),
+    ("What is the purpose of the Internet Archive?", "lightweight"),
+    ("Summarize how the Library of Congress site is organized", "lightweight"),
+    ("Describe how WHO publishes health guidance online", "lightweight"),
+    ("What does the CDC website cover?", "lightweight"),
+    # === medium (tutorials / Q&A / magazine) ===
+    ("What is Hacker News and what kind of stories appear there?", "medium"),
+    ("Summarize how Reddit works as a social platform", "medium"),
+    ("What topics does TechCrunch cover?", "medium"),
+    ("What are the most popular content categories on Medium?", "medium"),
+    ("Describe how Stack Overflow helps programmers", "medium"),
+    ("What types of articles does Ars Technica publish?", "medium"),
+    ("Summarize what The Verge covers in technology", "medium"),
+    ("What are the main features of Wired magazine's website?", "medium"),
+    ("Describe how Quora structures its question pages", "medium"),
+    ("What does Server Fault host?", "medium"),
+    ("Summarize how GitHub Discussions works", "medium"),
+    ("What is freeCodeCamp's curriculum structure?", "medium"),
+    ("Describe Real Python's tutorial format", "medium"),
+    ("What does MDN Web Docs provide for developers?", "medium"),
+    ("Summarize how Dev.to differs from Medium", "medium"),
+    ("What kind of content appears on Lobste.rs?", "medium"),
+    ("Describe Hashnode's blogging platform", "medium"),
+    # === heavy (video / streaming / image-heavy) ===
+    ("What kind of content is popular on Twitch?", "heavy"),
+    ("Describe what Vimeo offers compared to YouTube", "heavy"),
+    ("Summarize how Pinterest organizes image boards", "heavy"),
+    ("What is Imgur primarily used for?", "heavy"),
+    ("Describe Flickr's photo-sharing model", "heavy"),
+    ("What kind of content appears on TikTok's discover page?", "heavy"),
+    ("Summarize how Instagram Reels are recommended", "heavy"),
+    ("Describe DailyMotion's main video categories", "heavy"),
+    ("What does the Met Museum's online collection look like?", "heavy"),
+    ("Summarize the layout of a Spotify artist page", "heavy"),
+    ("Describe how SoundCloud presents tracks", "heavy"),
+    ("What types of media appear on Bandcamp?", "heavy"),
+    ("Describe how a typical streaming platform displays its catalog", "heavy"),
+    ("What is the layout of a typical video gaming review site?", "heavy"),
+    ("Summarize how IGN organizes game coverage", "heavy"),
+    ("What does Giphy host?", "heavy"),
 ]
 
 
@@ -68,6 +111,10 @@ class BrowseWebWorkflow(SmolWorkflow):
         # behavior_modifiers.max_steps still overrides per-deploy.
         self.max_steps = 10
         self.task_weights = None
+        # Set by SmolAgentLoop._apply_brain_specific_config from
+        # content.site_categories (e.g. {"lightweight": 0.55, "medium": 0.3,
+        # "heavy": 0.15}). When None, fall back to flat random over all tasks.
+        self.site_weights = None
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -105,16 +152,32 @@ class BrowseWebWorkflow(SmolWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            if self.task_weights:
-                task = random.choices(BROWSE_WEB_TASKS, weights=self.task_weights, k=1)[0]
+            # Tasks are (query, category) tuples since 2026-04-27. Three
+            # selection modes, in priority order:
+            #   1. site_weights (PHASE content.site_categories) — pick a
+            #      category, then random within that category's pool.
+            #   2. task_weights (legacy per-task weighting) — random.choices
+            #      over flat list.
+            #   3. fallback — flat random over all tasks.
+            if self.site_weights:
+                cats = list(self.site_weights.keys())
+                weights = list(self.site_weights.values())
+                chosen_cat = random.choices(cats, weights=weights, k=1)[0]
+                pool = [t for t, c in BROWSE_WEB_TASKS if c == chosen_cat]
+                if not pool:
+                    pool = [t for t, _ in BROWSE_WEB_TASKS]
+                task = random.choice(pool)
+                selection_method = f"site_weighted:{chosen_cat}"
+            elif self.task_weights:
+                task = random.choices(BROWSE_WEB_TASKS, weights=self.task_weights, k=1)[0][0]
                 selection_method = "behavior_weighted"
             else:
-                task = random.choice(BROWSE_WEB_TASKS)
+                task = random.choice(BROWSE_WEB_TASKS)[0]
                 selection_method = "random"
             if logger:
                 logger.decision(
                     choice="browse_web_task",
-                    options=BROWSE_WEB_TASKS[:5],
+                    options=[t for t, _ in BROWSE_WEB_TASKS[:5]],
                     selected=task,
                     context=f"Task from {len(BROWSE_WEB_TASKS)} available tasks",
                     method=selection_method
