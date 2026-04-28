@@ -308,6 +308,38 @@
         dest: /etc/systemd/system/ghosts-client.service
         mode: '0644'
 
+    # ── Feedback-only memleak mitigation (2026-04-27) ───────────────────
+    # Upstream cmu-sei/GHOSTS .NET client has a memleak that fills a 28GB
+    # VM's RAM in 2-3h. Without a cgroup cap, the kernel OOM-killer
+    # eventually picks sshd / system services BEFORE the leaky process —
+    # 23/40 NPCs were SSH-unreachable 3h post-deploy on 2026-04-27.
+    # With the cap, kernel kills only the .NET process inside its cgroup;
+    # systemd respawns it via Restart=always within RestartSec. SSH/cron/
+    # system stay alive — VM remains usable indefinitely.
+    #
+    # Scope: feedback deploys ONLY. Controls run the pure upstream unit
+    # so they remain experimentally pristine (leaky-as-designed). The fix
+    # is treated as a feedback-cycle improvement, not a baseline change.
+    - name: Create GHOSTS client systemd drop-in directory (feedback only)
+      file:
+        path: /etc/systemd/system/ghosts-client.service.d
+        state: directory
+        mode: '0755'
+      when: is_feedback | default(false) | bool
+
+    - name: Install memory-cap drop-in (feedback only)
+      copy:
+        content: |
+          # Memleak mitigation for upstream cmu-sei/GHOSTS .NET client.
+          # Feedback-deploy-only — controls run the pure upstream unit.
+          # See install-ghosts-clients.yaml comment for full context.
+          [Service]
+          MemoryMax=20G
+          MemorySwapMax=0
+        dest: /etc/systemd/system/ghosts-client.service.d/memcap.conf
+        mode: '0644'
+      when: is_feedback | default(false) | bool
+
     - name: Start GHOSTS client service
       systemd:
         name: ghosts-client

@@ -163,6 +163,13 @@ def run_ghosts_spinup(
     client_result = runner.run_playbook(
         "install-ghosts-clients.yaml",
         inventory_path,
+        extra_vars={
+            # Feedback deploys get a systemd drop-in capping the .NET client's
+            # memory, mitigating the upstream cmu-sei/GHOSTS memleak. Controls
+            # stay on the pure upstream unit (leaky-as-designed) so they
+            # remain experimentally pristine.
+            "is_feedback": "true" if behavior_source else "false",
+        },
         on_event=default_event_handler,
     )
     # G2: Abort if client install failed. Previously the final return was
