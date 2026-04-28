@@ -572,6 +572,15 @@ def generate_rampart_feedback_config(
     else:
         base["behavior_configs"] = [f.strip() for f in configs_spec.split(",")]
 
+    # Feedback-only flavor bump (2026-04-28): override enterprise.cloud_config
+    # to point at axes-cicd-feedback.json which maps the "small" alias to
+    # m1.xlarge (16GB RAM / 8 vCPU / 160GB disk). Controls keep m1.small via
+    # the original axes-cicd.json — pristine baseline. Reason: m1.small (1cpu/
+    # 2GB) caused rolling sshd kills under emulation load on Windows endpoints
+    # (audit on 2026-04-28 showed ~5 of 180 winep rotating-down at any time).
+    if "enterprise" in base and isinstance(base["enterprise"], dict):
+        base["enterprise"]["cloud_config"] = "cloud-configs/axes-cicd-feedback.json"
+
     config_path = dep_dir / "config.yaml"
     with open(config_path, "w") as f:
         f.write(f"---\n")
