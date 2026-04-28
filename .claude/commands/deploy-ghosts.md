@@ -195,6 +195,44 @@ timeline.
 2. **Client NLog version**: `Ghosts.Domain` wants NLog >= 6.0.6, client pins 6.0.5. Patched with `/p:NoWarn=NU1605` in `dotnet publish`.
 3. **Client DLL casing**: Published DLL is PascalCase `Ghosts.Client.Universal.dll`. Systemd ExecStart must match.
 
+### Memleak Mitigation — Cgroup Memory Cap (2026-04-27, FEEDBACK-ONLY)
+
+Upstream `cmu-sei/GHOSTS` .NET client leaks memory until the kernel
+OOM-killer takes out sshd before the leaky process — 23/40 NPCs were
+SSH-unreachable 3h post-deploy on 2026-04-27 audit. **Pure-upstream
+clients are unrunnable past 2-3h without external rescue (hard-reboot).**
+
+Mitigation lives in a systemd drop-in at:
+```
+/etc/systemd/system/ghosts-client.service.d/memcap.conf
+```
+
+```ini
+[Service]
+MemoryMax=20G
+MemorySwapMax=0
+```
+
+When .NET RSS hits the cap, the kernel kills the process **inside its
+cgroup** ONLY; systemd respawns it via the existing `Restart=always`
+within `RestartSec=10`. sshd / cron / system services stay alive — VM
+remains usable indefinitely even as the leak recurs every ~2h.
+
+**Scope: feedback deploys ONLY.** Controls keep the pure upstream unit
+so they remain experimentally pristine (leaky-as-designed). Treated as
+a feedback-cycle improvement, not a baseline change.
+
+**Wiring**: `ghosts.py` passes `is_feedback={true,false}` extra_var
+to `install-ghosts-clients.yaml`, set from `behavior_source is not None`.
+Playbook conditionally creates the drop-in dir + memcap.conf via
+`when: is_feedback | default(false) | bool` after the base unit is
+written. Drop-in pattern (vs editing the base unit) keeps the diff
+reversible — delete the file to remove the cap.
+
+**Audit signal**: Feedback NPCs may show `NRestarts > 0` as the cgroup
+OOM cycle fires — that's expected and healthy. Pre-cap, NPCs would have
+gone SSH-fail entirely; post-cap they cycle gracefully and stay reachable.
+
 ### PHASE Feedback Engine Integration
 
 To generate GHOSTS-specific feedback:

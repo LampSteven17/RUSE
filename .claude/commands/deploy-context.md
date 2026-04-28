@@ -164,6 +164,46 @@ and `/deploy-ghosts` for the new read-direct flows.
 ### Unified feedback flag (all deployment types)
 - `--feedback` → deploy with all PHASE behavioral configs
 
+### Feedback-only divergence (RUSE + GHOSTS, 2026-04-27/28)
+
+Code paths now branch on `is_feedback` (presence of `behavior.json` in
+the deployed config dir, OR `behavior_source` extra_var) so feedback
+deploys can run extra functionality without polluting the experimental
+controls. Two live examples:
+
+- **RUSE workflows** — Smol/BU/MCHP each gain `whois_lookup` +
+  `download_files` workflows on feedback only. Implemented via
+  `is_feedback` flag on `load_workflows()` (Smol/BU) or
+  `FEEDBACK_ONLY_WORKFLOWS` set in `mchp/agent.py`. Controls keep their
+  original workflow set unchanged. See `/deploy-ruse`.
+- **GHOSTS memcap** — feedback NPCs get a systemd drop-in
+  (`/etc/systemd/system/ghosts-client.service.d/memcap.conf`) capping
+  the .NET client's cgroup at `MemoryMax=20G` so the upstream memleak
+  doesn't take out sshd. Controls run pure upstream. Wired via
+  `is_feedback` extra_var → `when:` gate in
+  `install-ghosts-clients.yaml`. See `/deploy-ghosts`.
+
+Pattern: same playbook for controls + feedback; feedback gets extra
+behavior layered on via conditional task / loader gate. No separate
+control playbook, no behavioral drift in controls.
+
+### Shared network helpers (`src/common/network/`, 2026-04-28)
+
+Brain-agnostic TCP/HTTPS helpers reused across all 3 brains' workflow
+implementations. Each brain has its own workflow file but they import
+the same helper:
+
+- `src/common/network/whois.py` — `whois_lookup(domain)` over TCP/43
+  to whois.iana.org + `FALLBACK_DOMAINS` list
+- `src/common/network/downloader.py` — `download_file(url)` streaming
+  fetch with 10MB cap + `FALLBACK_URLS` list
+- `src/common/network/probes.py` — neighborhood-sidecar inbound probes
+  (10 protocols, see `/deploy-ruse` § Topology Mimicry)
+- `src/common/network/neighborhood_traffic.py` — sidecar daemon
+
+No cross-brain imports — each brain's workflow file imports from
+`common/network/` directly.
+
 ### PHASE feedback source
 Auto-detected from `~/PHASE/feedback_engine/configs/` (most recent directory matching deploy type). Can target a specific dataset with `--source`.
 
