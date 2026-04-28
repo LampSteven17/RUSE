@@ -41,6 +41,13 @@ class BehavioralConfig:
     variance_injection: Optional[dict] = None   # volume/timing variance targets
     diversity_injection: Optional[dict] = None   # service entropy + workflow rotation + topology mimicry
     activity_pattern: Optional[dict] = None      # daily activity shape
+    # Per-target content pools for feedback-only workflows. PHASE writes
+    # these into content.{download_url_pool, whois_domain_pool}; the
+    # workflows fall back to module-level lists if missing/empty.
+    # download_size_pref is intentionally NOT consumed — schema marks
+    # it as informational only.
+    download_url_pool: Optional[List[str]] = None
+    whois_domain_pool: Optional[List[str]] = None
     # PHASE ablation gate metadata — explains why sections may be intentionally
     # absent. When present, missing sections are not bugs but deliberate
     # omissions by PHASE's feedback engine (ablation showed that section's
@@ -214,6 +221,15 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
     # that missing sections are deliberate omissions, not generator bugs.
     ablation_gate = (data.get("_metadata") or {}).get("ablation_gate")
 
+    # Feedback-only content pools (per-target). Empty list or missing key
+    # → None → workflows fall back to their module-level FALLBACK_* lists.
+    download_url_pool = content.get("download_url_pool")
+    if not download_url_pool:
+        download_url_pool = None
+    whois_domain_pool = content.get("whois_domain_pool")
+    if not whois_domain_pool:
+        whois_domain_pool = None
+
     return BehavioralConfig(
         timing_profile=timing or None,
         variance_injection=timing.get("variance"),
@@ -224,6 +240,8 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         diversity_injection=data.get("diversity"),
         prompt_augmentation=prompt,
         ablation_gate=ablation_gate,
+        download_url_pool=download_url_pool,
+        whois_domain_pool=whois_domain_pool,
     )
 
 

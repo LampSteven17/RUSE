@@ -56,16 +56,31 @@ class SmolAgentLoop(BaseEmulationLoop):
     def _agent_type_label(self) -> str:
         return "smolagents_loop"
 
+    def _is_feedback_deploy(self) -> bool:
+        """True iff a behavior.json is present at startup (feedback deploy).
+
+        Controls have no behavior.json and run with empty BehavioralConfig.
+        Feedback deploys have one written by distribute-behavior-configs.yaml
+        before the service starts. Used to gate registration of feedback-
+        only workflows (whois_lookup, download_files).
+        """
+        if not self._behavior_config_dir:
+            return False
+        from pathlib import Path
+        return Path(self._behavior_config_dir, "behavior.json").exists()
+
     def _load_workflows(self) -> list:
         """Load all workflows for the loop."""
         from brains.smolagents.workflows.loader import load_workflows
 
-        print("Loading workflows...")
+        is_feedback = self._is_feedback_deploy()
+        print(f"Loading workflows (is_feedback={is_feedback})...")
         if self.logger:
-            self.logger.info("Loading workflows")
+            self.logger.info("Loading workflows", details={"is_feedback": is_feedback})
         workflows = load_workflows(
             model=self.model,
             prompts=self.prompts,
+            is_feedback=is_feedback,
         )
         print(f"Loaded {len(workflows)} workflows")
 
@@ -103,7 +118,19 @@ class SmolAgentLoop(BaseEmulationLoop):
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:
-        """Apply SmolAgents-specific behavioral config: max_steps, prompt augmentation, site_config."""
+        """Apply SmolAgents-specific behavioral config: max_steps, prompt
+        augmentation, site_config, and feedback-only pool propagation.
+        """
+        # PHASE per-target content pools. Propagate to the dedicated
+        # whois_lookup / download_files workflows when present; workflows
+        # fall back to module-level FALLBACK_* lists when None.
+        for w in self.workflows:
+            wname = getattr(w, "name", "")
+            if wname == "WhoisLookup" and hasattr(w, "domain_pool"):
+                w.domain_pool = fc.whois_domain_pool
+            elif wname == "DownloadFiles" and hasattr(w, "url_pool"):
+                w.url_pool = fc.download_url_pool
+
         # W3 site_config — propagate content.site_categories to BrowseWebWorkflow.
         # Only BrowseWebWorkflow consumes site_weights; WebSearch + YouTube
         # ignore the field by design (search-result diversity comes from the

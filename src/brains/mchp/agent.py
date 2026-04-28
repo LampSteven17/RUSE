@@ -33,6 +33,17 @@ WINDOWS_ONLY_WORKFLOWS = {
     'ms_paint.py',
 }
 
+# Feedback-only workflows. Excluded from baseline/control deploys (no
+# behavior.json) so M0 / M1 retain their pristine upstream workflow set.
+# Loaded for M2+ feedback deploys via the is_feedback gate below.
+#   - download_files.py: pre-existing scripted xkcd/wiki/NIST downloader,
+#     reframed as feedback-only per the workflow refactor.
+#   - whois_lookup.py: new TCP/43 lookup workflow added in the same refactor.
+FEEDBACK_ONLY_WORKFLOWS = {
+    'download_files.py',
+    'whois_lookup.py',
+}
+
 
 class MCHPAgent(BaseEmulationLoop):
     """
@@ -77,8 +88,27 @@ class MCHPAgent(BaseEmulationLoop):
     def _agent_type_label(self) -> str:
         return "mchp"
 
+    def _is_feedback_deploy(self) -> bool:
+        """True iff a behavior.json is present at startup (feedback deploy).
+
+        Controls (M0/M1) have no behavior.json and run with empty
+        BehavioralConfig. Feedback (M2/M3/M4) have one written by
+        distribute-behavior-configs.yaml before service start.
+        """
+        if not self._behavior_config_dir:
+            return False
+        from pathlib import Path
+        return Path(self._behavior_config_dir, "behavior.json").exists()
+
     def _load_workflows(self) -> list:
-        """Dynamically load all workflow modules."""
+        """Dynamically load all workflow modules.
+
+        Filters:
+          - WINDOWS_ONLY_WORKFLOWS  excluded when exclude_windows_workflows=True
+          - FEEDBACK_ONLY_WORKFLOWS excluded when not a feedback deploy
+        """
+        is_feedback = self._is_feedback_deploy()
+        print(f"MCHP: loading workflows (is_feedback={is_feedback})")
         extensions = []
         workflows_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), 'app', 'workflows'
@@ -91,6 +121,9 @@ class MCHPAgent(BaseEmulationLoop):
             for file in files:
                 if self.exclude_windows_workflows and file in WINDOWS_ONLY_WORKFLOWS:
                     print(f"Skipping Windows-only workflow: {file}")
+                    continue
+                if not is_feedback and file in FEEDBACK_ONLY_WORKFLOWS:
+                    print(f"Skipping feedback-only workflow on baseline: {file}")
                     continue
 
                 try:
@@ -120,7 +153,18 @@ class MCHPAgent(BaseEmulationLoop):
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:
-        """Apply MCHP-specific behavioral config: page_dwell, nav_clicks, keep_alive."""
+        """Apply MCHP-specific behavioral config: page_dwell, nav_clicks,
+        keep_alive, plus per-target pools for feedback-only workflows.
+        """
+        # PHASE per-target content pools — propagate to MCHP whois_lookup
+        # workflow when present. download_files.py is the existing
+        # xkcd/wiki/NIST scripted workflow and uses its own helpers, not
+        # the shared download_url_pool.
+        for w in self.workflows:
+            wname = getattr(w, "name", "")
+            if wname == "WhoisLookup" and hasattr(w, "domain_pool"):
+                w.domain_pool = fc.whois_domain_pool
+
         # Ablation-gated omissions get INFO-level logs; real gaps stay WARNING
         gated = fc.is_ablation_gated() if fc and hasattr(fc, "is_ablation_gated") else False
         tag = "[INFO]" if gated else "[WARNING]"
