@@ -62,18 +62,27 @@ class BrowserUseLoop(BaseEmulationLoop):
     def _agent_type_label(self) -> str:
         return "browseruse_loop"
 
+    def _is_feedback_deploy(self) -> bool:
+        """True iff a behavior.json is present at startup (feedback deploy)."""
+        if not self._behavior_config_dir:
+            return False
+        from pathlib import Path
+        return Path(self._behavior_config_dir, "behavior.json").exists()
+
     def _load_workflows(self) -> list:
         """Load all workflows for the loop."""
         from brains.browseruse.workflows.loader import load_workflows
 
-        print("Loading workflows...")
+        is_feedback = self._is_feedback_deploy()
+        print(f"Loading workflows (is_feedback={is_feedback})...")
         if self.logger:
-            self.logger.info("Loading workflows")
+            self.logger.info("Loading workflows", details={"is_feedback": is_feedback})
         workflows = load_workflows(
             model=self.model,
             prompts=self.prompts,
             headless=self.headless,
             max_steps=self.max_steps,
+            is_feedback=is_feedback,
         )
         print(f"Loaded {len(workflows)} workflows")
 
@@ -111,7 +120,19 @@ class BrowserUseLoop(BaseEmulationLoop):
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:
-        """Apply BrowserUse-specific behavioral config: max_steps, page_dwell, prompt augmentation."""
+        """Apply BrowserUse-specific behavioral config: max_steps, page_dwell,
+        prompt augmentation, plus per-target pools for feedback-only workflows.
+        """
+        # PHASE per-target content pools — propagate to dedicated workflows
+        # when present. Workflows fall back to module-level FALLBACK_* lists
+        # when None.
+        for w in self.workflows:
+            wname = getattr(w, "name", "")
+            if wname == "WhoisLookup" and hasattr(w, "domain_pool"):
+                w.domain_pool = fc.whois_domain_pool
+            elif wname == "DownloadFiles" and hasattr(w, "url_pool"):
+                w.url_pool = fc.download_url_pool
+
         # Behavior modifiers — max_steps per workflow + page_dwell
         if fc.behavior_modifiers:
             max_steps_global = fc.behavior_modifiers.get("max_steps")
