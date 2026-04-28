@@ -16,6 +16,8 @@ Read the following files in order to understand the RUSE SUP deployment system:
 7. `src/runners/run_config.py` - SUPConfig registry; CPU variants (B*C/S*C.gemma) use model="gemmac"
 8. `src/brains/browseruse/agent.py` - BrowserUse wrapper with num_ctx injection + tuned Agent settings (use_vision=False, max_clickable_elements_length=8000, llm_timeout=300, etc.)
 9. `src/brains/smolagents/agent.py` + workflows/ - SmolAgents with num_ctx in LiteLLM kwargs
+10. `src/common/network/whois.py`, `src/common/network/downloader.py` - Shared TCP/43 + HTTPS-stream helpers used by all 3 brains' feedback-only whois_lookup / download_files workflows
+11. `src/brains/{smolagents,browseruse,mchp}/workflows/` - Per-brain workflow registries; `loader.py` gates `whois_lookup` + `download_files` on `is_feedback` (presence of behavior.json)
 
 ### Ansible Playbooks (SUP-specific)
 4. `deployments/playbooks/provision-vms.yaml` - Create OpenStack VMs, wait ACTIVE, get IPs, write inventory + SSH config
@@ -382,8 +384,11 @@ field paths are below.
 | `timing.activity_probability_per_hour` | `activity_pattern` | `should_skip_hour()` hourly rolldown |
 | `timing.long_idle_probability` + `long_idle_duration_minutes` | `activity_pattern` | `should_take_long_idle()` |
 | `content.workflow_weights` | `workflow_weights` | `build_workflow_weights()` for `random.choices()` |
-| `content.site_categories` | `site_config` | Stored for future use (no active consumer) |
-| `behavior.page_dwell` / `navigation_clicks` | `behavior_modifiers` | MCHP `BrowseWeb.{min,max}_sleep_time`, `max_navigation_clicks` |
+| `content.site_categories` | `site_config` | SmolAgents BrowseWebWorkflow filters task pool by category (W3 wired 2026-04-27) |
+| `content.download_url_pool` | `download_url_pool` | Smol/BU `DownloadFiles` workflow LLM picker (feedback-only) — falls back to `common.network.downloader.FALLBACK_URLS` when missing/empty |
+| `content.whois_domain_pool` | `whois_domain_pool` | Smol/BU/MCHP `WhoisLookup` workflow (feedback-only) — falls back to `common.network.whois.FALLBACK_DOMAINS` when missing/empty |
+| `content.download_size_pref` | (informational) | Schema marks as informational only — RUSE intentionally ignores |
+| `behavior.page_dwell` / `navigation_clicks` | `behavior_modifiers` | MCHP `BrowseWeb.{min,max}_sleep_time`, `max_navigation_clicks`; BU `Agent(register_new_step_callback=...)` per-step uniform delay (wired 2026-04-27) |
 | `behavior.keep_alive_probability` (flat) | `behavior_modifiers` | G2: MCHP `BrowseWeb.keep_alive_probability` |
 | `behavior.max_steps` | `behavior_modifiers` | BrowserUse / SmolAgents per-workflow `max_steps` |
 | `diversity.background_services.dns_per_hour` / `http_head_per_hour` / `ntp_checks_per_day` | `diversity_injection` | `BackgroundServiceGenerator` (D4) |
@@ -430,13 +435,96 @@ Warning emitters in:
   level)
 - `src/brains/mchp/agent.py::_apply_brain_specific_config` (B1/B2/G2)
 
-`W3 site_config UNUSED` is `[INFO]` always — our-side TODO (no
-site-category consumer yet), orthogonal to ablation.
+`W3 site_config` is now wired (2026-04-27) — `SmolAgentLoop._apply_brain_specific_config`
+propagates `content.site_categories` to `BrowseWebWorkflow.site_weights`.
+The legacy `[INFO] W3 site_config UNUSED` line was removed in the same change.
+BrowserUse + MCHP do not consume `site_config` yet; if wired later, place
+the `[INFO]` guard in their respective `_apply_brain_specific_config`.
 
 ### Distribute playbook JSON validity gate (2026-04-16)
 Before copying to the VM, each matched `behavior.json` is parsed with
 `python3 -m json.tool` on localhost. A corrupt file aborts the deploy
 with the source path in the error — it never reaches any VM.
+
+## Workflow Set & Feedback-Only Workflows (2026-04-28)
+
+Per-brain workflow registries gated on the presence of `behavior.json`
+in `behavioral_configurations/` at workflow-load time. Loop's
+`_select_workflow()` picks workflows from `self.workflows` per
+`content.workflow_weights` — same code for all 3 brains. The LIST of
+loaded workflows differs by deploy type.
+
+| Brain | Controls (no behavior.json) | Feedback (behavior.json present) |
+|---|---|---|
+| **Smol** | BrowseWeb, WebSearch, BrowseYouTube (3) | + WhoisLookup, DownloadFiles (5 total) |
+| **BU** | BrowseWeb, WebSearch, BrowseYouTube (3) | + WhoisLookup, DownloadFiles (5 total) |
+| **MCHP** | 8 baseline workflows (download_files excluded) | 9 baseline + WhoisLookup + DownloadFiles |
+
+`FEEDBACK_ONLY_WORKFLOWS` set lives in `brains/mchp/agent.py:33`. Smol +
+BU loaders use an `is_feedback: bool = False` parameter on `load_workflows()`.
+All 3 brain loops (`SmolAgentLoop`, `BrowserUseLoop`, `MCHPAgent`)
+implement `_is_feedback_deploy()` checking
+`Path(self._behavior_config_dir, "behavior.json").exists()`.
+
+### Workflow internals (whois_lookup + download_files)
+
+Architecture per brain:
+
+  **Smol** — dedicated workflow. ONE `LiteLLMModel` picker call chooses
+  domain/URL from PHASE-supplied pool; deterministic helper does TCP/43
+  socket or `requests.get` stream. Bypasses CodeAgent's tool-decision
+  loop; LLM picks content only.
+
+  **BU** — dedicated workflow that BYPASSES `browser_use.Agent` entirely.
+  ONE Ollama HTTP API picker call (loopback `127.0.0.1:11434`, invisible
+  to Zeek); same deterministic helpers. Browser is never invoked.
+
+  **MCHP** — `random.choice(pool)` no-LLM picker; same helpers.
+  `WhoisLookup` is new (`mchp/app/workflows/whois_lookup.py`);
+  `download_files.py` is the existing scripted xkcd/wiki/NIST workflow,
+  now gated as feedback-only.
+
+### Tool palette of existing 3 LLM workflows (Smol)
+
+`BrowseWebWorkflow` / `WebSearchWorkflow` / `BrowseYouTubeWorkflow`
+CodeAgent tool list = `[DuckDuckGoSearchTool(), VisitWebpageTool()]`
+only. `WhoisLookupTool` and `DownloadFileTool` classes were **deleted**
+(2026-04-28) — entire `src/brains/smolagents/tools/` directory removed.
+The new whois/download workflows do not use CodeAgent at all; they
+import the helpers directly from `common.network.{whois,downloader}`.
+
+### Loud-failure semantics
+
+LLM picker exceptions and off-pool selections print to stderr AND log
+via `AgentLogger.warning`:
+  `[ERROR] {Workflow} LLM picker failed: {ExcType}: {msg}`
+  `[WARNING] {Workflow} LLM picked X not in pool — falling back...`
+Audit's WARN_COUNT probe will surface these in the `Warn` column. Real
+TCP/43 / HTTP failures return error strings from the helpers — workflow
+logs `step_error` and continues without crashing the loop.
+
+### PHASE schema knobs (consumed today)
+
+```json
+{
+  "content": {
+    "workflow_weights":   { ... },          // existing
+    "site_categories":    { ... },          // existing (W3 wired 2026-04-27)
+    "download_url_pool":  ["https://...", ...],  // NEW per-target
+    "whois_domain_pool":  ["wikipedia.org", ...] // NEW per-target
+  }
+}
+```
+
+Empty list or missing key → `BehavioralConfig.{download_url_pool,
+whois_domain_pool}` = None → workflow falls back to module-level
+`FALLBACK_*` lists. Workflows propagate from fc to their per-instance
+attributes via each brain loop's `_apply_brain_specific_config`.
+
+### Schema fields RUSE intentionally ignores
+
+- `content.download_size_pref` — schema marks as informational metadata only
+- `content._controllability` — schema metadata
 
 ## Stage 3 Fail-Loud Assertions (2026-04-14)
 
