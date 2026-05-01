@@ -49,6 +49,14 @@
       changed_when: false
       timeout: 300
 
+    # Pin VM clock to EST/EDT. PHASE-emitted timing arrays (hourly_distribution,
+    # activity_probability_per_hour, hourly_std_targets) are hour-of-day indexed
+    # off EST Zeek captures. A UTC-zoned SUP would index the wrong slot every
+    # hour — behavior fires 4-5h offset from the measurement window.
+    - name: Set timezone to America/New_York
+      timezone:
+        name: America/New_York
+
     # Retry the early fetch tasks — apt mirrors and github.com both flake
     # with "unknown reason" on fresh VMs. These retries don't mask failure:
     # after N attempts the task still fails loud and spinup.py aborts.
@@ -124,41 +132,13 @@
           stderr: {{ stage2_result.stderr | default('') | truncate(400) }}
       when: stage2_result.rc != 0
 
-    - name: Check SUP service is running
-      # S4: Previously this shell ran `systemctl is-active $(... | head -1) || true`
-      # which always returned rc=0 and the result was never asserted. If the
-      # install left no matching service unit, the deploy silently continued.
-      # Now we derive the expected unit name from sup_behavior and fail if it
-      # isn't active.
-      shell: systemctl is-active "{{ sup_behavior | lower | replace('.', '_') }}.service"
-      register: service_status
-      changed_when: false
-      failed_when: false
-
-    - name: Assert SUP service is active
-      # M0 exemption: M0 is unmodified upstream MITRE pyhuman. On Linux it
-      # crash-loops intentionally (os.startfile is Windows-only;
-      # /root/Downloads path hardcoded; pyhuman's Chrome session flakes).
-      # Mirrors audit.py which reports M0 service as
-      # "EXPECTED (M0 upstream crashes on Linux)". Without this exemption
-      # the S4 assertion races the crash-restart cycle and fails whenever
-      # Ansible catches the service in "activating" instead of "active".
-      fail:
-        msg: >-
-          SUP service {{ sup_behavior | lower | replace('.', '_') }}.service is
-          '{{ service_status.stdout }}' on {{ inventory_hostname }} (expected: active).
-          Check: journalctl, /opt/ruse/deployed_sups/{{ sup_behavior }}/logs/systemd.log
-      when:
-        - service_status.stdout != "active"
-        - sup_behavior != "M0"
-
-    - name: Note M0 service state (crash-loop expected)
-      debug:
-        msg: >-
-          M0 service is '{{ service_status.stdout }}' on {{ inventory_hostname }}.
-          This is the expected baseline — upstream pyhuman is Linux-incompatible
-          and crash-loops. Audit will report 'EXPECTED (M0 upstream crashes on Linux)'.
-      when: sup_behavior == "M0"
+    # NOTE: service-active assertion moved to distribute-behavior-configs.yaml
+    # tail. Reason: with mandatory behavior.json, the brain raises on missing
+    # config — so between INSTALL_SUP.sh starting the service (end of stage 2)
+    # and distribute-behavior-configs.yaml landing the file, the service
+    # crash-loops briefly. Asserting "active" here would race that window and
+    # fail spuriously. The distribute tail asserts active + NRestarts ≤ 20
+    # AFTER the file lands, which is the real fail-loud signal.
 
     # MCHP brains have a slow Selenium/pyautogui memory leak. Schedule a daily
     # service restart at 03:00 UTC + a weekly full VM reboot Sundays at 04:00 UTC

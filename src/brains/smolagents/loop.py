@@ -56,31 +56,30 @@ class SmolAgentLoop(BaseEmulationLoop):
     def _agent_type_label(self) -> str:
         return "smolagents_loop"
 
-    def _is_feedback_deploy(self) -> bool:
-        """True iff a behavior.json is present at startup (feedback deploy).
-
-        Controls have no behavior.json and run with empty BehavioralConfig.
-        Feedback deploys have one written by distribute-behavior-configs.yaml
-        before the service starts. Used to gate registration of feedback-
-        only workflows (whois_lookup, download_files).
-        """
-        if not self._behavior_config_dir:
-            return False
-        from pathlib import Path
-        return Path(self._behavior_config_dir, "behavior.json").exists()
-
     def _load_workflows(self) -> list:
-        """Load all workflows for the loop."""
-        from brains.smolagents.workflows.loader import load_workflows
+        """Load all workflows for the loop.
 
-        is_feedback = self._is_feedback_deploy()
-        print(f"Loading workflows (is_feedback={is_feedback})...")
+        whois_lookup / download_files registration is gated per-flag from
+        behavior.json (behavior.enable_whois, behavior.enable_download).
+        PHASE's dumb_baseline writes both as false; PHASE feedback proper
+        writes true. _reload_behavioral_config will raise downstream if
+        the file is missing.
+        """
+        from pathlib import Path
+        from brains.smolagents.workflows.loader import load_workflows
+        from common.behavioral_config import load_workflow_gates
+
+        gates = (load_workflow_gates(Path(self._behavior_config_dir))
+                 if self._behavior_config_dir
+                 else {"enable_whois": True, "enable_download": True})
+        print(f"Loading workflows (gates={gates})...")
         if self.logger:
-            self.logger.info("Loading workflows", details={"is_feedback": is_feedback})
+            self.logger.info("Loading workflows", details=gates)
         workflows = load_workflows(
             model=self.model,
             prompts=self.prompts,
-            is_feedback=is_feedback,
+            enable_whois=gates["enable_whois"],
+            enable_download=gates["enable_download"],
         )
         print(f"Loaded {len(workflows)} workflows")
 

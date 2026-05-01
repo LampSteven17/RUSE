@@ -39,6 +39,13 @@
       changed_when: false
       timeout: 300
 
+    # Pin sidecar clock to EST/EDT — neighborhood probes are driven by
+    # diversity.topology_mimicry.inbound_*_per_hour rates. Sidecar reads the
+    # current hour to schedule probes; UTC clock would offset rates 4-5h.
+    - name: Set timezone to America/New_York
+      timezone:
+        name: America/New_York
+
   tasks:
     - name: Update apt cache
       apt:

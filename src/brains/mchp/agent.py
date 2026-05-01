@@ -33,15 +33,14 @@ WINDOWS_ONLY_WORKFLOWS = {
     'ms_paint.py',
 }
 
-# Feedback-only workflows. Excluded from baseline/control deploys (no
-# behavior.json) so M0 / M1 retain their pristine upstream workflow set.
-# Loaded for M2+ feedback deploys via the is_feedback gate below.
-#   - download_files.py: pre-existing scripted xkcd/wiki/NIST downloader,
-#     reframed as feedback-only per the workflow refactor.
-#   - whois_lookup.py: new TCP/43 lookup workflow added in the same refactor.
-FEEDBACK_ONLY_WORKFLOWS = {
-    'download_files.py',
-    'whois_lookup.py',
+# Behavior-driven workflows. Each is gated by its own behavior.json flag
+# so PHASE dumb_baseline (enable_whois=false, enable_download=false) can
+# disable both without skipping the rest of the workflow set.
+#   - download_files.py: scripted xkcd/wiki/NIST downloader.
+#   - whois_lookup.py:   TCP/43 lookup workflow.
+BEHAVIOR_GATED_WORKFLOWS = {
+    'download_files.py': 'enable_download',
+    'whois_lookup.py':   'enable_whois',
 }
 
 
@@ -88,27 +87,21 @@ class MCHPAgent(BaseEmulationLoop):
     def _agent_type_label(self) -> str:
         return "mchp"
 
-    def _is_feedback_deploy(self) -> bool:
-        """True iff a behavior.json is present at startup (feedback deploy).
-
-        Controls (M0/M1) have no behavior.json and run with empty
-        BehavioralConfig. Feedback (M2/M3/M4) have one written by
-        distribute-behavior-configs.yaml before service start.
-        """
-        if not self._behavior_config_dir:
-            return False
-        from pathlib import Path
-        return Path(self._behavior_config_dir, "behavior.json").exists()
-
     def _load_workflows(self) -> list:
         """Dynamically load all workflow modules.
 
         Filters:
-          - WINDOWS_ONLY_WORKFLOWS  excluded when exclude_windows_workflows=True
-          - FEEDBACK_ONLY_WORKFLOWS excluded when not a feedback deploy
+          - WINDOWS_ONLY_WORKFLOWS    excluded when exclude_windows_workflows=True
+          - BEHAVIOR_GATED_WORKFLOWS  excluded when their behavior.json flag
+                                      (enable_whois, enable_download) is false
         """
-        is_feedback = self._is_feedback_deploy()
-        print(f"MCHP: loading workflows (is_feedback={is_feedback})")
+        from pathlib import Path
+        from common.behavioral_config import load_workflow_gates
+
+        gates = (load_workflow_gates(Path(self._behavior_config_dir))
+                 if self._behavior_config_dir
+                 else {"enable_whois": True, "enable_download": True})
+        print(f"MCHP: loading workflows (gates={gates})")
         extensions = []
         workflows_dir = os.path.join(
             os.path.dirname(os.path.realpath(__file__)), 'app', 'workflows'
@@ -122,8 +115,9 @@ class MCHPAgent(BaseEmulationLoop):
                 if self.exclude_windows_workflows and file in WINDOWS_ONLY_WORKFLOWS:
                     print(f"Skipping Windows-only workflow: {file}")
                     continue
-                if not is_feedback and file in FEEDBACK_ONLY_WORKFLOWS:
-                    print(f"Skipping feedback-only workflow on baseline: {file}")
+                gate_key = BEHAVIOR_GATED_WORKFLOWS.get(file)
+                if gate_key and not gates.get(gate_key, True):
+                    print(f"Skipping {file} (behavior.{gate_key}=false)")
                     continue
 
                 try:

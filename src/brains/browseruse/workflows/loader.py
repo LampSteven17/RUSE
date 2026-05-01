@@ -15,23 +15,25 @@ def load_workflows(
     prompts: BUPrompts = None,
     headless: bool = True,
     max_steps: int = 10,
-    is_feedback: bool = False,
+    enable_whois: bool = True,
+    enable_download: bool = True,
 ) -> List[BUWorkflow]:
     """
     Load BrowserUse-native workflows.
 
     Always loads the three Playwright-driven content workflows
-    (browse_web, web_search, browse_youtube). When is_feedback=True,
-    also loads whois_lookup + download_files which bypass Playwright
-    entirely (LLM picker via Ollama HTTP, deterministic socket/requests
-    helper for the actual flow).
+    (browse_web, web_search, browse_youtube). The behavior-driven
+    workflows (whois_lookup, download_files) are gated per-flag from
+    behavior.json: enable_whois / enable_download. PHASE's dumb_baseline
+    emits both as false to disable; PHASE feedback proper emits true.
 
     Args:
         model: Model name for workflows
         prompts: Prompts configuration
         headless: Run browser in headless mode
         max_steps: Maximum steps per task
-        is_feedback: If True, also include whois_lookup + download_files
+        enable_whois: Register whois_lookup workflow (default True)
+        enable_download: Register download_files workflow (default True)
 
     Returns:
         List of BUWorkflow instances
@@ -46,12 +48,11 @@ def load_workflows(
         load_browse_youtube(model=model, prompts=prompts, headless=headless, max_steps=max_steps),
     ]
 
-    if is_feedback:
+    if enable_whois:
         from brains.browseruse.workflows.whois_lookup import load as load_whois
+        workflows.append(load_whois(model=model))
+    if enable_download:
         from brains.browseruse.workflows.download_files import load as load_download
-        workflows.extend([
-            load_whois(model=model),
-            load_download(model=model),
-        ])
+        workflows.append(load_download(model=model))
 
     return workflows

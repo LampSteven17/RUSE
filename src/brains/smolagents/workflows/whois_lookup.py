@@ -1,6 +1,6 @@
 """SmolAgents WhoisLookup workflow — LLM picks a domain, helper does TCP/43.
 
-Feedback-only workflow (registered by loader.py only when is_feedback=True).
+Behavior-driven workflow (registered by loader.py only when is_behavior=True).
 The loop selects this workflow per content.workflow_weights; the LLM then
 makes ONE small completion call to pick a relevant domain. The actual
 TCP/43 socket call is deterministic — the LLM doesn't run a CodeAgent

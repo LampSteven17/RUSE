@@ -172,27 +172,84 @@ def resolve_behavioral_config_dir(config_key: str, override_dir: Optional[str] =
     return path
 
 
-def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfig:
-    """Load the consolidated behavior.json for a SUP.
+def load_workflow_gates(config_dir: Path) -> dict:
+    """Read just the {enable_whois, enable_download} flags from behavior.json.
 
-    PHASE emits one file per SUP at {config_dir}/behavior.json. Its sections
-    map 1:1 onto BehavioralConfig fields; downstream consumers read each
-    section's shape verbatim, so this loader does no translation.
+    Used by brain workflow loaders to decide whether to register the
+    feedback-content workflows (whois_lookup, download_files) BEFORE the
+    full BehavioralConfig load. PHASE's dumb_baseline emits both as false
+    to signal a single-workflow degenerate mode; PHASE feedback proper
+    emits true (or omits, which we default to true).
 
-    Returns an empty BehavioralConfig if the dir or file is missing — that's
-    the baseline case (V0/V1 runs with no PHASE feedback).
+    Missing file or malformed JSON returns defaults (both True) and lets
+    the subsequent load_behavioral_config() raise the loud fail message.
+    No partial validation here — this is just a peek at two booleans.
     """
     path = config_dir / "behavior.json"
     if not path.exists():
-        # Missing file = baseline / V0 / V1 deploy. Agents fall through to
-        # hardcoded defaults and emit per-feature [WARNING] lines so audit
-        # can distinguish "no feedback intended" from "feedback broken".
-        return BehavioralConfig()
+        return {"enable_whois": True, "enable_download": True}
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"enable_whois": True, "enable_download": True}
+    beh = data.get("behavior") or {}
+    return {
+        "enable_whois":    bool(beh.get("enable_whois", True)),
+        "enable_download": bool(beh.get("enable_download", True)),
+    }
 
-    # File present = feedback deploy. A malformed JSON here means PHASE
-    # emitted a broken file or the copy corrupted it — fail loud instead
-    # of silently degrading to baseline, which would look identical to an
-    # actual V0/V1 run in the logs.
+
+def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfig:
+    """Load the consolidated behavior.json for a SUP.
+
+    Every RUSE SUP (except C0/M0 controls, which have no service that reads
+    behavior.json) MUST have a behavior.json. The deploy system writes either
+    the controls defaults or PHASE-tuned feedback into
+    /opt/ruse/deployed_sups/<key>/behavioral_configurations/behavior.json
+    before starting the service.
+
+    Missing file → loud RuntimeError. The brain service crash-loops; audit
+    surfaces the failure on the next sweep. Previously this returned an
+    empty BehavioralConfig and agents fell through to hardcoded defaults,
+    which silently masked broken distribution and left no signal that
+    feedback never landed.
+
+    Malformed JSON also raises (json.JSONDecodeError) — same fail-loud
+    semantics, same diagnostic path.
+    """
+    path = config_dir / "behavior.json"
+    if not path.exists():
+        msg = (
+            f"\n\n"
+            f"==============================================================\n"
+            f"  RUSE BEHAVIORAL CONFIG MISSING — REFUSING TO START\n"
+            f"==============================================================\n"
+            f"  config_key:        {config_key}\n"
+            f"  expected location: {path}\n"
+            f"\n"
+            f"  Every RUSE SUP must have a behavior.json before service\n"
+            f"  start. The deploy pipeline either failed to distribute it,\n"
+            f"  or someone removed it post-deploy.\n"
+            f"\n"
+            f"  Fix:\n"
+            f"    1. Re-run distribute-behavior-configs.yaml against this VM, OR\n"
+            f"    2. Re-deploy the SUP from scratch.\n"
+            f"\n"
+            f"  Do NOT fall back to legacy / hardcoded defaults — feedback\n"
+            f"  must be verified end-to-end on every run.\n"
+            f"==============================================================\n"
+        )
+        # Print to stderr so it lands in systemd_error.log even if logger
+        # isn't configured yet, then raise to crash the service.
+        import sys
+        print(msg, file=sys.stderr, flush=True)
+        raise RuntimeError(
+            f"behavior.json missing for {config_key} at {path}"
+        )
+
+    # File present. A malformed JSON here means the source emitted a broken
+    # file or the copy corrupted it — fail loud, don't silently degrade.
     with open(path, "r") as f:
         data = json.load(f)
 
