@@ -134,3 +134,52 @@
           loop: "{{ behavior_config_files.files }}"
           loop_control:
             label: "{{ item.path | basename }}"
+
+        # Install-time fail-loud: behavior.json must be on disk and the SUP
+        # service must be running cleanly. Brief crash-loop tolerated (service
+        # started at end of INSTALL_SUP.sh stage 2 with no config; restarts
+        # every 5s via systemd; lands cleanly once the copy above runs).
+        # NRestarts threshold 20 covers ~100s of churn.
+        - name: Verify behavior.json landed on VM
+          stat:
+            path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/behavior.json"
+          register: vm_behavior_json
+
+        - name: Assert behavior.json present on VM
+          fail:
+            msg: >-
+              behavior.json missing at
+              {{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/behavior.json
+              on {{ inventory_hostname }} after distribution. Copy step above did
+              not produce the file. Check the source resolution and file matching.
+          when: not vm_behavior_json.stat.exists
+
+        - name: Wait for SUP service to settle on new behavior.json
+          pause:
+            seconds: 15
+
+        - name: Check SUP service status
+          shell: systemctl is-active "{{ sup_behavior | lower | replace('.', '_') }}.service"
+          register: post_distribute_status
+          changed_when: false
+          failed_when: false
+
+        - name: Check SUP restart counter
+          shell: systemctl show "{{ sup_behavior | lower | replace('.', '_') }}.service" -p NRestarts --value
+          register: post_distribute_restarts
+          changed_when: false
+          failed_when: false
+
+        - name: Assert SUP service is active and not crash-looping
+          fail:
+            msg: >-
+              SUP {{ sup_behavior | lower | replace('.', '_') }}.service on
+              {{ inventory_hostname }} is '{{ post_distribute_status.stdout }}' with
+              {{ post_distribute_restarts.stdout }} restarts (expected: active,
+              NRestarts ≤ 20). Likely behavior.json was copied but the brain
+              rejected it — check
+              /opt/ruse/deployed_sups/{{ sup_behavior }}/logs/systemd.log
+              for the BehavioralConfig load error.
+          when: >-
+            post_distribute_status.stdout != "active"
+            or (post_distribute_restarts.stdout | default("0") | trim | int) > 20

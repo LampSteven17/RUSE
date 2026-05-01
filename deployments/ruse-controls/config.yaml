@@ -14,6 +14,13 @@
 
 deployment_name: ruse-controls
 
+# Default behavioral configuration. RUSE deploys must always have a
+# behavior.json on every non-control SUP — the controls dataset slots into
+# the same /mnt/AXES2U1/feedback/{type}-controls/{dataset}/ tree as PHASE
+# feedback datasets. spinup.py validates resolution before provisioning;
+# distribute-behavior-configs.yaml fails loud if any source file is missing.
+behavior_source: /mnt/AXES2U1/feedback/ruse-controls/controls
+
 flavor_capacity:
   v1.14vcpu.28g: 5
   v100-1gpu.14vcpu.28g: 2

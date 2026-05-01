@@ -2,14 +2,11 @@
 Workflow loader for SmolAgents.
 
 Loads SmolAgents-native workflows. Always loads the three LLM-driven
-content workflows (browse_web, web_search, browse_youtube). When
-is_feedback=True, also loads the feedback-only workflows
-(whois_lookup, download_files) which use a one-shot LLM picker for
-content selection and a deterministic helper for the network call.
-
-Feedback gating happens here, not in the workflow files themselves —
-the loop's _is_feedback_deploy() determines the flag and passes it
-through.
+content workflows (browse_web, web_search, browse_youtube). The
+behavior-driven workflows (whois_lookup, download_files) are gated
+per-flag from behavior.json: enable_whois / enable_download. PHASE's
+dumb_baseline emits both as false to disable; PHASE feedback proper
+emits true.
 """
 from typing import List
 
@@ -17,15 +14,18 @@ from brains.smolagents.workflows.base import SmolWorkflow
 
 
 def load_workflows(model: str = None, prompts=None,
-                   is_feedback: bool = False) -> List[SmolWorkflow]:
+                   enable_whois: bool = True,
+                   enable_download: bool = True) -> List[SmolWorkflow]:
     """
     Load SmolAgents-native workflows.
 
     Args:
         model: Model name for workflows
         prompts: Prompts configuration
-        is_feedback: If True, also include whois_lookup + download_files
-                     workflows (feedback-only)
+        enable_whois: Register whois_lookup workflow (default True;
+                      behavior.enable_whois=false in dumb_baseline mode)
+        enable_download: Register download_files workflow (default True;
+                         behavior.enable_download=false in dumb_baseline)
 
     Returns:
         List of SmolWorkflow instances
@@ -40,12 +40,11 @@ def load_workflows(model: str = None, prompts=None,
         load_browse_youtube(model=model, prompts=prompts),
     ]
 
-    if is_feedback:
+    if enable_whois:
         from brains.smolagents.workflows.whois_lookup import load as load_whois
+        workflows.append(load_whois(model=model))
+    if enable_download:
         from brains.smolagents.workflows.download_files import load as load_download
-        workflows.extend([
-            load_whois(model=model),
-            load_download(model=model),
-        ])
+        workflows.append(load_download(model=model))
 
     return workflows

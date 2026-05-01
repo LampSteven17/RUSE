@@ -51,6 +51,26 @@ def run_ruse_spinup(
     vm_prefix = f"r-{dep_id}-"
     vm_count = config.vm_count()
 
+    # Deploy-time fail-loud (S0): every non-control SUP must have a
+    # resolvable behavior.json under the configured behavior_source. This
+    # catches missing files BEFORE we provision any VMs — otherwise
+    # distribute-behavior-configs.yaml would catch it later, after spending
+    # ~20 min on provision + install. C0 and M0 are exempt (no behavior
+    # consumption).
+    effective_source = behavior_source or config.behavior_source
+    src_err = _validate_behavior_source(effective_source, config)
+    if src_err:
+        output.error("")
+        output.error("ABORTING: behavioral configuration not detected.")
+        for line in src_err:
+            output.error(f"  {line}")
+        output.error("")
+        output.error("Every RUSE SUP must have a behavior.json. Either fix the")
+        output.error("behavior_source in config.yaml, regenerate the missing")
+        output.error("PHASE feedback files, or write the controls defaults at")
+        output.error("/mnt/AXES2U1/feedback/ruse-controls/controls/.")
+        return 1
+
     # Display header
     output.banner(f"DEPLOY: {config_name}")
     output.info(f"  VMs:       {config.brain_summary()}")
@@ -277,6 +297,67 @@ def _find_hosts_ini(config_dir: Path, deploy_dir: Path) -> Path | None:
     if (deploy_dir / "hosts.ini").exists():
         return deploy_dir / "hosts.ini"
     return None
+
+
+def _derive_behavior_paths(sup_behavior: str) -> tuple[str, str]:
+    """Mirror distribute-behavior-configs.yaml regex.
+
+    Returns (behavior_dir, baseline_config). E.g.
+      M1        -> ('M',       'M1')
+      M2        -> ('M',       'M1')
+      B0.gemma  -> ('B.gemma', 'B0.gemma')
+      B2C.gemma -> ('B.gemma', 'B0C.gemma')
+      S2.gemma  -> ('S.gemma', 'S0.gemma')
+    """
+    m = re.match(r'^([A-Z])\d+[A-Z]*(.*)$', sup_behavior)
+    behavior_dir = m.group(1) + m.group(2) if m else sup_behavior
+    baseline_version = "1" if sup_behavior[:1] == "M" else "0"
+    baseline_config = re.sub(r'^([A-Z])\d+', rf"\g<1>{baseline_version}", sup_behavior)
+    return behavior_dir, baseline_config
+
+
+def _validate_behavior_source(
+    effective_source: str | None, config,
+) -> list[str]:
+    """Check every non-C0/M0 SUP has a resolvable behavior.json.
+
+    Returns a list of error lines (empty = OK). Caller decides how to
+    abort. Walks config.deployments, derives the expected
+    {behavior_dir}/{baseline_config}/behavior.json path, and verifies
+    each one exists under effective_source. C0 / M0 exempt (they don't
+    read behavior.json).
+    """
+    errors: list[str] = []
+    if not effective_source:
+        errors.append("No behavior_source configured. RUSE controls must point at")
+        errors.append("/mnt/AXES2U1/feedback/ruse-controls/controls (set in config.yaml).")
+        return errors
+
+    src = Path(effective_source)
+    if not src.is_dir():
+        errors.append(f"behavior_source not a directory: {src}")
+        return errors
+
+    missing: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for dep in config.deployments:
+        beh = dep.get("behavior", "")
+        if beh in ("C0", "M0"):
+            continue
+        behavior_dir, baseline_config = _derive_behavior_paths(beh)
+        if (behavior_dir, baseline_config) in seen:
+            continue
+        seen.add((behavior_dir, baseline_config))
+        path = src / behavior_dir / baseline_config / "behavior.json"
+        if not path.is_file():
+            missing.append(f"{beh}: expected {path}")
+
+    if missing:
+        errors.append(f"behavior_source: {src}")
+        errors.append(f"missing behavior.json for {len(missing)} SUP(s):")
+        for m in missing:
+            errors.append(f"  - {m}")
+    return errors
 
 
 def _make_run_dep_id(deployment_name: str, run_id: str) -> str:

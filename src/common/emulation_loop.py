@@ -125,11 +125,10 @@ class BaseEmulationLoop(ABC):
             build_calibrated_timing_config,
         )
 
+        # load_behavioral_config raises RuntimeError if behavior.json is
+        # missing — service crash-loops, audit surfaces it. No legacy
+        # baseline path: every SUP must have a config.
         fc = load_behavioral_config(Path(self._behavior_config_dir), self._config_key)
-
-        if fc.is_empty():
-            self._workflow_weights = None
-            return
 
         # Summary log: which configs were loaded (single line for PHASE tracking)
         if self.logger:
