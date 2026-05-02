@@ -174,7 +174,13 @@ class MCHPAgent(BaseEmulationLoop):
         for w in self.workflows:
             if getattr(w, 'name', '') != 'BrowseWeb':
                 continue
+            # PHASE baseline emits page_dwell / navigation_clicks as
+            # integers (degenerate single-value mode); only the calibrated
+            # PHASE feedback shape uses {min, max} dicts. Coerce non-dict
+            # values to {} so the downstream `in` checks don't crash.
             page_dwell = fc.behavior_modifiers.get("page_dwell", {})
+            if not isinstance(page_dwell, dict):
+                page_dwell = {}
             if "max_seconds" in page_dwell:
                 w.max_sleep_time = int(page_dwell["max_seconds"])
             if "min_seconds" in page_dwell:
@@ -185,6 +191,8 @@ class MCHPAgent(BaseEmulationLoop):
                       f"using defaults min={w.min_sleep_time} max={w.max_sleep_time}"
                       f"{suffix}")
             nav_clicks = fc.behavior_modifiers.get("navigation_clicks", {})
+            if not isinstance(nav_clicks, dict):
+                nav_clicks = {}
             if "max" in nav_clicks:
                 w.max_navigation_clicks = int(nav_clicks["max"])
             else:
