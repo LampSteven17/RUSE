@@ -155,8 +155,13 @@
           when: not vm_behavior_json.stat.exists
 
         - name: Wait for SUP service to settle on new behavior.json
-          pause:
-            seconds: 15
+          # `command: sleep 15` not `pause: seconds: 15` — pause module
+          # bypasses the host loop and is incompatible with strategy: free,
+          # which the play above declares. With pause, ansible aborts the
+          # play before the assertion tasks run, hiding install-time
+          # failures (silently OK'd 9 deploys on 2026-05-01).
+          command: sleep 15
+          changed_when: false
 
         - name: Check SUP service status
           shell: systemctl is-active "{{ sup_behavior | lower | replace('.', '_') }}.service"

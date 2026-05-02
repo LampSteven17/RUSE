@@ -155,6 +155,36 @@ class BaseEmulationLoop(ABC):
         # Brain-specific config (page_dwell, task_weights, max_steps, etc.)
         self._apply_brain_specific_config(fc)
 
+        # Baseline-mode short-circuit: PHASE's baseline / dumb_baseline
+        # generator ships a different timing schema (flat p50..p99
+        # burst_percentiles, integer long_idle_duration_minutes, no nested
+        # hourly_std_target). Feeding it to build_calibrated_timing_config
+        # raises KeyError on burst_duration_minutes. Skip the whole
+        # calibrated-timing branch when we detect baseline mode (either via
+        # _metadata.mode marker or by schema shape). Brain runs the default
+        # cluster_size/task_interval/group_interval emulation loop. Workflow
+        # gating + content pools are still honored above.
+        baseline_modes = {"baseline", "dumb_baseline"}
+        is_baseline = fc.mode in baseline_modes
+        if not is_baseline and fc.timing_profile:
+            # Schema sniff: real PHASE feedback nests burst_duration_minutes
+            # as a dict; baseline emits flat keys instead. Catch the latter
+            # even if PHASE renames the mode marker again.
+            burst = fc.timing_profile.get("burst_percentiles") or {}
+            is_baseline = not isinstance(
+                burst.get("burst_duration_minutes"), dict
+            )
+
+        if is_baseline:
+            if self.logger:
+                self.logger.info("[behavior] baseline-mode timing schema — "
+                                 "skipping CalibratedTiming/variance/activity setup",
+                                 details={"config_key": self._config_key,
+                                          "mode": fc.mode})
+            print(f"[behavior] baseline-mode (mode={fc.mode!r}) — default timing")
+            self._phase_timing = None
+            return
+
         # Timing profile — hot-swap calibrated timing (pass variance + activity configs)
         if fc.timing_profile:
             from common.timing.phase_timing import CalibratedTiming

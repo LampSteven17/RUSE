@@ -10,6 +10,14 @@ from .. import output
 
 FEEDBACK_BASE = Path("/mnt/AXES2U1/feedback")
 
+# Slots inside {type}-controls/ that are NOT feedback datasets. The
+# `controls` slot is the new authoritative location for the baseline
+# behavior.json files (PHASE feedback_engine.dumb_baseline output);
+# config.yaml's behavior_source already points at it for the ruse-controls
+# deployment, so picking it up here would deploy a redundant feedback
+# variant on top of the baseline.
+BASELINE_DATASET_SLOTS = {"controls"}
+
 # Post 2026-04-23 layout:
 #   /mnt/AXES2U1/feedback/
 #     ├── ruse-controls/{dataset}/...
@@ -265,6 +273,8 @@ def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
     for d in root.iterdir():
         if not d.is_dir():
             continue
+        if d.name in BASELINE_DATASET_SLOTS:
+            continue
         if not _is_valid_feedback_source(d, deploy_type):
             continue
         mtime = d.stat().st_mtime
@@ -362,6 +372,8 @@ def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
     for d in sorted(root.iterdir()):
         if not d.is_dir():
             continue
+        if d.name in BASELINE_DATASET_SLOTS:
+            continue
         if not _is_valid_feedback_source(d, deploy_type):
             continue
 
@@ -440,6 +452,8 @@ def find_feedback_by_target(target: str, deploy_type: str | None = None) -> Path
     best_mtime = 0.0
     for d in root.iterdir():
         if not d.is_dir() or search not in d.name:
+            continue
+        if d.name in BASELINE_DATASET_SLOTS:
             continue
         if not _is_valid_feedback_source(d, deploy_type):
             continue

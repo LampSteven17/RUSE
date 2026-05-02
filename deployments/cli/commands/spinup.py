@@ -191,12 +191,25 @@ def run_ruse_spinup(
         if configs_spec and configs_spec != "all":
             dist_vars["behavior_configs"] = configs_spec
 
-        runner.run_playbook(
+        dist_result = runner.run_playbook(
             "distribute-behavior-configs.yaml",
             inventory_path,
             extra_vars=dist_vars,
             on_event=default_event_handler,
         )
+        # Fail loud on distribute failures. Previously this fired-and-forgot,
+        # so a play-level abort (e.g. a `pause` module crashing inside a
+        # strategy:free play) would leave behavior.json partially distributed
+        # AND skip the install-time service-active assertions, while the
+        # deploy reported OK. 9 deploys on 2026-05-01 went out that way.
+        if dist_result.rc != 0:
+            output.error("")
+            output.error(f"ABORTING: distribute-behavior-configs.yaml exited rc={dist_result.rc}")
+            output.error(f"  Log: {dist_result.log_path}")
+            output.error("  behavior.json may be partially distributed and the")
+            output.error("  install-time service-active assertion never fired.")
+            output.error(f"  Tear down: ./teardown {config_name}-{run_id}")
+            return 1
 
     # Phase 2c: Neighborhood sidecar (topology-mimicry layer).
     # FEEDBACK ONLY. Controls never reach this branch because:
