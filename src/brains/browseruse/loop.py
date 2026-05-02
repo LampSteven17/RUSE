@@ -151,8 +151,10 @@ class BrowserUseLoop(BaseEmulationLoop):
             # page_dwell: previously MCHP-only. Now BU honors it via a per-step
             # callback registered on Agent. min/max sampled fresh per step so
             # each action gets a new uniform draw in [min, max] seconds.
+            # PHASE baseline emits page_dwell as int (degenerate); skip then.
             pd = fc.behavior_modifiers.get("page_dwell")
-            if pd:
+            pd_tuple = None
+            if isinstance(pd, dict):
                 try:
                     pd_tuple = (
                         float(pd.get("min_seconds", 0.0)),
@@ -160,10 +162,10 @@ class BrowserUseLoop(BaseEmulationLoop):
                     )
                 except (TypeError, ValueError):
                     pd_tuple = None
-                if pd_tuple and pd_tuple[1] > 0:
-                    for w in self.workflows:
-                        if hasattr(w, "page_dwell"):
-                            w.page_dwell = pd_tuple
+            if pd_tuple and pd_tuple[1] > 0:
+                for w in self.workflows:
+                    if hasattr(w, "page_dwell"):
+                        w.page_dwell = pd_tuple
 
             if self.logger:
                 self.logger.info("[behavior] Applied behavior_modifiers",
