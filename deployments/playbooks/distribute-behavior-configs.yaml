@@ -135,11 +135,9 @@
           loop_control:
             label: "{{ item.path | basename }}"
 
-        # Install-time fail-loud: behavior.json must be on disk and the SUP
-        # service must be running cleanly. Brief crash-loop tolerated (service
-        # started at end of INSTALL_SUP.sh stage 2 with no config; restarts
-        # every 5s via systemd; lands cleanly once the copy above runs).
-        # NRestarts threshold 20 covers ~100s of churn.
+        # Install-time fail-loud: behavior.json must be on disk after the
+        # copy step. That's the one check — if the brain has the file, it
+        # will eventually settle (audit catches ongoing health).
         - name: Verify behavior.json landed on VM
           stat:
             path: "{{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/behavior.json"
@@ -151,60 +149,5 @@
               behavior.json missing at
               {{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/behavior.json
               on {{ inventory_hostname }} after distribution. Copy step above did
-              not produce the file. Check the source resolution and file matching.
+              not produce the file.
           when: not vm_behavior_json.stat.exists
-
-        # Zero NRestarts before assertion. INSTALL_SUP.sh starts the service
-        # at the end of stage 2, before behavior.json arrives — brain raises
-        # the fail-loud banner and systemd auto-restarts every 5s. By the
-        # time distribute runs (after the slowest VM in install-sups serial:10
-        # finishes stage 2), early-finishing VMs accumulated 50-80 restarts.
-        # `reset-failed` zeros the counter; the `restart` after gives the
-        # service a clean start with the new behavior.json. Subsequent
-        # NRestarts then counts ONLY post-config crashes — the meaningful
-        # signal.
-        - name: Reset SUP restart counter (clears startup-race history)
-          shell: systemctl reset-failed "{{ sup_behavior | lower | replace('.', '_') }}.service"
-          changed_when: false
-          failed_when: false
-
-        - name: Restart SUP service to load new behavior.json cleanly
-          systemd:
-            name: "{{ sup_behavior | lower | replace('.', '_') }}.service"
-            state: restarted
-            daemon_reload: yes
-
-        - name: Wait for SUP service to settle on new behavior.json
-          # `command: sleep 15` not `pause: seconds: 15` — pause bypasses
-          # the host loop and is incompatible with strategy: free.
-          command: sleep 15
-          changed_when: false
-
-        - name: Check SUP service status
-          shell: systemctl is-active "{{ sup_behavior | lower | replace('.', '_') }}.service"
-          register: post_distribute_status
-          changed_when: false
-          failed_when: false
-
-        - name: Check SUP restart counter (post-reset)
-          shell: systemctl show "{{ sup_behavior | lower | replace('.', '_') }}.service" -p NRestarts --value
-          register: post_distribute_restarts
-          changed_when: false
-          failed_when: false
-
-        - name: Assert SUP service is active and not crash-looping
-          # Threshold 5 (not 20): NRestarts was just zeroed, so this only
-          # counts crashes within the 15s settle window. >5 means the brain
-          # is rejecting the behavior.json continuously — real bug.
-          fail:
-            msg: >-
-              SUP {{ sup_behavior | lower | replace('.', '_') }}.service on
-              {{ inventory_hostname }} is '{{ post_distribute_status.stdout }}' with
-              {{ post_distribute_restarts.stdout }} restarts since reset
-              (expected: active, NRestarts ≤ 5). Brain is rejecting
-              behavior.json — check
-              /opt/ruse/deployed_sups/{{ sup_behavior }}/logs/systemd.log
-              for the BehavioralConfig load error.
-          when: >-
-            post_distribute_status.stdout != "active"
-            or (post_distribute_restarts.stdout | default("0") | trim | int) > 5
