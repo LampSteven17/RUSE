@@ -54,6 +54,13 @@ class BehavioralConfig:
     # knobs don't move the score on this dataset's target model). Runtime
     # code should emit [INFO] instead of [WARNING] in that case.
     ablation_gate: Optional[dict] = None
+    # Generation mode marker from PHASE's _metadata.mode. "dumb_baseline" =
+    # PHASE's degenerate single-hour-active baseline (used for ruse-controls).
+    # Schema deviates from the calibrated PHASE feedback shape — flat
+    # burst_percentiles, integer page_dwell, etc. Runtime detects this and
+    # skips empirical timing/variance/activity setup that would KeyError
+    # against the dumb schema.
+    mode: Optional[str] = None
 
     def is_empty(self) -> bool:
         return all(v is None for v in
@@ -276,7 +283,9 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
 
     # Pull ablation gate metadata if PHASE emitted it. Presence signals
     # that missing sections are deliberate omissions, not generator bugs.
-    ablation_gate = (data.get("_metadata") or {}).get("ablation_gate")
+    metadata = data.get("_metadata") or {}
+    ablation_gate = metadata.get("ablation_gate")
+    mode = metadata.get("mode")
 
     # Feedback-only content pools (per-target). Empty list or missing key
     # → None → workflows fall back to their module-level FALLBACK_* lists.
@@ -299,6 +308,7 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         ablation_gate=ablation_gate,
         download_url_pool=download_url_pool,
         whois_domain_pool=whois_domain_pool,
+        mode=mode,
     )
 
 
