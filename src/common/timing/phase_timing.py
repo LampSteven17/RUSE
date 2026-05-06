@@ -19,7 +19,7 @@ Usage:
 
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
@@ -110,7 +110,7 @@ class PhaseTiming:
         if not self.config.enable_hourly_adjustment:
             return 1.0
 
-        current_hour = datetime.now().hour
+        current_hour = datetime.now(timezone.utc).hour
         return self.config.hourly_activity.get(current_hour, 1.0)
 
     def _add_variance(self, base_value: float) -> float:
@@ -473,14 +473,15 @@ class CalibratedTiming:
         return values[2]  # fallback: median
 
     def _get_hourly_scale(self) -> float:
-        """Get current hour's activity scale factor (0..1, peak=1.0)."""
-        return self._hourly_scale[datetime.now().hour]
+        """Get current hour's activity scale factor (0..1, peak=1.0).
+        UTC-indexed: PHASE emits hourly_distribution in UTC."""
+        return self._hourly_scale[datetime.now(timezone.utc).hour]
 
     def get_cluster_size(self) -> int:
         """Sample connections_per_burst from the profile."""
         raw = self._sample_percentile(self.config.connections_per_burst)
         scaled = raw * self._get_hourly_scale()
-        hour = datetime.now().hour
+        hour = datetime.now(timezone.utc).hour
         # D1: Per-hour sigma; scalar fallback is variance.cluster_size_sigma
         if self._volume_hourly_std and hour < len(self._volume_hourly_std):
             sigma = self._volume_hourly_std[hour]
@@ -507,7 +508,7 @@ class CalibratedTiming:
         scale_factor = 1.0 / hourly_scale if hourly_scale > 0.05 else 20.0
         gap_seconds = gap_minutes * 60.0 * scale_factor
         # Variance injection: lognormal noise to idle gaps
-        hour = datetime.now().hour
+        hour = datetime.now(timezone.utc).hour
         # D1: Per-hour sigma; scalar fallback is variance.idle_gap_sigma
         if self._duration_hourly_std and hour < len(self._duration_hourly_std):
             sigma = self._duration_hourly_std[hour]
@@ -553,7 +554,7 @@ class CalibratedTiming:
         probs = self._activity_config.get("activity_probability_per_hour") or []
         if not probs:
             return False
-        hour = datetime.now().hour
+        hour = datetime.now(timezone.utc).hour
         if hour < len(probs):
             return random.random() > probs[hour]
         return False

@@ -15,7 +15,7 @@ import random
 import signal
 import sys
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from time import sleep
 from typing import Optional
 
@@ -350,11 +350,11 @@ class BaseEmulationLoop(ABC):
 
             # Activity pattern: skip low-activity hours
             if self._phase_timing and self._phase_timing.should_skip_hour():
-                    now = datetime.now()
+                    now = datetime.now(timezone.utc)
                     seconds_until_next_hour = (60 - now.minute) * 60 - now.second
                     skip_time = seconds_until_next_hour + random.uniform(0, 300)
                     if self.logger:
-                        self.logger.info(f"[activity] Skipping low-activity hour {now.hour}, sleeping {skip_time/60:.0f}min")
+                        self.logger.info(f"[activity] Skipping low-activity hour {now.hour} UTC, sleeping {skip_time/60:.0f}min")
                     sleep(skip_time)
                     continue
 
@@ -369,8 +369,8 @@ class BaseEmulationLoop(ABC):
             # Log activity level
             if self._phase_timing:
                 activity_level = self._phase_timing.get_activity_level()
-                current_hour = datetime.now().hour
-                print(f"[{datetime.now().strftime('%H:%M')}] Activity level: {activity_level}")
+                current_hour = datetime.now(timezone.utc).hour
+                print(f"[{datetime.now().strftime('%H:%M')}] Activity level: {activity_level} (UTC hour {current_hour})")
                 if self.logger:
                     self.logger.info(f"Activity level: {activity_level}", details={
                         "hour": current_hour, "level": activity_level

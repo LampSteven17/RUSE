@@ -1,7 +1,7 @@
 # RUSE Deploy System - Full Context
 
-Load full context for the RUSE deploy CLI and all three deployment types
-(RUSE SUPs, RAMPART Enterprise, GHOSTS NPCs). Read the files listed below
+Load full context for the DECOY deploy CLI and all three deployment types
+(DECOY SUPs, RAMPART Enterprise, GHOSTS NPCs). Read the files listed below
 silently — do not produce a summary unless the user explicitly asks.
 
 ## Files to read
@@ -27,9 +27,9 @@ silently — do not produce a summary unless the user explicitly asks.
 16. `deployments/playbooks/teardown.yaml`
 17. `deployments/playbooks/teardown-all.yaml`
 
-### RUSE SUP type
+### DECOY SUP type
 18. `deployments/cli/commands/spinup.py` - 5-phase orchestrator
-19. `deployments/ruse-controls/config.yaml` - 7-VM lean baseline (gemma-only)
+19. `deployments/decoy-controls/config.yaml` - 7-VM lean baseline (gemma-only)
 20. `INSTALL_SUP.sh` - Per-VM installer (cloned from github)
 21. `src/common/config/model_config.py` - MODELS dict + get_num_ctx()
 22. `src/runners/run_config.py` - SUPConfig registry
@@ -86,7 +86,7 @@ deployments/
     output.py               # Monochrome terminal output
     ssh_config.py           # SSH config management
     commands/
-      spinup.py             # ./deploy --ruse
+      spinup.py             # ./deploy --decoy
       rampart.py            # ./deploy --rampart
       ghosts.py             # ./deploy --ghosts
       teardown.py
@@ -97,9 +97,9 @@ deployments/
 
   playbooks/                # Ansible (infrastructure only, no display)
     provision-vms.yaml
-    install-sups.yaml                # RUSE
-    distribute-behavior-configs.yaml # RUSE
-    install-neighborhood.yaml        # RUSE topology sidecar
+    install-sups.yaml                # DECOY
+    distribute-behavior-configs.yaml # DECOY
+    install-neighborhood.yaml        # DECOY topology sidecar
     install-rampart-emulation.yaml   # RAMPART Linux emulation
     install-ghosts-api.yaml          # GHOSTS API
     install-ghosts-clients.yaml      # GHOSTS NPC clients
@@ -116,7 +116,7 @@ deployments/
 
 | Type | Flag | Prefix | Config type | Spinup module |
 |------|------|--------|-------------|---------------|
-| RUSE SUPs | `--ruse` | `r-` | `sup` | `commands/spinup.py` |
+| DECOY SUPs | `--decoy` | `r-` | `sup` | `commands/spinup.py` |
 | RAMPART Enterprise | `--rampart` | `e-` (hashed) | `rampart` | `commands/rampart.py` |
 | GHOSTS NPCs | `--ghosts` | `g-` (hashed) | `ghosts` | `commands/ghosts.py` |
 
@@ -128,37 +128,37 @@ per-node `user-roles.json`, GHOSTS per-NPC `timeline.json`. No reverse-translati
 
 ```bash
 # Deploy
-./deploy --ruse                              # SUP baseline
+./deploy --decoy                              # SUP baseline
 ./deploy --rampart                           # Enterprise baseline
 ./deploy --ghosts                            # GHOSTS NPCs baseline
 
 # Default (no scope flag) = controls + ALL feedback datasets (per type)
-./deploy --ruse                              # controls + all RUSE feedback datasets
-./deploy --ruse --controls                   # controls only
-./deploy --ruse --feedback                   # all feedback only (no controls)
-./deploy --ruse --feedback --target sum24    # single dataset (no controls)
-./deploy --ruse --feedback --source /path    # explicit PHASE source (single)
-./deploy --ruse --controls --target sum24    # controls + single feedback
+./deploy --decoy                              # controls + all DECOY feedback datasets
+./deploy --decoy --controls                   # controls only
+./deploy --decoy --feedback                   # all feedback only (no controls)
+./deploy --decoy --feedback --target sum24    # single dataset (no controls)
+./deploy --decoy --feedback --source /path    # explicit PHASE source (single)
+./deploy --decoy --controls --target sum24    # controls + single feedback
 
-# RUSE-only granular feedback flags (each implies --feedback)
-./deploy --ruse --timing                     # batch: timing-only across datasets
-./deploy --ruse --workflow                   # workflow_weights.json
-./deploy --ruse --modifiers                  # behavior_modifiers.json
-./deploy --ruse --sites --prompts            # combine any
-./deploy --ruse --activity --diversity --variance
+# DECOY-only granular feedback flags (each implies --feedback)
+./deploy --decoy --timing                     # batch: timing-only across datasets
+./deploy --decoy --workflow                   # workflow_weights.json
+./deploy --decoy --modifiers                  # behavior_modifiers.json
+./deploy --decoy --sites --prompts            # combine any
+./deploy --decoy --activity --diversity --variance
 
 # List active deployments
 ./list
 
 # Teardown — three forms
-./teardown ruse-controls-040226205037        # specific deployment
-./teardown --ruse --feedback                 # filter: all RUSE feedback deploys
+./teardown decoy-controls-040226205037        # specific deployment
+./teardown --decoy --feedback                 # filter: all DECOY feedback deploys
 ./teardown --rampart                         # filter: all RAMPART
 ./teardown --ghosts --feedback               # filter: GHOSTS feedback only
 ./teardown --all                             # nuclear (requires confirmation)
 
 # Shrink in place (no teardown/redeploy) — diffs run snapshot vs config.yaml
-./shrink ruse-controls-040226205037
+./shrink decoy-controls-040226205037
 
 # Health audit
 ./audit                                      # all 9 per-VM checks across all VMs
@@ -172,18 +172,18 @@ confirmation, then deploys each in sequence with a final summary.
 ## VM Naming
 
 - Run ID: `MMDDYYHHmmss` (second precision)
-- dep_id: `{name_no_hyphens}{run_id}` — strips type prefix (`ruse-`/`rampart-`/`ghosts-`/`sup-`)
-- RUSE SUP VMs: `r-{dep_id}-{behavior}-{index}` (e.g. `r-controls040226-M1-0`, `r-controls040226-B0-gemma-0`)
+- dep_id: `{name_no_hyphens}{run_id}` — strips type prefix (`decoy-`/`rampart-`/`ghosts-`)
+- DECOY SUP VMs: `d-{dep_id}-{behavior}-{index}` (e.g. `d-controls040226-M1-0`, `d-controls040226-B0-gemma-0`)
 - RAMPART VMs: `e-{md5(dep_id)[:5]}-{node_name}` (e.g. `e-bf351-dc1`, `e-bf351-winep1`, `e-bf351-linep3`). 5-char hash for NetBIOS limit.
 - GHOSTS VMs: `g-{md5(dep_id)[:5]}-{role}-{index}` (e.g. `g-14a6d-api-0`, `g-14a6d-npc-0`)
-- Neighborhood sidecar (RUSE feedback only): `r-{dep_id}-neighborhood-0`
-- `teardown-all.yaml` regex: `(r-|e-|g-|sup-)`
+- Neighborhood sidecar (DECOY feedback only): `d-{dep_id}-neighborhood-0`
+- `teardown-all.yaml` regex: `(d-|e-|g-)`
 
 ## SSH Keys + auth
 
 | Type | OpenStack keypair | Local key | User |
 |------|-------------------|-----------|------|
-| RUSE SUPs | `bot-desktop` | `~/.ssh/id_ed25519` | ubuntu (key) |
+| DECOY SUPs | `bot-desktop` | `~/.ssh/id_ed25519` | ubuntu (key) |
 | GHOSTS NPCs | `bot-desktop` | `~/.ssh/id_ed25519` | ubuntu (key) |
 | RAMPART Linux | `enterprise-key` | `~/.ssh/id_rsa` (PEM RSA) | ubuntu (key) |
 | RAMPART Windows (deploy) | `enterprise-key` | sshpass + domain admin password | `Administrator@{fqdn_domain}` |
@@ -220,10 +220,10 @@ Agent offers too many keys → auth timeouts. The CLI sets this in `subprocess.r
 
 ### Mandatory behavior.json contract (2026-05-02)
 
-**Every non-C0/M0 RUSE SUP must have a behavior.json — no legacy "no
+**Every non-C0/M0 DECOY SUP must have a behavior.json — no legacy "no
 config" code path.** PHASE owns both the controls baseline (via
 `feedback_engine.baseline`, written to `controls/` slot) and the per-
-dataset feedback (via `feedback_engine.ruse_generator`). RUSE consumes
+dataset feedback (via `feedback_engine.decoy_generator`). DECOY consumes
 both through the same loader; mode signal is in `_metadata.mode`.
 
 **Three-layer fail-loud:**
@@ -236,11 +236,11 @@ both through the same loader; mode signal is in `_metadata.mode`.
 - **Runtime** (`BehavioralConfig.load`): missing file raises `RuntimeError`
   with banner; service crash-loops; audit catches.
 
-### Feedback-only divergence (2026-04-27/28; ruse refactored 2026-05-02)
+### Feedback-only divergence (2026-04-27/28; decoy refactored 2026-05-02)
 
 Same playbook for controls + feedback. Per-feature gating:
 
-- **RUSE workflows** — gated per-flag from `behavior.json`:
+- **DECOY workflows** — gated per-flag from `behavior.json`:
   `behavior.enable_whois` and `behavior.enable_download`. PHASE
   `feedback_engine.baseline` emits both `false` (controls = single-
   workflow degenerate mode); PHASE feedback proper emits `true` (or
@@ -255,16 +255,30 @@ behavior.json (the baseline default), so file-presence isn't the
 right signal for whois/download gating anymore. Read the explicit
 intent flags from the file PHASE just wrote.
 
-### EST/EDT timezone pin (2026-05-02)
+### UTC hour-of-day contract (2026-05-06; supersedes 2026-05-02 EST pin)
 
-PHASE timing arrays (`hourly_distribution[24]`,
-`activity_probability_per_hour[24]`, `hourly_std_targets`) are
-hour-of-day indexed off EST Zeek captures. UTC-zoned VMs index the
-wrong slot every hour — behavior fires 4-5h offset. `install-sups.yaml`
-+ `install-neighborhood.yaml` now run `timedatectl set-timezone
-America/New_York` after cloud-init wait. RAMPART DCs and Linux
-endpoints already pin EST in `role_domains.py`. GHOSTS skipped (.NET
-`DateTime.UtcNow` ignores VM TZ).
+PHASE now bins all hour-of-day arrays in UTC and stamps every emitted
+file with `_metadata.timezone: "UTC"`. RUSE-side consumers all read
+`datetime.now(timezone.utc).hour`:
+
+- DECOY: `src/common/timing/phase_timing.py` (CalibratedTiming + activity
+  pattern), `src/common/emulation_loop.py` (skip-hour log + activity
+  level), `src/common/background_services.py` (D4 dns_per_hour,
+  http_head_per_hour, ntp_checks_per_day).
+- RAMPART: `~/uva-cs-workflow/simulate-logins.py:248` writes tz-aware
+  UTC `start_date` → `logins.json` carries `+00:00` ISO timestamps.
+- RAMPART pyhuman (`workflows.zip::human.py`): hour gate added — see
+  *RAMPART hour gating* below.
+- GHOSTS: .NET `DateTime.UtcNow` already UTC; PHASE flip aligns it.
+
+The `install-sups.yaml` + `install-neighborhood.yaml` `timedatectl
+set-timezone America/New_York` calls are kept for log-readability /
+cron / mtime ergonomics; runtime hour reads no longer depend on VM
+TZ. RAMPART DCs + Linux endpoints likewise still EST-pinned via
+`role_domains.py` for the same reason. Pre-2026-05-06 deploys with
+EST-indexed PHASE output + EST-reading RUSE consumers were
+self-consistent; the flip is the new contract — both sides must land
+together or behavior fires 4-5h offset.
 
 ### Shared network helpers (`src/common/network/`)
 - `whois.py` — `whois_lookup(domain)` over TCP/43 to whois.iana.org + `FALLBACK_DOMAINS`
@@ -289,11 +303,11 @@ substring match against `/mnt/AXES2U1/feedback/{type}-controls/`.
 
 ```
 /mnt/AXES2U1/feedback/                              # NEW location (was ~/PHASE/feedback_engine/configs/)
-  ruse-controls/
+  decoy-controls/
     controls/                                       # NEW: PHASE feedback_engine.baseline output
       {behavior}/{sup}/behavior.json                # _metadata.mode = "baseline" / "dumb_baseline"
                                                     # this is the AUTHORITATIVE baseline config —
-                                                    # ruse-controls/config.yaml's behavior_source
+                                                    # decoy-controls/config.yaml's behavior_source
                                                     # points here; controls SUPs load it via the
                                                     # same distribute path as feedback
     {dataset}/                                      # axes-fall24, vt-fall22-1gb, etc.
@@ -314,10 +328,10 @@ substring match against `/mnt/AXES2U1/feedback/{type}-controls/`.
 `controls/` is excluded from feedback dataset auto-discovery via
 `feedback.py::BASELINE_DATASET_SLOTS = {"controls"}` in three call
 sites: `find_all_feedback_sources`, `auto_detect_feedback_source`,
-`find_feedback_by_target`. Without exclusion, `./deploy --ruse` would
-double-deploy a `ruse-feedback-stdctrls-contro-all-*` variant on top
+`find_feedback_by_target`. Without exclusion, `./deploy --decoy` would
+double-deploy a `decoy-feedback-stdctrls-contro-all-*` variant on top
 of the baseline. To force PHASE re-roll the baseline:
-`rm -rf /mnt/AXES2U1/feedback/ruse-controls/controls/`.
+`rm -rf /mnt/AXES2U1/feedback/decoy-controls/controls/`.
 
 manifest.json is back as a provenance index (post 2026-04-23). Loaded by
 `feedback.py::load_manifest`, surfaced at confirm time via `manifest_summary_lines`,
@@ -364,7 +378,7 @@ Below that, deploy is not usable for experiments → step aborts with summary of
 
 ### Teardown improvements
 - **Orphan volume cleanup** — `_cleanup_orphaned_volumes(os_client)` in every teardown path. Deletes nameless/200GB/available volumes (was leaking ~200GB per VM).
-- **experiments.json closure** — `_close_phase_experiment(config_name)` sets `end_date` so PHASE batch pipelines (`PHASE.py --ruse|--rampart|--ghosts`) don't pick up torn-down deploys. Historical registration preserved; only `end_date` set (yesterday's date — teardown-day Zeek captures partial).
+- **experiments.json closure** — `_close_phase_experiment(config_name)` sets `end_date` so PHASE batch pipelines (`PHASE.py --decoy|--rampart|--ghosts`) don't pick up torn-down deploys. Historical registration preserved; only `end_date` set (yesterday's date — teardown-day Zeek captures partial).
 
 ### experiments.json fcntl lock (2026-04-17)
 
@@ -373,7 +387,7 @@ Below that, deploy is not usable for experiments → step aborts with summary of
 cycle, then write via tempfile + fsync + `os.replace`. Atomic, serialized,
 no torn writes on crash.
 
-Pre-lock incident: 2026-04-17 batch of 7 rampart + 8 ruse + 1 ghosts deploys interleaved
+Pre-lock incident: 2026-04-17 batch of 7 rampart + 8 decoy + 1 ghosts deploys interleaved
 and wiped 14 entries down to 2 (each writer loaded stale view, clobbered others).
 PHASE.py errored "Not found in experiments.json".
 
@@ -397,7 +411,7 @@ those models key on network topology (local_orig, conn_state, id.orig_p), not be
 
 ### `_metadata.ablation_gate` in behavior.json
 PHASE writes `ablation_gate` subtree with `inactive`, `flat_zero`, `gating_features`,
-`per_sup_active`. Non-empty → RUSE treats missing sections as deliberate omissions.
+`per_sup_active`. Non-empty → DECOY treats missing sections as deliberate omissions.
 
 ### Runtime: [WARNING] → [INFO] downgrade
 `BehavioralConfig.ablation_gate` + `.is_ablation_gated()` populated from `_metadata.ablation_gate`.
@@ -411,7 +425,7 @@ Emitted tag becomes `[INFO] ... DISABLED ... (ablation-gated)` so audit.py can d
 ### audit.py Warn column semantics
 - Baseline (bc_has_behavior=0): `n/a (baseline)` — runtime short-circuits on `fc.is_empty()`.
 - Feedback, 0 warn + N INFO: `OK (N ablation-gated)` — PHASE deliberately omitted sections.
-- Feedback, N warn: `FAIL (N unexpected warnings)` — real bug (malformed config or RUSE regression before INFO downgrade fires).
+- Feedback, N warn: `FAIL (N unexpected warnings)` — real bug (malformed config or DECOY regression before INFO downgrade fires).
 
 VM probe reports `WARN_COUNT` and `INFO_COUNT` separately from `grep '\[WARNING\]'`
 and `grep '\[INFO\].*ablation-gated'` against `systemd.log`.
@@ -432,32 +446,32 @@ grep -E "FAILED|fatal|UNREACHABLE" deployments/logs/ansible-*.log | tail -30
 Documentation:
 - `docs/silent-failures-audit.md` — 15-item CRITICAL/HIGH/MEDIUM/LOW catalog
 - `docs/feedback-consumption-plan.md` — D1-D5, G1-G3 runtime consumption plan
-- `docs/feedback-field-audit.md` — per-file gap analysis PHASE emits vs RUSE consumes
+- `docs/feedback-field-audit.md` — per-file gap analysis PHASE emits vs DECOY consumes
 
 ---
 
-# RUSE SUPs — Type-Specific
+# DECOY SUPs — Type-Specific
 
-## Topology (ruse-controls — LEAN, gemma-only post 2026-04-08)
+## Topology (decoy-controls — LEAN, gemma-only post 2026-04-08)
 
 ```
-r-{dep_id}-C0-0          Bare Ubuntu control (no software)
-r-{dep_id}-M0-0          Upstream MITRE pyhuman (read-only control)
-r-{dep_id}-M1-0          MCHP baseline (no timing, no LLM)
-r-{dep_id}-B0-gemma-0    BrowserUse + gemma4:26b on V100
-r-{dep_id}-S0-gemma-0    SmolAgents  + gemma4:26b on V100
-r-{dep_id}-B0C-gemma-0   BrowserUse + gemma4:e2b on CPU
-r-{dep_id}-S0C-gemma-0   SmolAgents  + gemma4:e2b on CPU
+d-{dep_id}-C0-0          Bare Ubuntu control (no software)
+d-{dep_id}-M0-0          Upstream MITRE pyhuman (read-only control)
+d-{dep_id}-M1-0          MCHP baseline (no timing, no LLM)
+d-{dep_id}-B0-gemma-0    BrowserUse + gemma4:26b on V100
+d-{dep_id}-S0-gemma-0    SmolAgents  + gemma4:26b on V100
+d-{dep_id}-B0C-gemma-0   BrowserUse + gemma4:e2b on CPU
+d-{dep_id}-S0C-gemma-0   SmolAgents  + gemma4:e2b on CPU
 (7 VMs — dropped llama variants and RTX tier 2026-04-07/08)
 ```
 
-Feedback template (5 VMs per `./deploy --ruse --feedback`):
+Feedback template (5 VMs per `./deploy --decoy --feedback`):
 ```
-r-{dep_id}-M2-0          MCHP + PHASE timing
-r-{dep_id}-B2-gemma-0    BrowserUse + gemma + PHASE on V100
-r-{dep_id}-S2-gemma-0    SmolAgents  + gemma + PHASE on V100
-r-{dep_id}-B2C-gemma-0   BrowserUse + gemma + PHASE on CPU
-r-{dep_id}-S2C-gemma-0   SmolAgents  + gemma + PHASE on CPU
+d-{dep_id}-M2-0          MCHP + PHASE timing
+d-{dep_id}-B2-gemma-0    BrowserUse + gemma + PHASE on V100
+d-{dep_id}-S2-gemma-0    SmolAgents  + gemma + PHASE on V100
+d-{dep_id}-B2C-gemma-0   BrowserUse + gemma + PHASE on CPU
+d-{dep_id}-S2C-gemma-0   SmolAgents  + gemma + PHASE on CPU
 ```
 
 ## Spinup phases (`commands/spinup.py`)
@@ -577,7 +591,7 @@ Distribute playbook (`distribute-behavior-configs.yaml`):
 3. Validates `python3 -m json.tool` on localhost — corrupt aborts deploy before shipping to VM
 4. Copies to `/opt/ruse/deployed_sups/{key}/behavioral_configurations/behavior.json`
 5. Asserts file on disk after copy (one check; brief startup-race crashes self-resolve once file lands)
-6. Now runs for ALL non-C0/M0 SUPs — `ruse-controls/config.yaml` sets `behavior_source: /mnt/AXES2U1/feedback/ruse-controls/controls`, so baseline configs flow through the same path as feedback. (Pre-2026-05-02 only V2+ feedback ran distribute.)
+6. Now runs for ALL non-C0/M0 SUPs — `decoy-controls/config.yaml` sets `behavior_source: /mnt/AXES2U1/feedback/decoy-controls/controls`, so baseline configs flow through the same path as feedback. (Pre-2026-05-02 only V2+ feedback ran distribute.)
 
 ### behavior.json schema (PHASE-emitted)
 
@@ -637,7 +651,7 @@ downstream reader matches the shape PHASE emits verbatim. The `mode` field
 captures `_metadata.mode` so consumers can short-circuit on baseline schema.
 
 ### Loader contract (2026-05-02)
-- File missing → `RuntimeError` with banner ("RUSE BEHAVIORAL CONFIG MISSING — REFUSING TO START") to stderr, then raise. Service crash-loops, audit catches. **No legacy fallback path.**
+- File missing → `RuntimeError` with banner ("DECOY BEHAVIORAL CONFIG MISSING — REFUSING TO START") to stderr, then raise. Service crash-loops, audit catches. **No legacy fallback path.**
 - File present but malformed JSON → `JSONDecodeError` propagates → same crash-loop, audit catches.
 - File present and valid → return populated `BehavioralConfig`.
 
@@ -677,7 +691,7 @@ brain doesn't touch those fields and was unaffected.
 | `content.site_categories` | `site_config` | SmolAgents `BrowseWebWorkflow` filters task pool by category (W3 wired 2026-04-27) |
 | `content.download_url_pool` | `download_url_pool` | Smol/BU `DownloadFiles` LLM picker (feedback-only) — falls back to `FALLBACK_URLS` |
 | `content.whois_domain_pool` | `whois_domain_pool` | Smol/BU/MCHP `WhoisLookup` workflow (feedback-only) — falls back to `FALLBACK_DOMAINS` |
-| `content.download_size_pref` | (informational) | RUSE intentionally ignores |
+| `content.download_size_pref` | (informational) | DECOY intentionally ignores |
 | `behavior.page_dwell` / `navigation_clicks` | `behavior_modifiers` | MCHP `BrowseWeb.{min,max}_sleep_time`, `max_navigation_clicks`; BU `Agent(register_new_step_callback=...)` per-step uniform delay. (Non-dict values from PHASE baseline coerced to `{}` — silently ignored.) |
 | `behavior.enable_whois` | (read directly via `load_workflow_gates`) | Gates Smol/BU/MCHP `whois_lookup` workflow registration |
 | `behavior.enable_download` | (read directly via `load_workflow_gates`) | Gates Smol/BU/MCHP `download_files` workflow registration |
@@ -741,10 +755,10 @@ row has `local_orig=1`, ephemeral `id.orig_p`, `conn_state=SF`. Workstations hav
 opposite distribution.
 
 ### Architecture (components 1+3 shipped)
-- **1 neighborhood VM per feedback deploy** (FEEDBACK ONLY). Name `r-{dep_id}-neighborhood-0`, flavor `v1.small` (1 vCPU / 2 GB), `bot-desktop` keypair.
+- **1 neighborhood VM per feedback deploy** (FEEDBACK ONLY). Name `d-{dep_id}-neighborhood-0`, flavor `v1.small` (1 vCPU / 2 GB), `bot-desktop` keypair.
 - **Data-driven daemon** `common.network.neighborhood_traffic` reads `/etc/ruse-neighborhood/sups.json` and synthesizes real TCP/UDP probes at each SUP IP. Empty/zero rates → zero probes. Daemon stays alive but idle.
 - **10 probe types** in `src/common/network/probes.py`: `inbound_smb_per_hour`, `inbound_ldap_per_hour`, `inbound_wsus_per_hour`, `inbound_ntp_receive_per_hour`, `inbound_printer_per_hour`, `inbound_ipmi_per_hour`, `inbound_winrm_per_hour`, `inbound_mdns_per_hour`, `inbound_ssdp_per_hour`, `inbound_scan_per_hour`. Produce mixed conn_state (SF / S0 / REJ / RSTO / unidir) on Zeek rows from the SUP.
-- **PHASE contract (component 3)** — writes `diversity.topology_mimicry.inbound_*_per_hour` per SUP. RUSE's `BehavioralConfig.topology_mimicry()` reads verbatim via `diversity_injection`.
+- **PHASE contract (component 3)** — writes `diversity.topology_mimicry.inbound_*_per_hour` per SUP. DECOY's `BehavioralConfig.topology_mimicry()` reads verbatim via `diversity_injection`.
 
 ### Deploy flow (`spinup.py` phase 2c, after distribute)
 1. `_synthesize_neighborhood_config(behavior_source, inventory_path, run_dir)` reads each SUP's `behavior.json`, collects `topology_mimicry` rates, writes `neighborhood-sups.json` if any non-zero (else returns None → skip sidecar).
@@ -754,7 +768,7 @@ Fail-loud: any failure aborts before PHASE register — feedback deploy without
 topology layer would be experimentally worse than no deploy.
 
 ### Teardown
-VM name `r-{dep_id}-neighborhood-0` → existing `r-` prefix sweep in `teardown.yaml` /
+VM name `d-{dep_id}-neighborhood-0` → existing `r-` prefix sweep in `teardown.yaml` /
 `teardown-all.yaml` deletes it. No special handling.
 
 ### Audit
@@ -912,7 +926,7 @@ SSH_AUTH_SOCK="" sshpass -p '<admin_pass>' ssh \
 
 ## Behavioral configuration
 
-The orchestrator is **user-roles.json** (RAMPART analog to RUSE's `behavior.json`):
+The orchestrator is **user-roles.json** (RAMPART analog to DECOY's `behavior.json`):
 - Activity timing: hours/day, logins/hour, start hours per day-of-week
 - Workflow selection
 - Session behavior: login duration, recursive logins, terminal count
@@ -971,6 +985,53 @@ receiving PHASE-supplied `day_start_hour`, `activity_daily_hours`, `logins_per_h
 `taskinterval_sigma`. Enterprise-only workflows (`browse_iis`, `browse_shibboleth`,
 `moodle`, `build_software`) preserved by PHASE during cloning.
 
+## RAMPART hour gating (2026-05-06)
+
+PHASE-emitted hour fields in per-node `user-roles.json` now reach pyhuman.
+Pre-2026-05-06: `_generate_emulation_inventory` dropped them on the floor;
+`install-rampart-emulation.yaml` ExecStart had no schedule args; pyhuman
+ran 24/7 ignoring `day_start_hour_*`, `activity_daily_*_hours`,
+`_phase_block_mode`. Production RAMPART had zero hour-of-day awareness.
+
+Wiring (5 PHASE fields, UTC-indexed):
+
+| login_profile field | pyhuman flag |
+|---|---|
+| `day_start_hour_min` | `--day-start-hour-min` |
+| `day_start_hour_max` | `--day-start-hour-max` |
+| `activity_daily_min_hours[7]` | `--activity-daily-min-hours` (CSV, Mon=0..Sun=6) |
+| `activity_daily_max_hours[7]` | `--activity-daily-max-hours` (CSV) |
+| `_phase_block_mode.window: [start, end]` | `--block-window "start,end"` |
+
+Threaded through:
+- `rampart.py::_generate_emulation_inventory` reads verbatim from
+  `login_profile`, writes `rampart_day_start_hour_min/_max`,
+  `rampart_activity_daily_min/max_hours`, `rampart_block_window` host vars.
+- `rampart.py::_deploy_windows_emulation` threads same 5 fields into
+  `run-emulation.ps1` for the Windows scheduled-task path.
+- `install-rampart-emulation.yaml:44` ExecStart appends 5 flags to pyhuman.
+- `workflows.zip::human.py` (patched 2026-05-06): adds 5 args, computes
+  per-day active UTC hour set via `_select_active_hours_for_day`
+  (mirrors `simulate-logins.py::simulate_terminal_day` randomization),
+  re-rolls window at UTC midnight, sleeps 60s outside active hours.
+
+Block-mode: when PHASE sets `_phase_block_mode.active=true` with
+`window: [start, end]`, the explicit window overrides daily randomization.
+SHAP-driven contiguous top-K hour band.
+
+Backward compat: empty fields → gate disabled → pyhuman runs 24/7 (old
+behavior). Old workflows.zip (pre-2026-05-06) crashes on the new flags;
+playbook + zip must roll together.
+
+Verify: `ssh e-XXXXX-linep3 "journalctl -u rampart-human | grep hour-gate"`
+prints `[hour-gate] UTC active hours today (2026-05-06, dow=2): [14, 15, 16, 17, 18, 19, 20]`.
+
+`simulate-logins.py` still bakes absolute timestamps into `logins.json`,
+but those timestamps are unused in production (only `emulate-logins.py`
+manual test path reads them; `_start_emulation` in rampart.py:419 is
+dead code). The hour fields reach pyhuman directly via inventory host
+vars, not via logins.json replay.
+
 ## D5 sigma flow
 
 PHASE generates `clustersize_sigma` / `taskinterval_sigma` per-node in each
@@ -1004,12 +1065,12 @@ audit.py reports `FAIL (crash-looping, N restarts)` for > 10 restarts.
 
 ## Log collection
 
-RAMPART VMs do NOT produce RUSE-format JSONL logs (no `/opt/ruse/deployed_sups/{behavior}/logs/*.jsonl`).
+RAMPART VMs do NOT produce DECOY-format JSONL logs (no `/opt/ruse/deployed_sups/{behavior}/logs/*.jsonl`).
 
 - Linux logs: `journalctl -u rampart-human` (systemd journal, pyhuman stdout)
 - Windows logs: scheduled task captures, no persistent log file by default
 - Network traffic: Zeek on eno2 (axes), processed by PHASE pipeline with `start_date` range
-- RUSE log collector (`collect_sup_logs.py`) finds no JSONL on rampart VMs and skips — harmless but noisy
+- DECOY log collector (`collect_sup_logs.py`) finds no JSONL on rampart VMs and skips — harmless but noisy
 
 Health check across VMs:
 ```bash
@@ -1062,7 +1123,7 @@ Available: `browse_iis`, `browse_shibboleth`, `browse_web`, `browse_youtube`,
 | Output buffering (deploy looks frozen) | Child Python processes buffer stdout | `PYTHONUNBUFFERED=1` + `bufsize=1` in `_ent_run()` |
 | Deprecation warnings in output | neutronclient, cryptography libs | `PYTHONWARNINGS=ignore` + `_is_noise()` filter |
 | PHASE dredges all Zeek logs (disk full) | No start_date in experiments.json | `--start-date` flag in register_experiment.py |
-| RUSE log collector finds nothing | No JSONL — pyhuman uses stdout | Expected; use journalctl/Zeek |
+| DECOY log collector finds nothing | No JSONL — pyhuman uses stdout | Expected; use journalctl/Zeek |
 | NetBIOS collision between deploys | `Install-ADDSForest` can't auto-derive multi-label; even when it can, two deploys collide | `-DomainNetBIOSName CASTLE{hash}` |
 | Auth fails on DC | `deploy_users()` used bare domain (`administrator@castle`) but NetBIOS is now `CASTLE{hash}` | Use FQDN (`administrator@castle.{hash}.{project}.os`) |
 | 0 endpoints found for emulation | `user_map` keyed by prefixed names but `node_map` by bare names | Strip `ent_prefix` from `home_node` in `_generate_emulation_inventory()` and `_deploy_windows_emulation()` |

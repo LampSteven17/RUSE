@@ -8,7 +8,7 @@ When config is absent or empty, this module does nothing.
 import socket
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # Common domains for background DNS lookups (CDN, OS updates, services)
@@ -55,20 +55,20 @@ class BackgroundServiceGenerator:
         self._dns_count_this_hour = 0
         self._http_count_this_hour = 0
         self._ntp_count_today = 0
-        self._last_hour = datetime.now().hour
-        self._last_day = datetime.now().day
+        # UTC: dns_per_hour / http_head_per_hour are PHASE-indexed in UTC
+        self._last_hour = datetime.now(timezone.utc).hour
+        self._last_day = datetime.now(timezone.utc).day
 
     def _reset_hourly(self):
-        """Reset hourly counters if hour changed."""
-        now_hour = datetime.now().hour
-        if now_hour != self._last_hour:
+        """Reset hourly counters if hour changed (UTC)."""
+        now = datetime.now(timezone.utc)
+        if now.hour != self._last_hour:
             self._dns_count_this_hour = 0
             self._http_count_this_hour = 0
-            self._last_hour = now_hour
-        now_day = datetime.now().day
-        if now_day != self._last_day:
+            self._last_hour = now.hour
+        if now.day != self._last_day:
             self._ntp_count_today = 0
-            self._last_day = now_day
+            self._last_day = now.day
 
     def maybe_generate(self):
         """
@@ -79,7 +79,7 @@ class BackgroundServiceGenerator:
             return 0
 
         self._reset_hourly()
-        hour = datetime.now().hour
+        hour = datetime.now(timezone.utc).hour
         actions = 0
 
         # DNS lookups
