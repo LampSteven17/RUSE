@@ -247,7 +247,7 @@ def _find_rampart_config(config_name: str | None, deploy_dir: Path) -> Path | No
 
 def _make_dep_id(deployment_name: str, run_id: str) -> str:
     dep = deployment_name
-    for prefix in ("ruse-", "sup-", "ghosts-", "rampart-", "enterprise-"):
+    for prefix in ("decoy-", "ghosts-", "rampart-", "enterprise-"):
         if dep.startswith(prefix):
             dep = dep[len(prefix):]
     dep = dep.replace("-", "")
@@ -516,16 +516,36 @@ def _generate_emulation_inventory(
         # Strip e-{hash}- prefix if present (enterprise config uses prefixed names)
         if home_node.startswith(ent_prefix):
             home_node = home_node[len(ent_prefix):]
+        lp = user["login_profile"]
+
+        # PHASE hour-of-day fields (UTC-indexed). Pulled verbatim from
+        # per-node user-roles.json. _phase_block_mode.window, when present,
+        # overrides daily randomization.
+        block_mode = lp.get("_phase_block_mode") or {}
+        block_window_str = ""
+        if block_mode.get("active") and isinstance(block_mode.get("window"), list) and len(block_mode["window"]) == 2:
+            block_window_str = f"{int(block_mode['window'][0])},{int(block_mode['window'][1])}"
+
+        def _csv_or_empty(v):
+            if isinstance(v, list) and v:
+                return ",".join(str(int(x)) for x in v)
+            return ""
+
         user_map[home_node] = {
             "username": user["user_profile"]["username"],
             "password": user["user_profile"]["password"],
             "domain": user["domain"],
-            "workflows": " ".join(user["login_profile"]["workflows"]),
-            "clustersize": user["login_profile"].get("clustersize", "5"),
-            "clustersize_sigma": user["login_profile"].get("clustersize_sigma", "0"),
-            "taskinterval": user["login_profile"].get("taskinterval", "10"),
-            "taskinterval_sigma": user["login_profile"].get("taskinterval_sigma", "0"),
-            "taskgroupinterval": user["login_profile"].get("taskgroupinterval", "500"),
+            "workflows": " ".join(lp["workflows"]),
+            "clustersize": lp.get("clustersize", "5"),
+            "clustersize_sigma": lp.get("clustersize_sigma", "0"),
+            "taskinterval": lp.get("taskinterval", "10"),
+            "taskinterval_sigma": lp.get("taskinterval_sigma", "0"),
+            "taskgroupinterval": lp.get("taskgroupinterval", "500"),
+            "day_start_hour_min": int(lp.get("day_start_hour_min", 0)),
+            "day_start_hour_max": int(lp.get("day_start_hour_max", 0)),
+            "activity_daily_min_hours": _csv_or_empty(lp.get("activity_daily_min_hours")),
+            "activity_daily_max_hours": _csv_or_empty(lp.get("activity_daily_max_hours")),
+            "block_window": block_window_str,
         }
 
     # Extract domain admin password (needed for Windows SSH)
@@ -593,7 +613,12 @@ def _generate_emulation_inventory(
             f"rampart_clustersize_sigma={user['clustersize_sigma']} "
             f"rampart_taskinterval={user['taskinterval']} "
             f"rampart_taskinterval_sigma={user['taskinterval_sigma']} "
-            f"rampart_taskgroupinterval={user['taskgroupinterval']}"
+            f"rampart_taskgroupinterval={user['taskgroupinterval']} "
+            f"rampart_day_start_hour_min={user['day_start_hour_min']} "
+            f"rampart_day_start_hour_max={user['day_start_hour_max']} "
+            f"rampart_activity_daily_min_hours=\"{user['activity_daily_min_hours']}\" "
+            f"rampart_activity_daily_max_hours=\"{user['activity_daily_max_hours']}\" "
+            f"rampart_block_window=\"{user['block_window']}\""
         )
 
         if node_info["is_windows"]:
@@ -688,18 +713,35 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
         if not ip:
             continue
         u = user_map[bare]
+        lp = u["login_profile"]
+
+        block_mode = lp.get("_phase_block_mode") or {}
+        block_window_str = ""
+        if block_mode.get("active") and isinstance(block_mode.get("window"), list) and len(block_mode["window"]) == 2:
+            block_window_str = f"{int(block_mode['window'][0])},{int(block_mode['window'][1])}"
+
+        def _csv_or_empty(v):
+            if isinstance(v, list) and v:
+                return ",".join(str(int(x)) for x in v)
+            return ""
+
         win_vms.append({
             "name": prefixed,
             "ip": ip,
             "username": u["user_profile"]["username"],
             "password": u["user_profile"]["password"],
-            "workflows": " ".join(u["login_profile"]["workflows"]),
+            "workflows": " ".join(lp["workflows"]),
             "seed": seed + idx,
-            "clustersize": u["login_profile"].get("clustersize", "5"),
-            "clustersize_sigma": u["login_profile"].get("clustersize_sigma", "0"),
-            "taskinterval": u["login_profile"].get("taskinterval", "10"),
-            "taskinterval_sigma": u["login_profile"].get("taskinterval_sigma", "0"),
-            "taskgroupinterval": u["login_profile"].get("taskgroupinterval", "500"),
+            "clustersize": lp.get("clustersize", "5"),
+            "clustersize_sigma": lp.get("clustersize_sigma", "0"),
+            "taskinterval": lp.get("taskinterval", "10"),
+            "taskinterval_sigma": lp.get("taskinterval_sigma", "0"),
+            "taskgroupinterval": lp.get("taskgroupinterval", "500"),
+            "day_start_hour_min": int(lp.get("day_start_hour_min", 0)),
+            "day_start_hour_max": int(lp.get("day_start_hour_max", 0)),
+            "activity_daily_min_hours": _csv_or_empty(lp.get("activity_daily_min_hours")),
+            "activity_daily_max_hours": _csv_or_empty(lp.get("activity_daily_max_hours")),
+            "block_window": block_window_str,
         })
         idx += 1
 
@@ -758,6 +800,11 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
                 f"--taskinterval {vm['taskinterval']} --taskinterval-sigma {vm['taskinterval_sigma']} "
                 f"--taskgroupinterval {vm['taskgroupinterval']} "
                 f"--seed {vm['seed']} --workflows {vm['workflows']} "
+                f"--day-start-hour-min {vm['day_start_hour_min']} "
+                f"--day-start-hour-max {vm['day_start_hour_max']} "
+                f"--activity-daily-min-hours {vm['activity_daily_min_hours']} "
+                f"--activity-daily-max-hours {vm['activity_daily_max_hours']} "
+                f"--block-window {vm['block_window']} "
                 f"--extra passfile C:\\tmp\\shib_login.{vm['username']}'; "
                 f"$l += '    }} catch {{'; "
                 f"$l += '        Write-Host human.py_crashed_restarting'; "
