@@ -5,6 +5,12 @@
 deployment_name: rampart-controls
 type: rampart
 
+# PHASE owns the controls source of truth (post 2026-05-08). Per-node
+# user-roles.json files at this path carry _phase_metadata.mode=controls;
+# _generate_feedback_user_roles routes them through the same loading code
+# as feedback (mode FATAL gate guards against schema regression).
+behavior_source: /mnt/AXES2U1/feedback/rampart-controls/controls
+
 enterprise:
   workflow_dir: ~/uva-cs-workflow
   cloud_config: cloud-configs/axes-cicd.json
