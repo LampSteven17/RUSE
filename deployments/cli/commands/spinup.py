@@ -1,4 +1,4 @@
-"""RUSE SUP deployment command."""
+"""DECOY SUP deployment command."""
 
 from __future__ import annotations
 
@@ -16,15 +16,15 @@ from ..ssh_config import install_ssh_config
 from .feedback import generate_feedback_config
 
 
-def run_ruse_spinup(
+def run_decoy_spinup(
     config_name: str,
     deploy_dir: Path,
     behavior_source: str | None = None,
     configs_spec: str | None = None,
 ) -> int:
-    """Deploy RUSE SUP agents."""
-    # If feedback args given but config is ruse-controls, generate feedback config
-    if behavior_source and config_name == "ruse-controls":
+    """Deploy DECOY SUP agents."""
+    # If feedback args given but config is decoy-controls, generate feedback config
+    if behavior_source and config_name == "decoy-controls":
         config_name = generate_feedback_config(
             Path(behavior_source), configs_spec or "all", deploy_dir,
         )
@@ -48,7 +48,7 @@ def run_ruse_spinup(
     run_id = time.strftime("%m%d%y%H%M%S")
     run_dir = config_dir / "runs" / run_id
     dep_id = _make_run_dep_id(config_name, run_id)
-    vm_prefix = f"r-{dep_id}-"
+    vm_prefix = f"d-{dep_id}-"
     vm_count = config.vm_count()
 
     # Deploy-time fail-loud (S0): every non-control SUP must have a
@@ -65,10 +65,10 @@ def run_ruse_spinup(
         for line in src_err:
             output.error(f"  {line}")
         output.error("")
-        output.error("Every RUSE SUP must have a behavior.json. Either fix the")
+        output.error("Every DECOY SUP must have a behavior.json. Either fix the")
         output.error("behavior_source in config.yaml, regenerate the missing")
         output.error("PHASE feedback files, or write the controls defaults at")
-        output.error("/mnt/AXES2U1/feedback/ruse-controls/controls/.")
+        output.error("/mnt/AXES2U1/feedback/decoy-controls/controls/.")
         return 1
 
     # Display header
@@ -97,6 +97,12 @@ def run_ruse_spinup(
             "deployment_dir": str(config_dir),
             "deployment_id": dep_id,
             "run_dir": str(run_dir),
+            # Pass vm_prefix explicitly. provision-vms.yaml hardcoded
+            # `r-{deployment_id}-` (legacy from when DECOY used the same
+            # prefix as RAMPART). Now d-=DECOY / r-=RAMPART / g-=GHOSTS.
+            # Without this, VMs got created as r- but every consumer
+            # (audit, teardown, register_experiment) looked for d-.
+            "vm_prefix": vm_prefix,
         },
         on_event=default_event_handler,
     )
@@ -342,8 +348,8 @@ def _validate_behavior_source(
     """
     errors: list[str] = []
     if not effective_source:
-        errors.append("No behavior_source configured. RUSE controls must point at")
-        errors.append("/mnt/AXES2U1/feedback/ruse-controls/controls (set in config.yaml).")
+        errors.append("No behavior_source configured. DECOY controls must point at")
+        errors.append("/mnt/AXES2U1/feedback/decoy-controls/controls (set in config.yaml).")
         return errors
 
     src = Path(effective_source)
@@ -376,9 +382,8 @@ def _validate_behavior_source(
 def _make_run_dep_id(deployment_name: str, run_id: str) -> str:
     """Build run dep_id: strip prefixes, remove hyphens, append run_id."""
     dep = deployment_name
-    for prefix in ("ruse-", "sup-"):
-        if dep.startswith(prefix):
-            dep = dep[len(prefix):]
+    if dep.startswith("decoy-"):
+        dep = dep[len("decoy-"):]
     dep = dep.replace("-", "")
     return f"{dep}{run_id}"
 
@@ -622,7 +627,9 @@ def _provision_and_install_neighborhood(
     import shlex
     import json
 
-    vm_name = f"r-{dep_id}-neighborhood-0"
+    # DECOY prefix `d-` (was `r-` legacy when DECOY shared RAMPART's prefix).
+    # The sidecar is part of the DECOY deploy so it lives under d-.
+    vm_name = f"d-{dep_id}-neighborhood-0"
     rc_file = os.path.expanduser("~/vxn3kr-bot-rc")
     # v1.small = 1 vCPU, 2 GB RAM — a probe daemon needs almost nothing.
     # Avoids pressure on the v1.14vcpu.28g pool used by the SUPs.
