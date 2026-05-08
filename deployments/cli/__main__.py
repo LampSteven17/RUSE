@@ -90,26 +90,38 @@ def _list_parser() -> argparse.ArgumentParser:
 
 
 def _audit_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(
+    p = argparse.ArgumentParser(
         prog="audit",
-        description="Full health audit of all active DECOY SUP deployments",
+        description="Health audit of active deployments (DECOY by default)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""checks per VM:
+        epilog="""subsystem flags (mutually exclusive; default --decoy):
+  --decoy     audit DECOY SUP deployments (default)
+  --rampart   audit RAMPART enterprise deployments (not yet implemented)
+  --ghosts    audit GHOSTS NPC deployments (not yet implemented)
+
+DECOY checks per VM:
   - SSH reachable
-  - SUP systemd service active
+  - SUP systemd service active + NRestarts probe
   - Brain process running
   - Ollama model loaded (matches expected for behavior)
   - GPU model loaded into VRAM (V100 VMs)
   - Recent log activity (latest jsonl fresh)
   - MCHP maintenance cron entries (M VMs)
+  - behavior.json present + window-mode contract (FEEDBACK / CONTROLS / FATAL)
+  - Volume — median bg-conn/min during ON-windows vs target
 
 cross-deployment:
   - OpenStack vs inventory orphans/missing
   - PHASE experiments.json registration
   - duplicate run_ids
+  - orphan boot volumes
 
 Outputs a terminal summary + markdown report at deployments/logs/audit_*.md""",
     )
+    p.add_argument("--decoy", action="store_true", help="Audit DECOY deployments (default)")
+    p.add_argument("--rampart", action="store_true", help="Audit RAMPART deployments (not yet implemented)")
+    p.add_argument("--ghosts", action="store_true", help="Audit GHOSTS deployments (not yet implemented)")
+    return p
 
 
 def _shrink_parser() -> argparse.ArgumentParser:
@@ -251,15 +263,35 @@ def _build_deploy_plan(
     from .commands.feedback import (
         find_all_feedback_sources, find_feedback_by_target, load_manifest,
     )
+    from .config import DeploymentConfig
+    from pathlib import Path as _Path
 
     plan: list[dict] = []
 
     if want_controls:
+        # Pull controls' PHASE source from the deployment's config.yaml so
+        # the plan render can show date + location (same shape as feedback).
+        # Post 2026-05-08 the controls/ slot is PHASE-emitted with its own
+        # manifest.json + per-SUP behavior.json (mode=controls).
+        controls_cfg_path = (DEPLOY_DIR / f"{deploy_type}-controls"
+                             / "config.yaml")
+        controls_source: _Path | None = None
+        controls_manifest = None
+        if controls_cfg_path.exists():
+            try:
+                cfg = DeploymentConfig.load(controls_cfg_path)
+                if cfg.behavior_source:
+                    controls_source = _Path(cfg.behavior_source)
+                    controls_manifest = load_manifest(controls_source)
+            except Exception:
+                # Don't block the plan on a malformed config — render the
+                # legacy "baseline controls — no PHASE feedback" line below.
+                pass
         plan.append({
             "label": f"{deploy_type}-controls (baseline)",
-            "behavior_source": None,
+            "behavior_source": controls_source,
             "configs_spec": None,
-            "manifest": None,
+            "manifest": controls_manifest,
             "is_controls": True,
         })
 
@@ -318,7 +350,17 @@ def _show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
     for i, task in enumerate(plan, 1):
         output.info(f"  {i}. {task['label']}")
         if task["is_controls"]:
-            output.info(f"      (baseline controls — no PHASE feedback)")
+            # Controls now ship a PHASE-emitted manifest (post 2026-05-08).
+            # Render the same source/date/sup_runs summary as feedback when
+            # available; fall back to the legacy line only if the controls
+            # slot hasn't been generated yet.
+            src = task.get("behavior_source")
+            mf = task.get("manifest")
+            if src is None:
+                output.info(f"      (baseline controls — no PHASE feedback)")
+            else:
+                for line in manifest_summary_lines(src, mf, indent="      "):
+                    output.info(line)
         else:
             mf = task["manifest"]
             err = validate_manifest_target(mf, deploy_type)
@@ -438,8 +480,22 @@ def _cmd_shrink(argv: list[str]) -> int:
 
 
 def _cmd_audit(argv: list[str]) -> int:
-    _audit_parser().parse_args(argv)  # just for --help
-    from .commands.audit import run_audit
+    args = _audit_parser().parse_args(argv)
+
+    # Mutual exclusion. Default decoy when none specified.
+    flags = sum(1 for f in (args.decoy, args.rampart, args.ghosts) if f)
+    if flags > 1:
+        output.error("Pass at most one of --decoy / --rampart / --ghosts")
+        return 1
+    if args.rampart:
+        output.error("RAMPART audit not yet implemented")
+        return 1
+    if args.ghosts:
+        output.error("GHOSTS audit not yet implemented")
+        return 1
+
+    # Default: --decoy
+    from .commands.audit_decoy import run_audit
     return run_audit(DEPLOY_DIR)
 
 

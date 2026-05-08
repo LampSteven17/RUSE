@@ -1,25 +1,32 @@
-"""Full health audit of all active DECOY SUP deployments.
+"""Health audit of all active DECOY SUP deployments.
+
+Sister modules `audit_rampart.py` / `audit_ghosts.py` are placeholders;
+the deploy-CLI dispatch in __main__.py routes `--decoy` here.
 
 Per-VM checks (via SSH probe):
-  1. SSH reachable
-  2. SUP service active
-  3. Brain process running (pgrep runners.run_*)
-  4. Ollama model loaded (and matches expected)
-  5. GPU model loaded into VRAM (V100 VMs)
-  6. Recent log activity (latest.jsonl mtime within threshold)
-  7. MCHP maintenance cron entries (M VMs only)
-  8. Behavioral config files present (V2+ feedback deploys)
-  9. Feature warnings from runtime (D1-G3 [WARNING] lines in systemd.log)
+   1. SSH reachable
+   2. SUP service active + NRestarts probe (catches crash-loops)
+   3. Brain process running (pgrep runners.run_*)
+   4. Ollama model loaded (matches expected)
+   5. GPU model loaded into VRAM (V100 VMs)
+   6. Recent log activity (latest.jsonl mtime within threshold)
+   7. MCHP maintenance cron entries (M VMs only)
+   8. behavior.json present (post 2026-05-08: every non-C0/M0 SUP must)
+   9. Feature warnings from runtime (D1-G3 [WARNING] in systemd.log)
+  10. Window-mode contract — _metadata.mode ∈ {feedback, controls}.
+      States: OK feedback / OK controls / FAIL (mode=...) / FAIL (parse_error)
+  11. Volume — median bg-conn/min during ON-windows vs target
 
 Cross-deployment consistency:
-  10. Inventory ↔ OpenStack orphan/missing detection
-  11. PHASE experiments.json registration
-  12. No duplicate run_ids per config
-  13. Orphaned boot volumes (nameless 200GB available)
-  14. Session log warnings from most recent deploy
+  - Inventory ↔ OpenStack orphan/missing detection
+  - PHASE experiments.json registration
+  - No duplicate run_ids per config
+  - Orphaned boot volumes (nameless 200GB available)
+  - Session log warnings from most recent deploy
 
 Outputs:
-  - Terminal summary table (9 check columns + 2 new: Fdbk, Warn)
+  - Terminal summary table (11 check columns: SSH/Svc/Proc/Model/GPU/
+    Logs/Cron/Fdbk/Warn/Win/Vol)
   - Markdown report at deployments/logs/audit_<timestamp>.md
 """
 
@@ -327,59 +334,42 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         else:
             checks["cron"] = "MISSING"
 
-    # 8. Behavioral config files present (post-2026-04-16 consolidation)
-    # Expected state:
-    #   V0/V1 baseline: BC_FILES=0, BC_HAS_BEHAVIOR=0 → n/a
-    #   V2+ feedback:   BC_FILES=1, BC_HAS_BEHAVIOR=1 → OK
-    #   Anything else is a misconfiguration that was silently OK'd pre-fix.
+    # 8. Behavioral config file present.
+    # PHASE 2026-05-08 contract: every non-C0/M0 SUP MUST have exactly one
+    # behavior.json with _metadata.mode in {"feedback","controls"}. The
+    # window-mode check (#10 below) validates the content; this check
+    # validates file presence + count. The old V0/V1 vs V2+ branch is
+    # gone — there's no "baseline that intentionally has no behavior.json"
+    # state anymore; baseline is just mode="controls".
     bc_files = int(probe.get("BC_FILES", "0") or "0")
     bc_has_behavior = probe.get("BC_HAS_BEHAVIOR", "0") == "1"
-    is_v2_plus = any(c.isdigit() and int(c) >= 2 for c in behavior if c.isdigit())
     if behavior in ("C0", "M0"):
         checks["feedback"] = "n/a"
-    elif is_v2_plus:
-        if bc_files == 1 and bc_has_behavior:
-            checks["feedback"] = "OK"
-        elif bc_files == 0:
-            checks["feedback"] = "FAIL (no configs)"
-        elif not bc_has_behavior:
-            checks["feedback"] = f"FAIL (no behavior.json, {bc_files} junk files)"
-        else:
-            checks["feedback"] = f"FAIL (stale: {bc_files} files incl. legacy)"
+    elif bc_has_behavior and bc_files == 1:
+        checks["feedback"] = "OK"
+    elif bc_files == 0:
+        checks["feedback"] = "FAIL (no behavior.json)"
+    elif not bc_has_behavior:
+        checks["feedback"] = f"FAIL (no behavior.json, {bc_files} junk files)"
     else:
-        # V0/V1 baseline — should have zero feedback files
-        if bc_files == 0:
-            checks["feedback"] = "n/a"
-        else:
-            checks["feedback"] = f"FAIL (baseline has {bc_files} unexpected configs)"
+        checks["feedback"] = f"FAIL (stale: {bc_files} files incl. legacy)"
 
     # 9. Feature warnings from runtime.
-    #
-    # [WARNING] lines = unexpected; [INFO] ablation-gated lines = intentional
-    # (PHASE's ablation engine deliberately omitted sections whose knobs don't
-    # move the score on the target model). We count WARNING and INFO
-    # separately so an operator can see "this deploy ran clean" vs
-    # "this deploy had PHASE-intentional omissions" vs "this deploy has bugs".
-    #
-    # Baseline deploys: no feedback attempted, so runtime never reaches the
-    # warning paths (fc.is_empty() short-circuits). Silence is correct.
-    # Feedback deploys: warnings UNEXPECTED, INFOs expected iff ablation-gated.
+    # [WARNING] lines = unexpected. [INFO] ablation-gated lines are
+    # intentional PHASE omissions (when the ablation engine proves a
+    # lever doesn't move score on the target). Counted separately so an
+    # operator can distinguish "ran clean" / "PHASE-intentional gating" /
+    # "real bug".
     warn_count = int(probe.get("WARN_COUNT", "0") or "0")
     info_count = int(probe.get("INFO_COUNT", "0") or "0")
     if behavior in ("C0", "M0"):
         checks["warnings"] = "n/a"
-    elif bc_has_behavior:
-        if warn_count == 0 and info_count == 0:
-            checks["warnings"] = "OK"
-        elif warn_count == 0 and info_count > 0:
-            checks["warnings"] = f"OK ({info_count} ablation-gated)"
-        else:
-            checks["warnings"] = f"FAIL ({warn_count} unexpected warnings)"
+    elif warn_count == 0 and info_count == 0:
+        checks["warnings"] = "OK"
+    elif warn_count == 0 and info_count > 0:
+        checks["warnings"] = f"OK ({info_count} ablation-gated)"
     else:
-        if warn_count == 0:
-            checks["warnings"] = "n/a (baseline)"
-        else:
-            checks["warnings"] = f"FAIL ({warn_count} warnings on baseline — unexpected)"
+        checks["warnings"] = f"FAIL ({warn_count} unexpected warnings)"
 
     # Post-pass: interpret IDLE correctly.
     # Ollama unloads idle models after OLLAMA_KEEP_ALIVE (default 5m).
