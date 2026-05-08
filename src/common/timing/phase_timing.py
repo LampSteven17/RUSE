@@ -21,7 +21,7 @@ import random
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -365,15 +365,23 @@ class CalibratedTiming:
     _PERCENTILE_KEYS = ["5", "25", "50", "75", "95"]
 
     def __init__(self, config: CalibratedTimingConfig, variance_config: dict = None,
-                 activity_config: dict = None, ablation_gated: bool = False):
+                 ablation_gated: bool = False):
         self.config = config
         self._last_activity_time: Optional[float] = None
         self._variance_config = variance_config or {}
-        self._activity_config = activity_config or {}
         # When ablation_gated, missing fields are intentional PHASE omissions
         # (the ablation engine proved the lever doesn't move score). Warnings
         # get downgraded to INFO so operators/audit can distinguish.
         self._ablation_gated = ablation_gated
+        # Window-mode contract (PHASE 2026-05-08). Populated via
+        # update_window_contract() from BehavioralConfig at startup + every
+        # cluster boundary. Windows are UTC minute-of-day [start, end) pairs;
+        # hard_fence_seconds reserves the tail of each window as a no-new-
+        # workflows zone. None until populated.
+        self._windows: Optional[List[List[int]]] = None
+        self._hard_fence_seconds: int = 60
+        self._min_window_minutes: int = 15
+        self._window_mode: Optional[str] = None
 
         # Normalize hourly fractions so peak hour = 1.0
         max_fraction = max(config.hourly_fractions)
@@ -384,29 +392,6 @@ class CalibratedTiming:
 
         self._init_variance_targets()
         self._init_per_hour_max()
-        self._init_activity_warnings()
-
-    def _init_activity_warnings(self):
-        """G5: Emit [WARNING] lines when activity_pattern fields are missing.
-
-        Without this, should_skip_hour/should_take_long_idle silently return
-        False/0 when the activity_config is empty — indistinguishable from a
-        baseline run with no PHASE feedback in systemd.log. Downgraded to
-        [INFO] when ablation-gated.
-        """
-        tag = "[INFO]" if self._ablation_gated else "[WARNING]"
-        suffix = " (ablation-gated)" if self._ablation_gated else ""
-
-        probs = (self._activity_config or {}).get("activity_probability_per_hour") or []
-        if not probs:
-            print(f"{tag} G5 activity_probability_per_hour DISABLED — "
-                  f"no activity_pattern.activity_probability_per_hour, "
-                  f"hourly activity suppression inactive{suffix}")
-        prob = (self._activity_config or {}).get("long_idle_probability", 0)
-        if prob <= 0:
-            print(f"{tag} G5 long_idle_probability DISABLED — "
-                  f"no activity_pattern.long_idle_probability, "
-                  f"long-idle injection inactive{suffix}")
 
     def _init_variance_targets(self):
         """D1: Extract per-hour sigma arrays from hourly_std_targets."""
@@ -547,30 +532,106 @@ class CalibratedTiming:
         else:
             return "peak"
 
-    def should_skip_hour(self) -> bool:
-        """Skip the current hour with probability (1 - activity_probability_per_hour[h])."""
-        if not self._activity_config:
-            return False
-        probs = self._activity_config.get("activity_probability_per_hour") or []
-        if not probs:
-            return False
-        hour = datetime.now(timezone.utc).hour
-        if hour < len(probs):
-            return random.random() > probs[hour]
-        return False
+    # ── Window-mode gating (PHASE 2026-05-08) ──────────────────────────
+    # Windows are UTC minute-of-day [start, end) half-open ranges, sorted,
+    # non-overlapping, each ≥ min_window_minutes wide. emulation_loop reads
+    # current_window() / time_until_next_window_start() / time_until_window_end()
+    # to gate cluster execution. hard_fence_seconds reserves the tail of
+    # each window as a no-new-workflows zone (option-B soft fence: lets
+    # in-flight workflows finish, blocks new spawns).
 
-    def should_take_long_idle(self) -> tuple:
-        """Inject a long idle with probability long_idle_probability.
-        Returns (should_idle, duration_seconds)."""
-        if not self._activity_config:
-            return False, 0
-        prob = self._activity_config.get("long_idle_probability", 0)
-        if prob > 0 and random.random() < prob:
-            dur_cfg = self._activity_config.get(
-                "long_idle_duration_minutes", {"min": 30, "max": 120})
-            duration = random.uniform(dur_cfg["min"], dur_cfg["max"]) * 60
-            return True, duration
-        return False, 0
+    def _now_minute_of_day_utc(self) -> int:
+        """Minute-of-day in UTC, 0..1439. Decimal minutes truncated."""
+        now = datetime.now(timezone.utc)
+        return now.hour * 60 + now.minute
+
+    def _now_seconds_into_minute(self) -> float:
+        """Seconds elapsed within the current UTC minute, 0..60."""
+        now = datetime.now(timezone.utc)
+        return now.second + now.microsecond / 1_000_000.0
+
+    def has_windows(self) -> bool:
+        """True iff a non-empty window list is configured (ACTIVE mode)."""
+        return bool(self._windows)
+
+    def current_window(self) -> Optional[tuple]:
+        """The window containing the current UTC minute, or None.
+
+        Returns (start_min, end_min) half-open. Linear scan — windows are
+        sorted and small (≤20 typical).
+        """
+        if not self._windows:
+            return None
+        m = self._now_minute_of_day_utc()
+        for s, e in self._windows:
+            if s <= m < e:
+                return (s, e)
+        return None
+
+    def time_until_next_window_start(self) -> float:
+        """Seconds until the next window begins.
+
+        - Returns 0.0 if currently inside a window.
+        - Returns the wait until the *next* window's start otherwise.
+        - Returns float('inf') if no windows are configured (caller should
+          interpret per window_mode: IDLE_ALL_DAY → idle forever; LEGACY
+          → don't use this, fall through).
+
+        Wraps midnight: if no window remains today, returns the wait to
+        the earliest window tomorrow.
+        """
+        if not self._windows:
+            return float("inf")
+        if self.current_window() is not None:
+            return 0.0
+        m = self._now_minute_of_day_utc()
+        sec_into = self._now_seconds_into_minute()
+        # Find the next window that starts at minute > m. Account for the
+        # fractional second already burned into the current minute.
+        for s, _e in self._windows:
+            if s > m:
+                return (s - m) * 60.0 - sec_into
+        # Wrap to the first window tomorrow.
+        first_start = self._windows[0][0]
+        # 1440 - m minutes left today + first_start tomorrow.
+        return ((1440 - m) + first_start) * 60.0 - sec_into
+
+    def time_until_window_end(self) -> Optional[float]:
+        """Seconds remaining in the current window, or None if outside.
+
+        Does NOT subtract hard_fence_seconds — caller decides whether to
+        apply the fence. Used by:
+          - the ≥90s start-only check (raw remaining)
+          - the cluster deadline (caller subtracts hard_fence)
+        """
+        cw = self.current_window()
+        if cw is None:
+            return None
+        _s, e = cw
+        m = self._now_minute_of_day_utc()
+        sec_into = self._now_seconds_into_minute()
+        return (e - m) * 60.0 - sec_into
+
+    def fence_active(self) -> bool:
+        """True iff inside a window AND within last hard_fence_seconds of it.
+
+        emulation_loop should not start new workflows when this is True.
+        """
+        rem = self.time_until_window_end()
+        if rem is None:
+            return False
+        return rem <= self._hard_fence_seconds
+
+    def cluster_deadline_seconds(self) -> Optional[float]:
+        """Seconds until new-workflow spawns must stop in the current window.
+
+        Equivalent to time_until_window_end() − hard_fence_seconds. None if
+        outside a window, or 0 if already inside the fence.
+        """
+        rem = self.time_until_window_end()
+        if rem is None:
+            return None
+        return max(0.0, rem - self._hard_fence_seconds)
 
     def update_variance_config(self, variance_config: dict):
         """Hot-update variance injection config."""
@@ -578,10 +639,46 @@ class CalibratedTiming:
         self._init_variance_targets()
         self._init_per_hour_max()
 
-    def update_activity_config(self, activity_config: dict):
-        """Hot-update activity pattern config."""
-        self._activity_config = activity_config or {}
-        self._init_activity_warnings()
+    def update_window_contract(
+        self,
+        windows: Optional[List[List[int]]],
+        hard_fence_seconds: Optional[int],
+        min_window_minutes: Optional[int],
+        window_mode: Optional[str],
+    ) -> None:
+        """Hot-update window-mode contract from BehavioralConfig.
+
+        Called at startup and at each cluster boundary so PHASE-side
+        re-rolls land at the next gate check without service restart.
+        Validates monotonicity (sorted, non-overlapping, in-bounds);
+        invalid windows raise ValueError so the caller fails loud.
+        """
+        if windows is not None:
+            normalized: List[List[int]] = []
+            prev_end = -1
+            for w in windows:
+                if not isinstance(w, (list, tuple)) or len(w) != 2:
+                    raise ValueError(
+                        f"window must be [start, end] pair, got {w!r}")
+                s, e = int(w[0]), int(w[1])
+                if not (0 <= s < e <= 1440):
+                    raise ValueError(
+                        f"window [{s},{e}) out of bounds 0..1440")
+                if s < prev_end:
+                    raise ValueError(
+                        f"window [{s},{e}) overlaps prior end {prev_end}")
+                normalized.append([s, e])
+                prev_end = e
+            self._windows = normalized
+        else:
+            self._windows = None
+
+        if hard_fence_seconds is not None:
+            self._hard_fence_seconds = int(hard_fence_seconds)
+        if min_window_minutes is not None:
+            self._min_window_minutes = int(min_window_minutes)
+        if window_mode is not None:
+            self._window_mode = window_mode
 
     def record_activity(self) -> None:
         self._last_activity_time = time.time()

@@ -45,6 +45,16 @@ BACKGROUND_URLS = [
 class BackgroundServiceGenerator:
     """Generates background network traffic between workflow tasks."""
 
+    # Safety cap on how aggressively deficit-burst can overshoot the
+    # PHASE-emitted target. Going over is acceptable per spec ("median
+    # conn/min during ON ≥ 1000"), but a runaway overshoot would skew
+    # Zeek volume far past human peak. 1.5x of target is the ceiling.
+    _DEFICIT_BURST_OVERSHOOT_CAP = 1.5
+    # Per-minute conn-count log emitted to systemd.log so the audit
+    # `Vol` column can scrape median conn/min during ON-windows from
+    # a self-reported counter without needing Zeek crosscheck.
+    _COUNTER_LOG_PREFIX = "[bg-counter]"
+
     def __init__(self, config: dict = None, logger=None):
         self._config = config or {}
         self._logger = logger
@@ -58,10 +68,44 @@ class BackgroundServiceGenerator:
         # UTC: dns_per_hour / http_head_per_hour are PHASE-indexed in UTC
         self._last_hour = datetime.now(timezone.utc).hour
         self._last_day = datetime.now(timezone.utc).day
+        # Window-mode deficit-burst state (PHASE 2026-05-08).
+        # Inside a window, top up bg-service rate to
+        # `_volume_target` conn/min. emulation_loop pushes state at each
+        # cluster boundary via set_window_state(); when False, behaves
+        # exactly as the legacy hour-rate generator.
+        self._in_window = False
+        self._volume_target = None
+        # Per-minute counter — every call to _do_dns/http/ntp increments.
+        # Reset + logged when the UTC minute rolls. Logged value feeds
+        # the audit Vol column. Cheap-and-dirty: counts only bg-service
+        # conns, not brain workflow conns; tendency is to undercount, so
+        # going-over the target is preferred over false alarms.
+        self._minute_conn_count = 0
+        # Stamp at minute granularity to detect rollover.
+        now = datetime.now(timezone.utc)
+        self._last_minute_stamp = (now.hour, now.minute)
 
     def _reset_hourly(self):
-        """Reset hourly counters if hour changed (UTC)."""
+        """Reset hourly counters if hour changed (UTC). Also rolls the
+        per-minute counter when the UTC minute changes — emits a single
+        line to stdout (systemd.log) summarizing the just-elapsed minute
+        so the audit Vol column can grep median conn/min."""
         now = datetime.now(timezone.utc)
+        cur_minute = (now.hour, now.minute)
+        if cur_minute != self._last_minute_stamp:
+            # Roll: emit count for the just-elapsed minute so audit can
+            # scrape median conn/min during ON-windows.
+            in_win = "1" if self._in_window else "0"
+            tgt = (f"{self._volume_target:.0f}"
+                   if self._volume_target else "-")
+            print(f"{self._COUNTER_LOG_PREFIX} "
+                  f"minute={self._last_minute_stamp[0]:02d}:"
+                  f"{self._last_minute_stamp[1]:02d} "
+                  f"conns={self._minute_conn_count} "
+                  f"in_window={in_win} target={tgt}",
+                  flush=True)
+            self._minute_conn_count = 0
+            self._last_minute_stamp = cur_minute
         if now.hour != self._last_hour:
             self._dns_count_this_hour = 0
             self._http_count_this_hour = 0
@@ -69,6 +113,20 @@ class BackgroundServiceGenerator:
         if now.day != self._last_day:
             self._ntp_count_today = 0
             self._last_day = now.day
+
+    def set_window_state(self, in_window: bool,
+                         volume_target: float = None):
+        """Push window-mode state from emulation_loop at cluster
+        boundaries. When in_window is True and a positive volume_target
+        is given, maybe_generate() will deficit-burst extra probes to
+        approach `volume_target` bg-conns/minute (cap at 1.5x).
+
+        Outside windows or with no target, behaves as the legacy
+        hour-rate generator (no burst)."""
+        self._in_window = bool(in_window)
+        self._volume_target = (float(volume_target)
+                               if volume_target and volume_target > 0
+                               else None)
 
     def maybe_generate(self):
         """
@@ -107,12 +165,37 @@ class BackgroundServiceGenerator:
                 self._ntp_count_today += 1
                 actions += 1
 
+        # Deficit-burst (PHASE 2026-05-08). Inside a window with a target
+        # set, top up to ~target conn/min, capped at target * 1.5. Issues
+        # a small batch (max 8 per call) so per-task latency stays bounded
+        # even if maybe_generate runs once between long workflows. Caller
+        # is expected to invoke us multiple times per minute via inter-
+        # task-delay loops; over a minute we converge on target.
+        if self._in_window and self._volume_target:
+            cap = self._volume_target * self._DEFICIT_BURST_OVERSHOOT_CAP
+            deficit = self._volume_target - self._minute_conn_count
+            if deficit > 0 and self._minute_conn_count < cap:
+                # How many probes to emit this call. Keep small — the
+                # generator is called many times per minute.
+                burst_n = min(int(deficit / 4) + 1, 8)
+                for _ in range(burst_n):
+                    if self._minute_conn_count >= cap:
+                        break
+                    # Random split: 70% DNS (cheap, sub-100ms), 30% HTTP
+                    # HEAD. Skip NTP in burst (it's daily-budgeted).
+                    if random.random() < 0.7:
+                        self._do_dns_lookup(random.choice(BACKGROUND_DOMAINS))
+                    else:
+                        self._do_http_head(random.choice(BACKGROUND_URLS))
+                    actions += 1
+
         return actions
 
     def _do_dns_lookup(self, domain: str):
         """Perform a DNS lookup (creates DNS service connection in Zeek)."""
         try:
             socket.getaddrinfo(domain, None)
+            self._minute_conn_count += 1
             if self._logger:
                 self._logger.debug(f"[background] DNS lookup: {domain}")
         except Exception:
@@ -125,6 +208,7 @@ class BackgroundServiceGenerator:
             req = urllib.request.Request(url, method='HEAD')
             req.add_header('User-Agent', 'Mozilla/5.0')
             urllib.request.urlopen(req, timeout=5)
+            self._minute_conn_count += 1
             if self._logger:
                 self._logger.debug(f"[background] HTTP HEAD: {url}")
         except Exception:
@@ -144,6 +228,7 @@ class BackgroundServiceGenerator:
             except socket.timeout:
                 pass
             sock.close()
+            self._minute_conn_count += 1
             if self._logger:
                 self._logger.debug(f"[background] NTP check: {ntp_server}")
         except Exception:

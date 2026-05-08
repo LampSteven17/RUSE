@@ -75,10 +75,36 @@ def run_smolagents_loop(config: SUPConfig, behavior_config_dir: str = None):
     calibration_profile = config.calibration
 
     # Resolve behavioral config directory
-    from common.behavioral_config import resolve_behavioral_config_dir, load_behavioral_config
+    from common.behavioral_config import resolve_behavioral_config_dir, load_behavioral_config, MODE_CONTROLS
     resolved_behavior_config_dir = resolve_behavioral_config_dir(config.config_key, override_dir=behavior_config_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
+
+    # Mode dispatch (PHASE 2026-05-08). When PHASE marks this SUP as
+    # controls, bypass SmolAgents entirely and run the brain-agnostic
+    # controls floor.
+    fc = load_behavioral_config(resolved_behavior_config_dir, config.config_key)
+    if fc.mode == MODE_CONTROLS:
+        from brains.controls import run_controls
+        logger.session_start(config={
+            "brain": "controls",
+            "config_key": config.config_key,
+            "behavior_config_dir": str(resolved_behavior_config_dir),
+            "launched_from": "smolagents",
+        })
+        try:
+            run_controls(config.config_key,
+                         behavior_config_dir=str(resolved_behavior_config_dir),
+                         logger=logger)
+        except KeyboardInterrupt:
+            logger.info("Controls stopped by user (KeyboardInterrupt)")
+        except Exception as e:
+            logger.session_fail(message="Controls runner failed", exception=e)
+            raise
+        finally:
+            logger.session_end()
+        return
+
     logger.session_start(config={
         "brain": config.brain,
         "model": config.model,
@@ -93,8 +119,7 @@ def run_smolagents_loop(config: SUPConfig, behavior_config_dir: str = None):
 
     prompts = PHASE_PROMPTS if config.phase else DEFAULT_PROMPTS
 
-    # Apply prompt augmentation from behavioral config
-    fc = load_behavioral_config(resolved_behavior_config_dir, config.config_key)
+    # Apply prompt augmentation from behavioral config (already loaded above)
     if fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"):
         from brains.smolagents.prompts import SMOLPrompts
         prompts = SMOLPrompts(task=prompts.task, content=fc.prompt_augmentation["prompt_content"])

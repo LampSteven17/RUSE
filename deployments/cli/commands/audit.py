@@ -1,4 +1,4 @@
-"""Full health audit of all active RUSE deployments.
+"""Full health audit of all active DECOY SUP deployments.
 
 Per-VM checks (via SSH probe):
   1. SSH reachable
@@ -154,6 +154,52 @@ else
   echo "INFO_COUNT=0"
   echo "WARN_LINES="
 fi
+# Window-mode probe (PHASE 2026-05-08, simplified). Emit WIN_STATE /
+# WIN_N / WIN_ON_MIN / WIN_TARGET / WIN_VOL_MEDIAN. PHASE consolidated
+# to two shapes: feedback / controls. State is the mode itself; FATAL
+# means schema regression (anything else).
+BEHAVIOR_FILE=$(ls /opt/ruse/deployed_sups/*/behavioral_configurations/behavior.json 2>/dev/null | head -1)
+if [ -n "$BEHAVIOR_FILE" ]; then
+  python3 - "$BEHAVIOR_FILE" <<'PYEOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("WIN_STATE=parse_error")
+    print("WIN_N=0"); print("WIN_ON_MIN=0"); print("WIN_TARGET=0")
+    sys.exit(0)
+t = d.get("timing") or dict()
+m = d.get("_metadata") or dict()
+w = t.get("active_minute_windows") or []
+mode = m.get("mode")
+if mode == "feedback":
+    state = "FEEDBACK"
+elif mode == "controls":
+    state = "CONTROLS"
+else:
+    state = "FATAL"
+n = len(w)
+on = sum(int(e)-int(s) for s,e in w)
+target = t.get("target_conn_per_minute_during_active") or 0
+print("WIN_STATE=%s" % state)
+print("WIN_N=%d" % n)
+print("WIN_ON_MIN=%d" % on)
+print("WIN_TARGET=%s" % target)
+PYEOF
+else
+  echo "WIN_STATE=n/a"
+  echo "WIN_N=0"
+  echo "WIN_ON_MIN=0"
+  echo "WIN_TARGET=0"
+fi
+if [ -n "$SYSLOG" ]; then
+  WIN_VOL_MEDIAN=$(grep '\\[bg-counter\\].*in_window=1' "$SYSLOG" 2>/dev/null \\
+    | tail -60 | awk -F'conns=' 'NF>1{{print $2}}' | awk '{{print $1}}' \\
+    | sort -n | awk 'BEGIN{{c=0}} {{a[++c]=$1}} END{{if(c==0){{print 0;exit}} print a[int((c+1)/2)]}}')
+  echo "WIN_VOL_MEDIAN=${{WIN_VOL_MEDIAN:-0}}"
+else
+  echo "WIN_VOL_MEDIAN=0"
+fi
 """
     result = subprocess.run(
         [
@@ -193,7 +239,8 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     checks["ssh"] = "OK" if probe.get("ssh_ok") else "FAIL"
     if not probe.get("ssh_ok"):
         # If SSH fails, all downstream checks unknown
-        for k in ("service", "process", "model", "gpu", "log", "cron", "feedback", "warnings"):
+        for k in ("service", "process", "model", "gpu", "log", "cron",
+                  "feedback", "warnings", "window", "volume"):
             checks[k] = "?"
         return checks
 
@@ -350,13 +397,56 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
             else:
                 checks[k] = "FAIL (not loaded)"
 
+    # 10. Window-mode (PHASE 2026-05-08, simplified). Two valid states +
+    # FATAL for schema regression. Both feedback and controls always have
+    # active_minute_windows; the difference is in window count + content.
+    win_state = probe.get("WIN_STATE", "n/a")
+    win_n = int(probe.get("WIN_N", "0") or "0")
+    win_on = int(probe.get("WIN_ON_MIN", "0") or "0")
+    if behavior in ("C0", "M0"):
+        checks["window"] = "n/a"
+    elif win_state == "FEEDBACK":
+        checks["window"] = f"OK feedback ({win_n} wins, {win_on}m)"
+    elif win_state == "CONTROLS":
+        checks["window"] = f"OK controls ({win_n} wins, {win_on}m)"
+    elif win_state == "parse_error":
+        checks["window"] = "FAIL (behavior.json parse error)"
+    else:
+        checks["window"] = f"FAIL (mode={win_state} — contract violated)"
+
+    # 11. Volume — median bg-conn/min during ON-windows vs target.
+    # Self-reported counter, undercounts (excludes brain workflow conns).
+    # Threshold: ≥ target × 0.7 = OK; ≥ target × 0.4 = WARN; below = FAIL.
+    try:
+        win_target = float(probe.get("WIN_TARGET", "0") or "0")
+        win_median = float(probe.get("WIN_VOL_MEDIAN", "0") or "0")
+    except ValueError:
+        win_target = 0.0
+        win_median = 0.0
+    if behavior in ("C0", "M0"):
+        checks["volume"] = "n/a"
+    elif win_state not in ("FEEDBACK", "CONTROLS") or win_target <= 0:
+        checks["volume"] = "n/a"
+    else:
+        ratio = win_median / win_target if win_target > 0 else 0.0
+        if win_median <= 0:
+            # No counter samples yet — recently-deployed VMs see this for
+            # ~1 hour. Don't penalize; flag for visibility.
+            checks["volume"] = f"PENDING (no bg-counter samples)"
+        elif ratio >= 0.7:
+            checks["volume"] = f"OK ({win_median:.0f}/{win_target:.0f})"
+        elif ratio >= 0.4:
+            checks["volume"] = f"WARN ({win_median:.0f}/{win_target:.0f}, ratio {ratio:.2f})"
+        else:
+            checks["volume"] = f"FAIL ({win_median:.0f}/{win_target:.0f}, ratio {ratio:.2f})"
+
     return checks
 
 
 # ── Discovery ────────────────────────────────────────────────────────────
 
 def _discover_deployments(deploy_dir: Path) -> list[dict]:
-    """Find all active RUSE SUP deployments. Returns list of {name, run_id, run_dir, vms}."""
+    """Find all active DECOY SUP deployments. Returns list of {name, run_id, run_dir, vms}."""
     deployments = []
     for config_dir in sorted(deploy_dir.iterdir()):
         if not config_dir.is_dir():
@@ -370,7 +460,7 @@ def _discover_deployments(deploy_dir: Path) -> list[dict]:
             output.error(f"  WARNING: skipping {config_dir.name}/config.yaml: "
                          f"{type(e).__name__}: {e}")
             continue
-        # RUSE SUPs only — skip rampart and ghosts
+        # DECOY SUPs only — skip rampart and ghosts
         if cfg.is_rampart() or cfg.is_ghosts():
             continue
 
@@ -414,13 +504,13 @@ def _parse_inventory(inv_path: Path) -> list[dict]:
 
 def run_audit(deploy_dir: Path) -> int:
     """Run full audit. Returns 0 on no failures, 1 otherwise."""
-    output.banner("RUSE AUDIT")
+    output.banner("DECOY AUDIT")
     output.info("")
 
     output.dim("  Discovering deployments...")
     deployments = _discover_deployments(deploy_dir)
     if not deployments:
-        output.info("No active RUSE deployments found.")
+        output.info("No active DECOY deployments found.")
         return 0
 
     total_vms = sum(len(d["vms"]) for d in deployments)
@@ -544,11 +634,14 @@ def run_audit(deploy_dir: Path) -> int:
     for dep, vm, probe, checks in all_results:
         by_dep[(dep["name"], dep["run_id"])].append((vm, probe, checks))
 
-    headers = ["Deployment", "VMs", "SSH", "Svc", "Proc", "Model", "GPU", "Logs", "Cron", "Fdbk", "Warn"]
+    headers = ["Deployment", "VMs", "SSH", "Svc", "Proc", "Model", "GPU",
+               "Logs", "Cron", "Fdbk", "Warn", "Win", "Vol"]
     rows = []
 
     def _ok(v: str) -> bool:
-        # "OK", "OK (idle)", "OK (24 GB)", "OK (12s ago)", "n/a", "EXPECTED ..." all count as pass
+        # "OK", "OK (idle)", "OK (24 GB)", "OK (12s ago)", "n/a", "EXPECTED ..." all count as pass.
+        # PENDING (no bg-counter samples) on freshly-deployed VMs counts
+        # as not-yet-failing — treated like "?" by not summing into ok.
         return v.startswith("n/a") or v.startswith("OK") or v.startswith("EXPECTED")
 
     for (name, rid), entries in sorted(by_dep.items()):
@@ -562,11 +655,14 @@ def run_audit(deploy_dir: Path) -> int:
         cron_ok = sum(1 for _, _, c in entries if _ok(c.get("cron", "")))
         fdbk_ok = sum(1 for _, _, c in entries if _ok(c.get("feedback", "")))
         warn_ok = sum(1 for _, _, c in entries if _ok(c.get("warnings", "")))
+        win_ok = sum(1 for _, _, c in entries if _ok(c.get("window", "")))
+        vol_ok = sum(1 for _, _, c in entries if _ok(c.get("volume", "")))
         rows.append([
             f"{name}-{rid}", str(n),
             f"{ssh_ok}/{n}", f"{svc_ok}/{n}", f"{proc_ok}/{n}",
             f"{model_ok}/{n}", f"{gpu_ok}/{n}", f"{log_ok}/{n}", f"{cron_ok}/{n}",
             f"{fdbk_ok}/{n}", f"{warn_ok}/{n}",
+            f"{win_ok}/{n}", f"{vol_ok}/{n}",
         ])
     output.table(headers, rows)
     output.info("")
@@ -593,7 +689,8 @@ def run_audit(deploy_dir: Path) -> int:
 def _row_status(checks: dict) -> str:
     """Compact one-char-per-check status string for terminal."""
     parts = []
-    for k in ("ssh", "service", "process", "model", "gpu", "log", "cron", "feedback", "warnings"):
+    for k in ("ssh", "service", "process", "model", "gpu", "log", "cron",
+              "feedback", "warnings", "window", "volume"):
         v = checks.get(k, "?")
         if v.startswith("OK") or v.startswith("n/a") or v.startswith("EXPECTED"):
             parts.append(".")
@@ -607,12 +704,11 @@ def _row_status(checks: dict) -> str:
 
 
 def _dep_prefix(dep: dict) -> str:
-    """Build the OpenStack VM prefix for a deployment (r-{dep_id}-)."""
+    """Build the OpenStack VM prefix for a deployment (d-{dep_id}-)."""
     name = dep["name"]
-    for p in ("ruse-", "sup-"):
-        if name.startswith(p):
-            name = name[len(p):]
-    return f"r-{name.replace('-', '')}{dep['run_id']}-"
+    if name.startswith("decoy-"):
+        name = name[len("decoy-"):]
+    return f"d-{name.replace('-', '')}{dep['run_id']}-"
 
 
 # ── Markdown report ──────────────────────────────────────────────────────
@@ -625,7 +721,7 @@ def _write_markdown(
     by_dep: dict,
 ) -> None:
     lines = []
-    lines.append(f"# RUSE Audit Report")
+    lines.append(f"# DECOY Audit Report")
     lines.append("")
     lines.append(f"**Generated:** {time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     lines.append(f"**Deployments scanned:** {len(deployments)}")
@@ -635,8 +731,8 @@ def _write_markdown(
 
     lines.append("## Summary")
     lines.append("")
-    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | Volume |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     def _ok(v: str) -> bool:
         return v.startswith("n/a") or v.startswith("OK")
@@ -652,10 +748,12 @@ def _write_markdown(
         cron_ok = sum(1 for _, _, c in entries if _ok(c.get("cron", "")))
         fdbk_ok = sum(1 for _, _, c in entries if _ok(c.get("feedback", "")))
         warn_ok = sum(1 for _, _, c in entries if _ok(c.get("warnings", "")))
+        win_ok = sum(1 for _, _, c in entries if _ok(c.get("window", "")))
+        vol_ok = sum(1 for _, _, c in entries if _ok(c.get("volume", "")))
         lines.append(
             f"| `{name}-{rid}` | {n} | {ssh_ok}/{n} | {svc_ok}/{n} | {proc_ok}/{n} | "
             f"{model_ok}/{n} | {gpu_ok}/{n} | {log_ok}/{n} | {cron_ok}/{n} | "
-            f"{fdbk_ok}/{n} | {warn_ok}/{n} |"
+            f"{fdbk_ok}/{n} | {warn_ok}/{n} | {win_ok}/{n} | {vol_ok}/{n} |"
         )
     lines.append("")
 
@@ -676,8 +774,8 @@ def _write_markdown(
     for (name, rid), entries in sorted(by_dep.items()):
         lines.append(f"### `{name}-{rid}`")
         lines.append("")
-        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | Volume |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for vm, probe, checks in sorted(entries, key=lambda e: e[0]["name"]):
             lines.append(
                 f"| `{vm['name']}` | {vm['behavior']} | {vm['ip']} | "
@@ -685,7 +783,8 @@ def _write_markdown(
                 f"{checks.get('process', '?')} | {checks.get('model', '?')} | "
                 f"{checks.get('gpu', '?')} | {checks.get('log', '?')} | "
                 f"{checks.get('cron', '?')} | {checks.get('feedback', '?')} | "
-                f"{checks.get('warnings', '?')} |"
+                f"{checks.get('warnings', '?')} | "
+                f"{checks.get('window', '?')} | {checks.get('volume', '?')} |"
             )
         lines.append("")
 
