@@ -514,10 +514,10 @@ install_ollama() {
     [[ -z "$model_name" ]] && return 0  # No model needed
 
     log "Setting up Ollama with model: $model_name"
-    if [ -f "$SCRIPT_DIR/src/install_scripts/install_ollama.sh" ]; then
-        chmod +x "$SCRIPT_DIR/src/install_scripts/install_ollama.sh"
+    if [ -f "$SCRIPT_DIR/decoys/install_scripts/install_ollama.sh" ]; then
+        chmod +x "$SCRIPT_DIR/decoys/install_scripts/install_ollama.sh"
         export OLLAMA_MODELS="$model_name"
-        "$SCRIPT_DIR/src/install_scripts/install_ollama.sh"
+        "$SCRIPT_DIR/decoys/install_scripts/install_ollama.sh"
         log "Ollama setup complete"
     else
         log_error "install_ollama.sh not found"
@@ -755,13 +755,13 @@ copy_source_code() {
     local dest_dir="$1"
     log "Copying source code to $dest_dir..."
 
-    mkdir -p "$dest_dir/src"
-    cp -r "$SCRIPT_DIR/src/brains" "$dest_dir/src/"
-    cp -r "$SCRIPT_DIR/src/runners" "$dest_dir/src/"
-    cp -r "$SCRIPT_DIR/src/augmentations" "$dest_dir/src/"
-    cp -r "$SCRIPT_DIR/src/common" "$dest_dir/src/"
-    cp -r "$SCRIPT_DIR/src/sup" "$dest_dir/src/"
-    touch "$dest_dir/src/__init__.py"
+    mkdir -p "$dest_dir/decoys"
+    cp -r "$SCRIPT_DIR/decoys/brains" "$dest_dir/decoys/"
+    cp -r "$SCRIPT_DIR/decoys/runners" "$dest_dir/decoys/"
+    cp -r "$SCRIPT_DIR/decoys/augmentations" "$dest_dir/decoys/"
+    cp -r "$SCRIPT_DIR/decoys/common" "$dest_dir/decoys/"
+    cp -r "$SCRIPT_DIR/decoys/sup" "$dest_dir/decoys/"
+    touch "$dest_dir/decoys/__init__.py"
 }
 
 create_run_script() {
@@ -823,7 +823,7 @@ export PATH="\$HOME/.local/bin:/usr/local/cuda/bin:\$PATH"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:\${LD_LIBRARY_PATH:-}"
 export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
-export PYTHONPATH="$deploy_dir/src:\${PYTHONPATH:-}"
+export PYTHONPATH="$deploy_dir/decoys:\${PYTHONPATH:-}"
 export LOG_DIR="$deploy_dir/logs"
 export SUP_CONFIG_KEY="$CONFIG_KEY"
 export CALIBRATION_PROFILE="${CALIBRATION}"
@@ -831,7 +831,7 @@ export CALIBRATION_PROFILE="${CALIBRATION}"
 # Task (for LLM agents)
 TASK="\${1:-Research the latest technology news}"
 
-cd src
+cd decoys
 ${xvfb_prefix}${runner_cmd}
 
 deactivate
@@ -881,12 +881,12 @@ run_directly() {
     fi
 
     # Set environment
-    export PYTHONPATH="$SCRIPT_DIR/src:${PYTHONPATH:-}"
+    export PYTHONPATH="$SCRIPT_DIR/decoys:${PYTHONPATH:-}"
     export OLLAMA_MODEL="${MODEL_NAMES[$MODEL]:-llama3.1:8b}"
     export LITELLM_MODEL="ollama/$OLLAMA_MODEL"
     export CALIBRATION_PROFILE="${CALIBRATION}"
 
-    cd "$SCRIPT_DIR/src"
+    cd "$SCRIPT_DIR/decoys"
 
     # Build model arg (skip if none)
     local model_arg=""

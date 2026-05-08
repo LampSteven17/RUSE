@@ -99,9 +99,9 @@
           [Service]
           Type=simple
           ExecStart=/usr/bin/python3 -m common.network.neighborhood_traffic --config {{ neighborhood_config_dir }}/sups.json --log {{ neighborhood_log }}
-          WorkingDirectory={{ ruse_path }}/src
+          WorkingDirectory={{ ruse_path }}/decoys
           Environment=PYTHONUNBUFFERED=1
-          Environment=PYTHONPATH={{ ruse_path }}/src
+          Environment=PYTHONPATH={{ ruse_path }}/decoys
           Restart=always
           RestartSec=15
           StandardOutput=append:/var/log/ruse-neighborhood.systemd.log
