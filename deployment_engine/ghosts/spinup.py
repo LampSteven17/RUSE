@@ -16,6 +16,7 @@ from ..core.ansible_runner import AnsibleRunner, default_event_handler
 from ..core.config import DeploymentConfig
 from ..core.openstack import OpenStack
 from ..core.ssh_config import install_ssh_config
+from ..core.vm_naming import make_ghosts_vm_prefix
 
 
 def run_ghosts_spinup(
@@ -49,8 +50,7 @@ def run_ghosts_spinup(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     dep_id = _make_dep_id(deployment, run_id)
-    g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-    g_prefix = f"g-{g_hash}-"
+    g_prefix = make_ghosts_vm_prefix(dep_id)
 
     # Header
     output.banner(f"DEPLOY: GHOSTS ({deployment})")

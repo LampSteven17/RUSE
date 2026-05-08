@@ -80,6 +80,13 @@ def make_ent_vm_prefix(dep_id: str) -> str:
     return f"{ENT_VM_PREFIX}{ent_hash}-"
 
 
+def make_ghosts_vm_prefix(dep_id: str) -> str:
+    """Build GHOSTS VM prefix: 'g-{hash}-' (5-char MD5 to match RAMPART convention)."""
+    import hashlib
+    g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
+    return f"{GHOSTS_VM_PREFIX}{g_hash}-"
+
+
 # ── VM name parsing ──────────────────────────────────────────────────
 
 _VM_NAME_RE = re.compile(

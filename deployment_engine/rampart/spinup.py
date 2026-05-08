@@ -15,6 +15,7 @@ from ..core import output
 from ..core.ansible_runner import AnsibleRunner, default_event_handler
 from ..core.config import DeploymentConfig
 from ..core.ssh_config import install_ssh_config
+from ..core.vm_naming import make_ent_vm_prefix
 
 
 def run_rampart_spinup(
@@ -49,8 +50,8 @@ def run_rampart_spinup(
 
     # Build hash-based VM prefix (5-char MD5 for NetBIOS limit)
     dep_id = _make_dep_id(deployment, run_id)
-    ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-    ent_prefix = f"r-{ent_hash}-"
+    ent_prefix = make_ent_vm_prefix(dep_id)
+    ent_hash = ent_prefix[2:-1]  # strip 'r-' / '-' for downstream consumers that need just the hash
 
     # Header
     output.banner(f"DEPLOY: RAMPART ({deployment})")

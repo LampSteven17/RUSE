@@ -8,7 +8,6 @@ epilogue (ssh / volumes / phase / rmtree / feedback-dir).
 
 from __future__ import annotations
 
-import hashlib
 import os
 import signal
 from pathlib import Path
@@ -17,6 +16,7 @@ from ..core import output
 from ..core.config import DeploymentConfig
 from ..core.openstack import OpenStack
 from ..core.teardown_steps import finalize_teardown, make_dep_id
+from ..core.vm_naming import make_ent_vm_prefix
 
 
 def run_rampart_teardown(
@@ -29,8 +29,7 @@ def run_rampart_teardown(
     output.banner(f"TEARDOWN: {config_name}/{run_id} (rampart)")
 
     dep_id = make_dep_id(config_name, run_id)
-    ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-    ent_vm_prefix = f"r-{ent_hash}-"
+    ent_vm_prefix = make_ent_vm_prefix(dep_id)
     os_client = OpenStack()
 
     # Step 1: Kill emulation
@@ -68,7 +67,10 @@ def run_rampart_teardown(
             zone_deleted = True
     else:
         # Fallback for deployments created before zone isolation: match
-        # zones containing this deployment's hash
+        # zones containing this deployment's hash. Extract the hash from
+        # the prefix (`r-{hash}-`) since make_ent_vm_prefix is the source
+        # of truth.
+        ent_hash = ent_vm_prefix[2:-1]  # strip 'r-' and trailing '-'
         for z in os_client.zone_list():
             zname = z.get("name", "")
             if ent_hash in zname:

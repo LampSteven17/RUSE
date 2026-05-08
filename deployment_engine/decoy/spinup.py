@@ -14,6 +14,7 @@ from ..core.config import DeploymentConfig
 from ..core.openstack import OpenStack
 from ..core.ssh_config import install_ssh_config
 from ..core.feedback import generate_feedback_config
+from ..core.vm_naming import make_vm_prefix
 
 
 def run_decoy_spinup(
@@ -48,7 +49,7 @@ def run_decoy_spinup(
     run_id = time.strftime("%m%d%y%H%M%S")
     run_dir = config_dir / "runs" / run_id
     dep_id = _make_run_dep_id(config_name, run_id)
-    vm_prefix = f"d-{dep_id}-"
+    vm_prefix = make_vm_prefix(dep_id)
     vm_count = config.vm_count()
 
     # Deploy-time fail-loud (S0): every non-control SUP must have a
@@ -627,9 +628,8 @@ def _provision_and_install_neighborhood(
     import shlex
     import json
 
-    # DECOY prefix `d-` (was `r-` legacy when DECOY shared RAMPART's prefix).
-    # The sidecar is part of the DECOY deploy so it lives under d-.
-    vm_name = f"d-{dep_id}-neighborhood-0"
+    # Sidecar is part of the DECOY deploy → lives under d-.
+    vm_name = f"{make_vm_prefix(dep_id)}neighborhood-0"
     rc_file = os.path.expanduser("~/vxn3kr-bot-rc")
     # v1.small = 1 vCPU, 2 GB RAM — a probe daemon needs almost nothing.
     # Avoids pressure on the v1.14vcpu.28g pool used by the SUPs.

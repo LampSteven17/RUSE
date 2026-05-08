@@ -15,6 +15,7 @@ from ..core.ansible_runner import AnsibleRunner, default_event_handler
 from ..core.teardown_steps import (
     finalize_teardown, find_hosts_ini, make_dep_id,
 )
+from ..core.vm_naming import make_vm_prefix
 
 
 def run_decoy_teardown(
@@ -34,7 +35,7 @@ def run_decoy_teardown(
         return 1
 
     dep_id = make_dep_id(config_name, run_id)
-    vm_prefix = f"d-{dep_id}-"
+    vm_prefix = make_vm_prefix(dep_id)
 
     runner = AnsibleRunner(deploy_dir / "logs")
 
