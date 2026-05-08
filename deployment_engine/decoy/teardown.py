@@ -40,7 +40,7 @@ def run_decoy_teardown(
     runner = AnsibleRunner(deploy_dir / "logs")
 
     result = runner.run_playbook(
-        "teardown.yaml",
+        "decoy/teardown.yaml",
         hosts_ini,
         extra_vars={
             "deployment_dir": str(config_dir),

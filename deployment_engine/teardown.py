@@ -176,7 +176,7 @@ def run_teardown_all(deploy_dir: Path) -> int:
     output.section("[Teardown]")
 
     result = runner.run_playbook(
-        "teardown-all.yaml",
+        "shared/teardown-all.yaml",
         hosts_ini,
         extra_vars={"deployment_dir": str(deploy_dir)},
         on_event=default_event_handler,

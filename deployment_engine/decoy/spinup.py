@@ -15,6 +15,9 @@ from ..core.openstack import OpenStack
 from ..core.ssh_config import install_ssh_config
 from ..core.feedback import generate_feedback_config
 from ..core.vm_naming import make_vm_prefix
+from ..core.deploy_steps import (
+    ssh_connectivity_test, register_phase, neighborhood_extra_ips,
+)
 
 
 def run_decoy_spinup(
@@ -92,7 +95,7 @@ def run_decoy_spinup(
     output.info(f"--- Provisioning {vm_count} VMs ---")
 
     provision_result = runner.run_playbook(
-        "provision-vms.yaml",
+        "shared/provision-vms.yaml",
         hosts_ini,
         extra_vars={
             "deployment_dir": str(config_dir),
@@ -127,7 +130,7 @@ def run_decoy_spinup(
     # Test SSH connectivity (done in Python for real-time output)
     output.info("")
     output.info("--- Testing SSH connectivity ---")
-    ssh_ok = _test_ssh_all(provisioned_hosts)
+    ssh_ok = ssh_connectivity_test(provisioned_hosts)
     # S1: Fail-loud if too many VMs unreachable. Previously this was a warning
     # and install proceeded against unreachable hosts, eventually "succeeding"
     # while the SUP services on unreachable VMs never got configured.
@@ -145,7 +148,7 @@ def run_decoy_spinup(
     output.info("")
     output.info(f"--- Installing on {provisioned} VMs ---")
 
-    install_playbook = "install-sups.yaml"
+    install_playbook = "decoy/install-sups.yaml"
     extra_vars = {
         "deployment_dir": str(config_dir),
         "deployment_id": dep_id,
@@ -199,7 +202,7 @@ def run_decoy_spinup(
             dist_vars["behavior_configs"] = configs_spec
 
         dist_result = runner.run_playbook(
-            "distribute-behavior-configs.yaml",
+            "decoy/distribute-behavior-configs.yaml",
             inventory_path,
             extra_vars=dist_vars,
             on_event=default_event_handler,
@@ -250,7 +253,10 @@ def run_decoy_spinup(
     # invisible to PHASE inference — logs collected but never analyzed. DONE
     # must mean "every VM functional AND registered" per the fail-loud
     # contract.
-    phase_ok = _register_phase(snippet_path, config_name, run_id, deploy_dir)
+    phase_ok = register_phase(
+        snippet_path, config_name, run_id,
+        extra_ips=neighborhood_extra_ips(run_dir),
+    )
     if not phase_ok:
         output.error("")
         output.error("ABORTING: PHASE experiments.json registration failed.")
@@ -407,137 +413,6 @@ def _parse_inventory(inventory_path: Path) -> list[dict]:
                 "behavior": match.group(3),
             })
     return hosts
-
-
-def _test_ssh_all(hosts: list[dict], max_retries: int = 30, timeout: int = 10, delay: int = 5) -> int:
-    """Test SSH to all hosts with real-time per-VM output. Returns count of reachable hosts."""
-    import subprocess
-    import concurrent.futures
-    import time as _time
-
-    ok_count = 0
-
-    def _test_one(host: dict) -> bool:
-        name = host["name"]
-        ip = host["ip"]
-        for attempt in range(1, max_retries + 1):
-            ts = _time.strftime("%H:%M:%S")
-            try:
-                result = subprocess.run(
-                    ["ssh",
-                     "-i", str(Path.home() / ".ssh" / "id_ed25519"),
-                     "-o", "IdentitiesOnly=yes",
-                     "-o", "StrictHostKeyChecking=no",
-                     "-o", "UserKnownHostsFile=/dev/null",
-                     "-o", f"ConnectTimeout={timeout}",
-                     "-o", "ConnectionAttempts=1",
-                     "-o", "BatchMode=yes",
-                     "-o", "LogLevel=ERROR",
-                     f"ubuntu@{ip}", "echo ok"],
-                    capture_output=True, timeout=timeout + 5,
-                    env={**os.environ, "SSH_AUTH_SOCK": ""},
-                )
-                if result.returncode == 0:
-                    output.info(f"  [{ts}]    OK  {name} ({ip})")
-                    return True
-            except subprocess.TimeoutExpired:
-                pass
-
-            output.info(f"  [{ts}]    ..  {name} ({ip})  attempt {attempt}/{max_retries}")
-            _time.sleep(delay)
-
-        ts = _time.strftime("%H:%M:%S")
-        output.info(f"  [{ts}]    FAIL  {name} ({ip})  unreachable after {max_retries} attempts")
-        return False
-
-    # Run SSH tests with limited concurrency (like Ansible throttle: 20)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
-        futures = {pool.submit(_test_one, h): h for h in hosts}
-        for future in concurrent.futures.as_completed(futures):
-            if future.result():
-                ok_count += 1
-
-    return ok_count
-
-
-def _register_phase(snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path) -> bool:
-    """Register in PHASE experiments.json. Returns True on success, False on failure.
-
-    Returns True when the script is absent or the snippet is missing (no
-    registration was attempted or possible — not a failure). Returns False
-    only when registration was attempted and actually failed.
-
-    If a neighborhood sidecar was provisioned, its IP is appended to the
-    registration via --extra-ip so it shows up in experiments.json alongside
-    the SUPs. Without this, anon-pipelines that key off experiments.json
-    never see the neighborhood traffic (what bit us 2026-04-20).
-    """
-    if not snippet_path.exists():
-        output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
-        return True  # no snippet = earlier stage already aborted, don't double-fail
-
-    lib_dir = deploy_dir / "lib"
-    register_script = lib_dir / "register_experiment.py"
-    if not register_script.exists():
-        output.error(f"  WARNING: {register_script} not found — skipping PHASE registration")
-        return True  # missing script = dev environment, not a deploy failure
-
-    # Prefer subprocess — it's the canonical path and surfaces rc directly.
-    # The previous import-based path silently swallowed ImportErrors and fell
-    # through to subprocess, hiding which path actually ran.
-    return _register_phase_subprocess(snippet_path, config_name, run_id, deploy_dir)
-
-
-def _neighborhood_extra_ips(run_dir: Path) -> list[str]:
-    """Scan run_dir/neighborhood-inventory.ini for neighborhood VMs.
-
-    Returns a list of 'IP=HOSTNAME' strings for --extra-ip. Empty list if
-    no neighborhood inventory exists (controls + non-topology-gated feedback).
-    """
-    inv = run_dir / "neighborhood-inventory.ini"
-    if not inv.exists():
-        return []
-    pairs = []
-    for line in inv.read_text().splitlines():
-        m = re.match(r"^(\S+)\s+ansible_host=(\S+)", line)
-        if m:
-            host, ip = m.group(1), m.group(2)
-            pairs.append(f"{ip}={host}")
-    return pairs
-
-
-def _register_phase_subprocess(
-    snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path,
-) -> bool:
-    """Register via subprocess. Returns True on rc=0, False otherwise."""
-    import subprocess
-
-    lib_dir = deploy_dir / "lib"
-    run_dir = snippet_path.parent
-    inventory_path = run_dir / "inventory.ini"
-
-    cmd = [
-        "python3", str(lib_dir / "register_experiment.py"),
-        "--name", config_name,
-        "--snippet", str(snippet_path),
-        "--inventory", str(inventory_path),
-        "--run-id", run_id,
-    ]
-    for pair in _neighborhood_extra_ips(run_dir):
-        cmd.extend(["--extra-ip", pair])
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            output.dim("  Registered in PHASE experiments.json")
-            return True
-        err = (result.stderr or result.stdout or "").strip()[:400]
-        output.error(f"  ERROR: PHASE registration FAILED (rc={result.returncode}): {err}")
-        return False
-    except Exception as e:
-        output.error(f"  ERROR: PHASE registration crashed ({type(e).__name__}): {e}")
-        return False
-
 
 # ─── Neighborhood sidecar (topology-mimicry) ───────────────────────────────
 
@@ -752,7 +627,7 @@ def _provision_and_install_neighborhood(
     output.info("")
     output.info("--- Installing neighborhood daemon ---")
     result = runner.run_playbook(
-        "install-neighborhood.yaml",
+        "decoy/install-neighborhood.yaml",
         inv_path,
         extra_vars={
             "deployment_dir": str(run_dir.parent.parent),
