@@ -57,14 +57,14 @@ _STEP_TASKS = {
     "Copy configs to SUP":        "Copying behavioral configs",
     # teardown.yaml / teardown-all.yaml
     "Get list of SUP servers":    "Listing servers to delete",
-    "Get list of ALL RUSE servers": "Listing all RUSE/Enterprise servers",
+    "Get list of ALL servers": "Listing all DECOY/Enterprise/GHOSTS servers",
     "Get attached volume IDs":    "Finding attached volumes",
     "Get volume IDs attached to SUP servers": "Finding attached volumes",
     "Delete SUP servers":         "Deleting servers",
-    "Delete ALL RUSE servers":    "Deleting servers",
+    "Delete ALL servers":         "Deleting servers",
     "Wait for servers to be deleted": "Waiting for server deletion",
     "Delete orphaned SUP volumes": "Deleting volumes",
-    "Delete ALL RUSE volumes":    "Deleting volumes",
+    "Delete ALL volumes":         "Deleting volumes",
     "Wait for volumes to be deleted": "Waiting for volume deletion",
     "Delete orphaned boot volumes": "Deleting orphaned 200GB volumes",
     "Find orphaned boot volumes (nameless, 200GB, available)": "Scanning for orphaned volumes",
@@ -98,7 +98,7 @@ _STEP_TASKS = {
 }
 
 # VM name prefixes for host extraction
-_VM_PREFIXES = ("r-", "e-", "g-", "sup-")
+_VM_PREFIXES = ("d-", "r-", "g-")
 
 
 class AnsibleRunner:

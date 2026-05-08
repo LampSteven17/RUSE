@@ -3,7 +3,7 @@
 Centralized VM naming for the RUSE deployment system.
 
 Single source of truth for:
-  - VM name prefixes (r- for RUSE SUPs, e- for Enterprise)
+  - VM name prefixes (d- for DECOY SUPs, r- for RAMPART, g- for GHOSTS)
   - Deployment ID computation
   - VM name construction and parsing
   - VM sort ordering
@@ -12,12 +12,12 @@ All other components (deploy script, ansible playbooks, callback plugin,
 monitor.sh) should reference this module instead of reimplementing naming.
 
 CLI usage (for bash/ansible integration):
-  python3 lib/vm_naming.py dep_id "sup-controls"
-  python3 lib/vm_naming.py run_dep_id "sup-controls" "031726152824"
+  python3 lib/vm_naming.py dep_id "decoy-controls"
+  python3 lib/vm_naming.py run_dep_id "decoy-controls" "031726152824"
   python3 lib/vm_naming.py vm_name "controls031726" "M1" "0"
   python3 lib/vm_naming.py vm_prefix "controls031726"
   python3 lib/vm_naming.py expand "config.yaml" "controls031726"
-  python3 lib/vm_naming.py sort_key "r-controls031726-M1-0"
+  python3 lib/vm_naming.py sort_key "d-controls031726-M1-0"
 """
 
 import re
@@ -26,10 +26,10 @@ import sys
 
 # ── Prefixes ─────────────────────────────────────────────────────────
 
-SUP_VM_PREFIX = "r-"       # RUSE SUP agents
-ENT_VM_PREFIX = "e-"       # Enterprise workflows
+SUP_VM_PREFIX = "d-"       # DECOY SUP agents
+ENT_VM_PREFIX = "r-"       # RAMPART enterprise workflows
 GHOSTS_VM_PREFIX = "g-"    # GHOSTS NPC traffic generators
-ALL_PREFIXES = ("r-", "e-", "g-", "sup-")  # includes legacy for teardown-all
+ALL_PREFIXES = ("d-", "r-", "g-")
 
 
 # ── Deployment ID ────────────────────────────────────────────────────
@@ -37,11 +37,11 @@ ALL_PREFIXES = ("r-", "e-", "g-", "sup-")  # includes legacy for teardown-all
 def make_dep_id(deployment_name: str) -> str:
     """Convert deployment directory name to deployment ID component.
 
-    Strips 'ruse-' or 'sup-' prefix (directory convention) and removes hyphens.
-    Examples: 'ruse-controls' → 'controls', 'sup-controls' → 'controls', 'exp-3' → 'exp3'
+    Strips deploy-type prefix and removes hyphens.
+    Examples: 'decoy-controls' → 'controls', 'rampart-med' → 'med', 'exp-3' → 'exp3'
     """
     name = deployment_name
-    for prefix in ("ruse-", "sup-", "rampart-", "enterprise-"):
+    for prefix in ("decoy-", "rampart-", "ghosts-", "enterprise-"):
         name = name.removeprefix(prefix)
     return name.replace("-", "")
 
@@ -49,7 +49,7 @@ def make_dep_id(deployment_name: str) -> str:
 def make_run_dep_id(deployment_name: str, run_id: str) -> str:
     """Return deployment ID for a specific run: {dep_id}{run_id}.
 
-    Examples: ('sup-controls', '031726') → 'controls031726'
+    Examples: ('decoy-controls', '031726') → 'controls031726'
     """
     dep_id = make_dep_id(deployment_name)
     if run_id == "orphan":
@@ -60,21 +60,21 @@ def make_run_dep_id(deployment_name: str, run_id: str) -> str:
 # ── VM name construction ─────────────────────────────────────────────
 
 def make_vm_prefix(dep_id: str) -> str:
-    """Build the VM prefix for a deployment: 'r-{dep_id}-'."""
+    """Build the VM prefix for a deployment: 'd-{dep_id}-'."""
     return f"{SUP_VM_PREFIX}{dep_id}-"
 
 
 def make_vm_name(dep_id: str, behavior: str, index: int) -> str:
-    """Build a full VM name: r-{dep_id}-{behavior_sanitized}-{index}.
+    """Build a full VM name: d-{dep_id}-{behavior_sanitized}-{index}.
 
     The behavior's '.' is replaced with '-' for OpenStack compatibility.
-    Example: make_vm_name('controls031726', 'B2.llama', 0) → 'r-controls031726-B2-llama-0'
+    Example: make_vm_name('controls031726', 'B2.llama', 0) → 'd-controls031726-B2-llama-0'
     """
     return f"{SUP_VM_PREFIX}{dep_id}-{behavior.replace('.', '-')}-{index}"
 
 
 def make_ent_vm_prefix(dep_id: str) -> str:
-    """Build enterprise VM prefix: 'e-{hash}-' (5-char MD5 for NetBIOS limit)."""
+    """Build RAMPART enterprise VM prefix: 'r-{hash}-' (5-char MD5 for NetBIOS limit)."""
     import hashlib
     ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
     return f"{ENT_VM_PREFIX}{ent_hash}-"
@@ -83,7 +83,7 @@ def make_ent_vm_prefix(dep_id: str) -> str:
 # ── VM name parsing ──────────────────────────────────────────────────
 
 _VM_NAME_RE = re.compile(
-    r'^(?P<prefix>r-|e-|g-|sup-)'
+    r'^(?P<prefix>d-|r-|g-)'
     r'(?P<rest>.+)-'
     r'(?P<index>\d+)$'
 )
@@ -201,7 +201,7 @@ def expand_deployments(deployments: list, dep_id: str) -> list:
     """Expand deployment config entries into a flat VM list.
 
     Input:  [{'behavior': 'M1', 'flavor': 'v1.14vcpu.28g', 'count': 2}, ...]
-    Output: [{'name': 'r-dep-M1-0', 'behavior': 'M1', 'flavor': '...', 'index': 0}, ...]
+    Output: [{'name': 'd-dep-M1-0', 'behavior': 'M1', 'flavor': '...', 'index': 0}, ...]
     """
     vms = []
     counts = {}
@@ -245,7 +245,7 @@ def main():
     elif cmd == "sup_prefix":
         print(SUP_VM_PREFIX)
     elif cmd == "all_prefixes_regex":
-        # For teardown-all grep: (r-|e-|sup-)
+        # For teardown-all grep: (d-|r-|g-)
         print("(" + "|".join(ALL_PREFIXES) + ")")
     elif cmd == "expand":
         import yaml

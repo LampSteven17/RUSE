@@ -154,7 +154,7 @@ def _is_run_active(
     dep_id = _make_dep_id(name, rid)
     if config.is_rampart():
         ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.has_vms_with_prefix(f"e-{ent_hash}-")
+        return os_client.has_vms_with_prefix(f"r-{ent_hash}-")
     elif config.is_ghosts():
         g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
         return os_client.has_vms_with_prefix(f"g-{g_hash}-")
@@ -246,7 +246,7 @@ def _rampart_teardown(
 
     dep_id = _make_dep_id(config_name, run_id)
     ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-    ent_vm_prefix = f"e-{ent_hash}-"
+    ent_vm_prefix = f"r-{ent_hash}-"
     os_client = OpenStack()
 
     # Step 1: Kill emulation
