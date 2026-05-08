@@ -187,26 +187,35 @@ def run_teardown_all(deploy_dir: Path) -> int:
     if removed:
         output.info(f"  Removed {len(removed)} SSH config blocks")
 
-    # Clean up inventory files + close PHASE experiments.json entries for
-    # every deployment that had an active run.
+    # Clean up local state + close PHASE experiments.json entries for
+    # every deployment with run state. The playbook above already nuked
+    # all VMs/volumes/inventory; this loop just removes the surviving
+    # deployment-side state directories so `./list` shows nothing.
+    #
+    # Previously this gated on `(run_dir/inventory.ini).exists()`, which
+    # is DECOY-specific — RAMPART writes deploy-output.json, GHOSTS
+    # writes deployment_type + timelines/. Stale GHOSTS run dirs got
+    # left behind. After --all, every run_dir in every config_dir gets
+    # rmtree'd unconditionally.
     from .core.teardown_steps import close_phase_experiment
+    feedback_markers = ("decoy-feedback-", "rampart-feedback-", "ghosts-feedback-")
     for config_dir in deploy_dir.iterdir():
         if not config_dir.is_dir():
             continue
         runs_dir = config_dir / "runs"
         if not runs_dir.is_dir():
             continue
-        had_active_runs = False
+        had_runs = False
         for run_dir in runs_dir.iterdir():
             if not run_dir.is_dir():
                 continue
-            if (run_dir / "inventory.ini").exists():
-                had_active_runs = True
-                safe_rmtree(run_dir)
-        if had_active_runs:
+            had_runs = True
+            safe_rmtree(run_dir)
+        if had_runs:
             close_phase_experiment(config_dir.name)
-            # Drop empty feedback dirs
-            if any(p in config_dir.name for p in ("decoy-feedback-", "rampart-feedback-", "ghosts-feedback-")):
+            # Drop empty feedback config dirs (controls dirs persist as the
+            # baseline config). Feedback dirs are deploy-time artifacts.
+            if any(m in config_dir.name for m in feedback_markers):
                 remaining = [d for d in runs_dir.iterdir() if d.is_dir()] if runs_dir.is_dir() else []
                 if not remaining:
                     safe_rmtree(config_dir)
