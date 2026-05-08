@@ -189,7 +189,7 @@ def run_teardown_all(deploy_dir: Path) -> int:
 
     # Clean up inventory files + close PHASE experiments.json entries for
     # every deployment that had an active run.
-    from .shared.teardown_helpers import close_phase_experiment
+    from .core.teardown_steps import close_phase_experiment
     for config_dir in deploy_dir.iterdir():
         if not config_dir.is_dir():
             continue
