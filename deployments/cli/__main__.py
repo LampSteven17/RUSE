@@ -260,7 +260,7 @@ def _build_deploy_plan(
     Returns None on hard failure (e.g. feedback requested but source can't
     be resolved). Returns empty list if nothing to do.
     """
-    from .commands.feedback import (
+    from .commands.shared.feedback import (
         find_all_feedback_sources, find_feedback_by_target, load_manifest,
     )
     from .config import DeploymentConfig
@@ -340,7 +340,7 @@ def _show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
     doesn't match deploy_type. Skips the prompt when the plan is a single
     controls task — no ambiguity there.
     """
-    from .commands.feedback import manifest_summary_lines, validate_manifest_target
+    from .commands.shared.feedback import manifest_summary_lines, validate_manifest_target
 
     n = len(plan)
     output.banner(f"DEPLOY PLAN ({deploy_type}, {n} task{'s' if n != 1 else ''})")
@@ -393,13 +393,13 @@ def _execute_plan(
 ) -> int:
     """Run each task in the plan sequentially. Returns 0 iff all succeed."""
     if deploy_type == "rampart":
-        from .commands.rampart import run_rampart_spinup as spinup
+        from .commands.rampart.spinup import run_rampart_spinup as spinup
         default_config = "rampart-controls"
     elif deploy_type == "ghosts":
-        from .commands.ghosts import run_ghosts_spinup as spinup
+        from .commands.ghosts.spinup import run_ghosts_spinup as spinup
         default_config = "ghosts-controls"
     else:
-        from .commands.spinup import run_decoy_spinup as spinup
+        from .commands.decoy.spinup import run_decoy_spinup as spinup
         default_config = "decoy-controls"
 
     base_config = config_name or default_config
@@ -487,15 +487,16 @@ def _cmd_audit(argv: list[str]) -> int:
     if flags > 1:
         output.error("Pass at most one of --decoy / --rampart / --ghosts")
         return 1
+
     if args.rampart:
-        output.error("RAMPART audit not yet implemented")
-        return 1
+        from .commands.rampart.audit import run_rampart_audit
+        return run_rampart_audit(DEPLOY_DIR)
     if args.ghosts:
-        output.error("GHOSTS audit not yet implemented")
-        return 1
+        from .commands.ghosts.audit import run_ghosts_audit
+        return run_ghosts_audit(DEPLOY_DIR)
 
     # Default: --decoy
-    from .commands.audit_decoy import run_audit
+    from .commands.decoy.audit import run_audit
     return run_audit(DEPLOY_DIR)
 
 
