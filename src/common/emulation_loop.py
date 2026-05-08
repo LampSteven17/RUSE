@@ -16,8 +16,10 @@ import signal
 import sys
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from time import sleep
+from time import sleep, monotonic
 from typing import Optional
+
+from common.behavioral_config import MODE_FEEDBACK, MODE_CONTROLS
 
 
 class BaseEmulationLoop(ABC):
@@ -50,6 +52,15 @@ class BaseEmulationLoop(ABC):
         self._recent_workflows = []
         self._cluster_distinct = set()
         self._cluster_remaining = 0
+        # Window-mode contract state (PHASE 2026-05-08).
+        # Mirrors BehavioralConfig fields so the emulation loop can gate
+        # cluster execution without re-walking behavior.json each tick.
+        self._mode = None  # MODE_FEEDBACK / MODE_CONTROLS — set on first reload
+        self._volume_target = None  # target_conn_per_minute_during_active
+        # Soft fence deadline: if set, the cluster's inner loop must not
+        # spawn a new workflow once monotonic() exceeds this. Reset every
+        # cluster boundary; None outside windows.
+        self._cluster_deadline_ts = None
 
         self.workflows = []
         self._running = False
@@ -130,106 +141,74 @@ class BaseEmulationLoop(ABC):
         # baseline path: every SUP must have a config.
         fc = load_behavioral_config(Path(self._behavior_config_dir), self._config_key)
 
-        # Summary log: which configs were loaded (single line for PHASE tracking)
+        # Stash mode for the gate + cluster loop.
+        self._mode = fc.mode
+        self._volume_target = fc.target_conn_per_minute_during_active
+        n_windows = len(fc.active_minute_windows or [])
+        on_minutes = sum(e - s for s, e in (fc.active_minute_windows or []))
+
+        # Summary log
         if self.logger:
-            loaded = {k: (v is not None) for k, v in [
-                ("workflow_weights", fc.workflow_weights),
-                ("behavior_modifiers", fc.behavior_modifiers),
-                ("site_config", fc.site_config),
-                ("prompt_augmentation", fc.prompt_augmentation),
-                ("timing_profile", fc.timing_profile),
-                ("variance_injection", fc.variance_injection),
-                ("diversity_injection", fc.diversity_injection),
-                ("activity_pattern", fc.activity_pattern),
-            ]}
-            active = [k for k, v in loaded.items() if v]
-            self.logger.info(f"[behavior] Config reload: {len(active)} configs active",
-                             details={"config_key": self._config_key, "configs": loaded})
-
-        # Workflow weights (shared across all brains)
-        self._workflow_weights = build_workflow_weights(self.workflows, fc)
-        if self._workflow_weights and self.logger:
-            self.logger.info(f"[behavior] Loaded workflow_weights for {self._config_key}",
-                             details={"weights": fc.workflow_weights})
-
-        # Brain-specific config (page_dwell, task_weights, max_steps, etc.)
-        self._apply_brain_specific_config(fc)
-
-        # Baseline-mode short-circuit: PHASE's baseline / dumb_baseline
-        # generator ships a different timing schema (flat p50..p99
-        # burst_percentiles, integer long_idle_duration_minutes, no nested
-        # hourly_std_target). Feeding it to build_calibrated_timing_config
-        # raises KeyError on burst_duration_minutes. Skip the whole
-        # calibrated-timing branch when we detect baseline mode (either via
-        # _metadata.mode marker or by schema shape). Brain runs the default
-        # cluster_size/task_interval/group_interval emulation loop. Workflow
-        # gating + content pools are still honored above.
-        baseline_modes = {"baseline", "dumb_baseline"}
-        is_baseline = fc.mode in baseline_modes
-        if not is_baseline and fc.timing_profile:
-            # Schema sniff: real PHASE feedback nests burst_duration_minutes
-            # as a dict; baseline emits flat keys instead. Catch the latter
-            # even if PHASE renames the mode marker again.
-            burst = fc.timing_profile.get("burst_percentiles") or {}
-            is_baseline = not isinstance(
-                burst.get("burst_duration_minutes"), dict
+            self.logger.info(
+                f"[behavior] Config reload mode={fc.mode}",
+                details={
+                    "config_key": self._config_key,
+                    "mode": fc.mode,
+                    "n_windows": n_windows,
+                    "on_minutes": on_minutes,
+                    "target_conn_per_min": fc.target_conn_per_minute_during_active,
+                    "hard_fence_seconds": fc.hard_fence_seconds,
+                },
             )
 
-        if is_baseline:
-            if self.logger:
-                self.logger.info("[behavior] baseline-mode timing schema — "
-                                 "skipping CalibratedTiming/variance/activity setup",
-                                 details={"config_key": self._config_key,
-                                          "mode": fc.mode})
-            print(f"[behavior] baseline-mode (mode={fc.mode!r}) — default timing")
-            self._phase_timing = None
-            return
+        # Workflow weights + brain-specific config (feedback only — controls
+        # has its own content schema and bypasses the workflow-weights path).
+        if fc.mode == MODE_FEEDBACK:
+            self._workflow_weights = build_workflow_weights(self.workflows, fc)
+            if self._workflow_weights and self.logger:
+                self.logger.info(
+                    f"[behavior] Loaded workflow_weights for {self._config_key}",
+                    details={"weights": fc.workflow_weights})
+        else:
+            self._workflow_weights = None
+        self._apply_brain_specific_config(fc)
 
-        # Timing profile — hot-swap calibrated timing (pass variance + activity configs)
+        # CalibratedTiming setup. Both modes carry burst_percentiles +
+        # variance — controls' is hardcoded floor, feedback's is PHASE-tuned.
+        # Build it for both so the gate has access to current_window/fence.
         if fc.timing_profile:
             from common.timing.phase_timing import CalibratedTiming
             old_last_activity = (self._phase_timing._last_activity_time
                                  if self._phase_timing else None)
-            config = build_calibrated_timing_config(fc.timing_profile)
-            self._phase_timing = CalibratedTiming(
-                config,
-                variance_config=fc.variance_injection,
-                activity_config=fc.activity_pattern,
-                ablation_gated=fc.is_ablation_gated(),
-            )
-            self._phase_timing._last_activity_time = old_last_activity
-            if self.logger:
-                self.logger.info("[behavior] Hot-swapped timing_profile",
-                                 details={"dataset": config.dataset})
+            try:
+                config = build_calibrated_timing_config(fc.timing_profile)
+                self._phase_timing = CalibratedTiming(
+                    config,
+                    variance_config=fc.variance_injection,
+                )
+                self._phase_timing._last_activity_time = old_last_activity
+                if self.logger:
+                    self.logger.info("[behavior] Hot-swapped timing_profile",
+                                     details={"dataset": config.dataset})
+            except (KeyError, TypeError) as e:
+                # Controls schema may not nest burst_percentiles the way
+                # CalibratedTiming expects; fall back to no-calibrated-timing
+                # so the gate still works (it only needs the windows).
+                self._phase_timing = None
+                if self.logger:
+                    self.logger.info(
+                        f"[behavior] timing_profile schema lean "
+                        f"(mode={fc.mode}) — running gate-only",
+                        details={"error": str(e)[:120]})
         elif self.calibration_profile and self._phase_timing is None:
-            # Deferred startup init: behavior_config_dir was set but no timing_profile
-            # in the feedback configs. Fall back to baseline calibration profile.
-            # Pass ablation_gated so the D1/D3/G5 warnings emit as [INFO] when
-            # PHASE deliberately omitted the timing section (sum24 / vt-fall22).
-            # Without this the fallback CalibratedTiming() call re-fires WARNINGs
-            # that audit counts as unexpected.
             from common.timing.phase_timing import CalibratedTiming, load_calibration_profile
             config = load_calibration_profile(self.calibration_profile)
-            self._phase_timing = CalibratedTiming(
-                config,
-                variance_config=fc.variance_injection,
-                activity_config=fc.activity_pattern,
-                ablation_gated=fc.is_ablation_gated(),
-            )
+            self._phase_timing = CalibratedTiming(config)
             print(f"Calibrated timing ({self.calibration_profile}) - activity level: {self._phase_timing.get_activity_level()}")
-        elif self._phase_timing:
-            if fc.variance_injection:
-                self._phase_timing.update_variance_config(fc.variance_injection)
-                if self.logger:
-                    self.logger.info("[behavior] Applied variance_injection",
-                                     details=fc.variance_injection)
-            if fc.activity_pattern:
-                self._phase_timing.update_activity_config(fc.activity_pattern)
-                if self.logger:
-                    self.logger.info("[behavior] Applied activity_pattern",
-                                     details=fc.activity_pattern)
+        elif self._phase_timing and fc.variance_injection:
+            self._phase_timing.update_variance_config(fc.variance_injection)
 
-        # Diversity injection — workflow rotation + background services
+        # Diversity injection — feedback only (controls has no diversity block)
         if fc.diversity_injection:
             self._diversity_config = fc.diversity_injection
             bg_config = fc.diversity_injection.get("background_services", {})
@@ -238,10 +217,15 @@ class BaseEmulationLoop(ABC):
                 self._background_svc = BackgroundServiceGenerator(bg_config, self.logger)
             else:
                 self._background_svc.update_config(bg_config)
-            rotation = fc.diversity_injection.get("workflow_rotation", {})
-            if self.logger:
-                self.logger.info("[behavior] Applied diversity_injection",
-                                 details={"rotation": rotation})
+
+        # Push window contract — both modes consume it identically.
+        if self._phase_timing is not None:
+            self._phase_timing.update_window_contract(
+                windows=fc.active_minute_windows,
+                hard_fence_seconds=fc.hard_fence_seconds,
+                min_window_minutes=fc.min_window_minutes,
+                window_mode=fc.mode,
+            )
 
         # Feature status report — always print so you know what's active
         rotation = (self._diversity_config or {}).get("workflow_rotation", {})
@@ -343,28 +327,90 @@ class BaseEmulationLoop(ABC):
 
     # ── Main emulation loop ──────────────────────────────────────────
 
+    # Cap on a single sleep-until-next-window. Shorter than the longest
+    # gap so the reload tick fires (and PHASE re-rolls / hot-patches land)
+    # at least every CAP_S even during long idle stretches.
+    _WINDOW_GATE_SLEEP_CAP_S = 30 * 60  # 30 minutes
+    # Minimum remaining-in-window required before starting a cluster.
+    # Below this we sleep through the window end rather than spawn a
+    # workflow that can't complete inside the active period (gemma's slow
+    # path takes 60-120s; 90s is the floor that keeps us inside the
+    # window with margin).
+    _START_ONLY_FLOOR_S = 90
+    # Cap how often the IDLE_ALL_DAY loop wakes to re-check config.
+    _IDLE_ALL_DAY_TICK_S = 30 * 60
+
+    def _window_gate_sleep_then_continue(self) -> bool:
+        """Window-mode gate. Both feedback and controls modes consume the
+        gate identically — the only difference is the windows themselves
+        (feedback emits 5–15 narrow windows; controls emits a single
+        60-min slot). Returns True if the loop should `continue` (sleep
+        happened); False if execution should proceed to run a cluster.
+
+        States:
+          outside any window → sleep until next start (capped)  → True
+          inside, remaining < 90s+fence → sleep through end     → True
+          inside, runway OK → set cluster deadline              → False
+          no _phase_timing or no windows → fall through         → False
+        """
+        if self._phase_timing is None or not self._phase_timing.has_windows():
+            self._cluster_deadline_ts = None
+            return False
+
+        if self._phase_timing.current_window() is None:
+            # Outside any window — sleep until the next one starts.
+            wait = self._phase_timing.time_until_next_window_start()
+            wait = min(wait, self._WINDOW_GATE_SLEEP_CAP_S)
+            wait = max(wait, 1.0)
+            if self.logger:
+                self.logger.info(
+                    f"[window] outside windows — sleeping {wait/60:.1f}min "
+                    f"until next start (capped at "
+                    f"{self._WINDOW_GATE_SLEEP_CAP_S//60}min)",
+                    details={"wait_s": wait})
+            sleep(wait)
+            return True
+
+        # Inside a window. Check remaining vs start-only floor.
+        remaining = self._phase_timing.time_until_window_end() or 0.0
+        hard_fence = self._phase_timing._hard_fence_seconds
+        usable = max(0.0, remaining - hard_fence)
+        if usable < self._START_ONLY_FLOOR_S:
+            if self.logger:
+                self.logger.info(
+                    f"[window] only {usable:.0f}s usable in current "
+                    f"window (< {self._START_ONLY_FLOOR_S}s floor) — "
+                    f"sleeping through end",
+                    details={"remaining_s": remaining,
+                             "hard_fence_s": hard_fence})
+            sleep(remaining + 1.0)
+            return True
+
+        self._cluster_deadline_ts = monotonic() + usable
+        return False
+
     def _emulation_loop(self):
         """Main emulation loop — runs workflows in clusters."""
         while self._running:
             self._reload_behavioral_config()
 
-            # Activity pattern: skip low-activity hours
-            if self._phase_timing and self._phase_timing.should_skip_hour():
-                    now = datetime.now(timezone.utc)
-                    seconds_until_next_hour = (60 - now.minute) * 60 - now.second
-                    skip_time = seconds_until_next_hour + random.uniform(0, 300)
-                    if self.logger:
-                        self.logger.info(f"[activity] Skipping low-activity hour {now.hour} UTC, sleeping {skip_time/60:.0f}min")
-                    sleep(skip_time)
-                    continue
+            # Window-mode gate (PHASE 2026-05-08). Identical behavior for
+            # both feedback and controls modes — the windows themselves
+            # carry the difference. Sleep until next window if outside;
+            # otherwise set a cluster deadline and fall through.
+            if self._window_gate_sleep_then_continue():
+                continue
 
-            # Activity pattern: long idle injection
-            if self._phase_timing:
-                should_idle, idle_duration = self._phase_timing.should_take_long_idle()
-                if should_idle:
-                    if self.logger:
-                        self.logger.info(f"[activity] Long idle: {idle_duration/60:.0f}min")
-                    sleep(idle_duration)
+            # Push window-state to D4 background services so deficit-burst
+            # tops up bg-conn rate to target_conn_per_minute_during_active
+            # while inside an active window. Outside a window (LEGACY /
+            # BASELINE), in_window=False disables the burst — bg-svc
+            # falls back to its hour-rate behavior.
+            if self._background_svc is not None:
+                self._background_svc.set_window_state(
+                    in_window=self._cluster_deadline_ts is not None,
+                    volume_target=self._volume_target,
+                )
 
             # Log activity level
             if self._phase_timing:
@@ -391,10 +437,33 @@ class BaseEmulationLoop(ABC):
                 )
 
             for _ in range(cluster_size):
+                # Soft fence (option B): if the cluster's deadline has passed,
+                # don't start a new workflow. Lets in-flight workflows finish
+                # naturally — they'll overshoot the window by ≤max_steps × per-
+                # step_delay, typically 30-60s, which is acceptable.
+                if (self._cluster_deadline_ts is not None
+                        and monotonic() >= self._cluster_deadline_ts):
+                    if self.logger:
+                        self.logger.info(
+                            "[window] cluster deadline reached — "
+                            "skipping remaining workflows in cluster",
+                            details={"deadline_ts": self._cluster_deadline_ts})
+                    break
+
                 task_delay = self._get_task_delay()
                 if self.logger:
                     self.logger.timing_delay(task_delay, reason="inter_task")
                 sleep(task_delay)
+
+                # Re-check fence after the inter-task sleep — task_delay
+                # can be tens of seconds.
+                if (self._cluster_deadline_ts is not None
+                        and monotonic() >= self._cluster_deadline_ts):
+                    if self.logger:
+                        self.logger.info(
+                            "[window] cluster deadline reached during "
+                            "inter-task sleep — skipping remainder")
+                    break
 
                 # Background service traffic
                 if self._background_svc:

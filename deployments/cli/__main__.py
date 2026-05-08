@@ -1,7 +1,7 @@
 """RUSE Deploy CLI — Python-based deployment orchestrator.
 
 Entry points (via shell scripts in deployments/):
-  ./deploy   → python3 -m cli deploy [--ruse|--rampart|--ghosts] [--feedback] ...
+  ./deploy   → python3 -m cli deploy [--decoy|--rampart|--ghosts] [--feedback] ...
   ./teardown → python3 -m cli teardown <target> | --all
   ./list     → python3 -m cli list
   ./shrink   → python3 -m cli shrink <target>
@@ -25,7 +25,7 @@ LOGS_DIR = DEPLOY_DIR / "logs"
 def _deploy_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="deploy",
-        description="Deploy RUSE SUP agents, RAMPART enterprise networks, or GHOSTS NPCs",
+        description="Deploy DECOY SUP agents, RAMPART enterprise networks, or GHOSTS NPCs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""default behavior (no scope flags):
   Deploys BOTH controls AND every discovered PHASE feedback dataset for the
@@ -35,25 +35,20 @@ scope flags:
   --controls            deploy baseline controls only
   --feedback            deploy feedback variants (all, or --target/--source one)
 
-RUSE-only granular flags (combine any; each implies --feedback):
-  --timing --workflow --modifiers --sites --prompts
-  --activity --diversity --variance
-  --all-feedback        all of the above (same as --feedback)
-
 Feedback without --target/--source = batch every discovered dataset.
 Pass --target or --source to deploy a single dataset.
 
 examples:
-  ./deploy --ruse                          controls + ALL feedback datasets
-  ./deploy --ruse --controls               baseline controls only
-  ./deploy --ruse --feedback               ALL feedback datasets (no controls)
-  ./deploy --ruse --feedback --target sum24  single dataset (no controls)
-  ./deploy --ruse --controls --feedback    controls + ALL feedback (explicit)
-  ./deploy --ruse --controls --target sum24  controls + single feedback
-  ./deploy --ghosts                        controls + ALL GHOSTS feedback
-  ./deploy --rampart --controls            RAMPART baseline only""",
+  ./deploy --decoy                          controls + ALL feedback datasets
+  ./deploy --decoy --controls               baseline controls only
+  ./deploy --decoy --feedback               ALL feedback datasets (no controls)
+  ./deploy --decoy --feedback --target sum24  single dataset (no controls)
+  ./deploy --decoy --controls --feedback    controls + ALL feedback (explicit)
+  ./deploy --decoy --controls --target sum24  controls + single feedback
+  ./deploy --ghosts                         controls + ALL GHOSTS feedback
+  ./deploy --rampart --controls             RAMPART baseline only""",
     )
-    p.add_argument("--ruse", action="store_true", help="Deploy RUSE SUP agents (default)")
+    p.add_argument("--decoy", action="store_true", help="Deploy DECOY SUP agents (default)")
     p.add_argument("--rampart", action="store_true", help="Deploy RAMPART enterprise network")
     p.add_argument("--ghosts", action="store_true", help="Deploy GHOSTS NPC traffic generators")
     p.add_argument("config_name", nargs="?", help="Deployment config name (default: {type}-controls)")
@@ -61,17 +56,6 @@ examples:
     # Scope flags — opt into just controls, just feedback, or (default) both.
     p.add_argument("--controls", action="store_true", help="Deploy baseline controls (no feedback)")
     p.add_argument("--feedback", action="store_true", help="Deploy PHASE feedback variants")
-
-    # RUSE-only granular config flags — one per config file
-    p.add_argument("--timing", action="store_true", help="Include timing_profile.json (RUSE only)")
-    p.add_argument("--workflow", action="store_true", help="Include workflow_weights.json (RUSE only)")
-    p.add_argument("--modifiers", action="store_true", help="Include behavior_modifiers.json (RUSE only)")
-    p.add_argument("--sites", action="store_true", help="Include site_config.json (RUSE only)")
-    p.add_argument("--prompts", action="store_true", help="Include prompt_augmentation.json (RUSE only)")
-    p.add_argument("--activity", action="store_true", help="Include activity_pattern.json (RUSE only)")
-    p.add_argument("--diversity", action="store_true", help="Include diversity_injection.json (RUSE only)")
-    p.add_argument("--variance", action="store_true", help="Include variance_injection.json (RUSE only)")
-    p.add_argument("--all-feedback", action="store_true", dest="all_configs", help="All behavioral configs (same as --feedback)")
 
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory (single)")
     p.add_argument("--target", type=str, help="Dataset target, e.g. summer24, fall24, vt-50gb, cptc8 (single)")
@@ -81,20 +65,20 @@ examples:
 def _teardown_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="teardown",
-        description="Teardown RUSE deployments",
+        description="Teardown deployments",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""examples:
-  ./teardown ruse-controls-040226205037   teardown a specific deployment
-  ./teardown --ruse --feedback            teardown all active RUSE feedback deployments
-  ./teardown --rampart                    teardown all active RAMPART deployments
-  ./teardown --ghosts --feedback          teardown all active GHOSTS feedback deployments
-  ./teardown --all                        nuclear: delete ALL VMs""",
+  ./teardown decoy-controls-040226205037   teardown a specific deployment
+  ./teardown --decoy --feedback            teardown all active DECOY feedback deployments
+  ./teardown --rampart                     teardown all active RAMPART deployments
+  ./teardown --ghosts --feedback           teardown all active GHOSTS feedback deployments
+  ./teardown --all                         nuclear: delete ALL VMs""",
     )
     p.add_argument("target", nargs="?", help="Teardown target: name-MMDDYYHHMMSS")
-    p.add_argument("--all", action="store_true", dest="teardown_all", help="Delete ALL RUSE, Enterprise, and GHOSTS VMs")
+    p.add_argument("--all", action="store_true", dest="teardown_all", help="Delete ALL DECOY, Enterprise, and GHOSTS VMs")
 
     # Filter flags for batch teardown
-    p.add_argument("--ruse", action="store_true", help="Filter: RUSE SUP deployments")
+    p.add_argument("--decoy", action="store_true", help="Filter: DECOY SUP deployments")
     p.add_argument("--rampart", action="store_true", help="Filter: RAMPART enterprise deployments")
     p.add_argument("--ghosts", action="store_true", help="Filter: GHOSTS NPC deployments")
     p.add_argument("--feedback", action="store_true", help="Filter: only feedback-enabled deployments")
@@ -102,13 +86,13 @@ def _teardown_parser() -> argparse.ArgumentParser:
 
 
 def _list_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(prog="list", description="List active RUSE deployments")
+    return argparse.ArgumentParser(prog="list", description="List active deployments")
 
 
 def _audit_parser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(
         prog="audit",
-        description="Full health audit of all active RUSE SUP deployments",
+        description="Full health audit of all active DECOY SUP deployments",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""checks per VM:
   - SSH reachable
@@ -144,9 +128,9 @@ Surviving VMs keep running with their existing behavioral configs —
 no reboot, no reinstall.
 
 example:
-  # 1. Edit deployments/ruse-controls/config.yaml to remove unwanted VMs
+  # 1. Edit deployments/decoy-controls/config.yaml to remove unwanted VMs
   # 2. Run shrink against the active run
-  ./shrink ruse-controls-040226205037""",
+  ./shrink decoy-controls-040226205037""",
     )
     p.add_argument("target", help="Deployment target: name-MMDDYYHHMMSS")
     return p
@@ -189,34 +173,18 @@ def main(argv: list[str] | None = None) -> int:
         output.close_session_log()
 
 
-    # Flag name → config filename
-_CONFIG_FLAGS = {
-    "timing":    "timing_profile.json",
-    "workflow":  "workflow_weights.json",
-    "modifiers": "behavior_modifiers.json",
-    "sites":     "site_config.json",
-    "prompts":   "prompt_augmentation.json",
-    "activity":  "activity_pattern.json",
-    "diversity": "diversity_injection.json",
-    "variance":  "variance_injection.json",
-}
-
-
 def _cmd_deploy(argv: list[str]) -> int:
     parser = _deploy_parser()
     args = parser.parse_args(argv)
 
-    # --- Resolve deploy type and configs_spec ---
-    deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "ruse")
+    # --- Resolve deploy type ---
+    deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "decoy")
 
-    # Granular flags always win; bare --feedback / --all-feedback = "all".
-    selected = [fname for flag, fname in _CONFIG_FLAGS.items() if getattr(args, flag, False)]
-    if selected:
-        configs_spec = ",".join(selected)
-    elif args.feedback or args.all_configs:
-        configs_spec = "all"
-    else:
-        configs_spec = None
+    # PHASE consolidated to a single behavior.json per SUP — there are no
+    # per-config-file knobs to filter on the deploy side anymore. configs_spec
+    # is plumbed through to the distribute playbook for legacy reasons; "all"
+    # means "copy *.json" (i.e. behavior.json), None means controls-only path.
+    configs_spec = "all" if args.feedback else None
 
     # --- Resolve intent: controls? feedback? ---
     # --target / --source imply feedback (harmless shorthand).
@@ -389,8 +357,8 @@ def _execute_plan(
         from .commands.ghosts import run_ghosts_spinup as spinup
         default_config = "ghosts-controls"
     else:
-        from .commands.spinup import run_ruse_spinup as spinup
-        default_config = "ruse-controls"
+        from .commands.spinup import run_decoy_spinup as spinup
+        default_config = "decoy-controls"
 
     base_config = config_name or default_config
     results: list[tuple[str, int]] = []
@@ -438,12 +406,12 @@ def _cmd_teardown(argv: list[str]) -> int:
         from .commands.teardown import run_teardown_all
         return run_teardown_all(DEPLOY_DIR)
 
-    has_filter = args.ruse or args.rampart or args.ghosts or args.feedback
+    has_filter = args.decoy or args.rampart or args.ghosts or args.feedback
     if has_filter:
         from .commands.teardown import run_teardown_filtered
         return run_teardown_filtered(
             DEPLOY_DIR,
-            types={"ruse": args.ruse, "rampart": args.rampart, "ghosts": args.ghosts},
+            types={"decoy": args.decoy, "rampart": args.rampart, "ghosts": args.ghosts},
             feedback_only=args.feedback,
         )
 
