@@ -8,7 +8,7 @@ type: skill
 
 RAMPART = synthetic enterprise: AD forest with Windows + Linux endpoints
 running pyhuman workflow emulation. Driven by `user-roles.json` (RAMPART
-analog of DECOY's `behavior.json`). Code in `deployments/cli/commands/rampart.py`
+analog of DECOY's `behavior.json`). Code in `deployment_engine/rampart/spinup.py`
 delegates VM provisioning to `~/uva-cs-workflow/`.
 
 | | |
@@ -45,7 +45,7 @@ Total: 23 VMs (3 DC + 10 Win + 10 Linux). 19 emulated endpoints.
 VM names: `r-{md5(dep_id)[:5]}-{node_name}` — 5-char hash for NetBIOS
 limit. Example: `r-bf351-dc1`, `r-bf351-winep1`, `r-bf351-linep3`.
 
-## Deploy flow (`commands/rampart.py`)
+## Deploy flow (`rampart/spinup.py`)
 
 ```
 [1/5] Setup venv in ~/uva-cs-workflow
@@ -262,7 +262,7 @@ PHASE-supplied timing fields. Enterprise-only workflows
 (`browse_iis`, `browse_shibboleth`, `moodle`, `build_software`)
 preserved by PHASE during cloning.
 
-Feedback flavor bump: `feedback.py::generate_rampart_feedback_config`
+Feedback flavor bump: `core/feedback.py::generate_rampart_feedback_config`
 overrides `enterprise.cloud_config` to `axes-cicd-feedback.json`
 (m1.small → m1.medium). Controls stay on m1.small.
 

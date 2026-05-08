@@ -237,15 +237,17 @@ def _cmd_deploy(argv: list[str]) -> int:
             configs_spec = "all"
 
     # --- Build plan: list of (label, behavior_source, configs_spec) tasks ---
-    plan = _build_deploy_plan(
-        deploy_type=deploy_type,
-        config_name=args.config_name,
+    from .core.plan import build_deploy_plan, show_plan_and_confirm, execute_plan
+
+    plan = build_deploy_plan(
+        deploy_type,
         want_controls=want_controls,
         want_feedback=want_feedback,
         configs_spec=configs_spec,
         single_selector=single_selector,
         target=args.target,
         source=args.source,
+        deploy_dir=DEPLOY_DIR,
     )
     if plan is None:
         return 1
@@ -253,210 +255,11 @@ def _cmd_deploy(argv: list[str]) -> int:
         output.error("Nothing to deploy. Use --controls and/or --feedback.")
         return 1
 
-    # --- Show plan + single confirm prompt ---
-    if not _show_plan_and_confirm(plan, deploy_type):
+    if not show_plan_and_confirm(plan, deploy_type):
         return 0
 
-    # --- Execute ---
-    return _execute_plan(plan, deploy_type, args.config_name)
+    return execute_plan(plan, deploy_type, args.config_name, DEPLOY_DIR)
 
-
-def _build_deploy_plan(
-    deploy_type: str,
-    config_name: str | None,
-    want_controls: bool,
-    want_feedback: bool,
-    configs_spec: str | None,
-    single_selector: str | None,
-    target: str | None,
-    source: str | None,
-) -> list[dict] | None:
-    """Resolve controls + feedback intent into an ordered list of deploy tasks.
-
-    Each task is a dict: {label, behavior_source (Path|None), configs_spec,
-    manifest (dict|None), is_controls (bool)}.
-
-    Returns None on hard failure (e.g. feedback requested but source can't
-    be resolved). Returns empty list if nothing to do.
-    """
-    from .core.feedback import (
-        find_all_feedback_sources, find_feedback_by_target, load_manifest,
-    )
-    from .core.config import DeploymentConfig
-    from pathlib import Path as _Path
-
-    plan: list[dict] = []
-
-    if want_controls:
-        # Pull controls' PHASE source from the deployment's config.yaml so
-        # the plan render can show date + location (same shape as feedback).
-        # Post 2026-05-08 the controls/ slot is PHASE-emitted with its own
-        # manifest.json + per-SUP behavior.json (mode=controls).
-        controls_cfg_path = (DEPLOY_DIR / f"{deploy_type}-controls"
-                             / "config.yaml")
-        controls_source: _Path | None = None
-        controls_manifest = None
-        if controls_cfg_path.exists():
-            try:
-                cfg = DeploymentConfig.load(controls_cfg_path)
-                if cfg.behavior_source:
-                    controls_source = _Path(cfg.behavior_source)
-                    controls_manifest = load_manifest(controls_source)
-            except Exception:
-                # Don't block the plan on a malformed config — render the
-                # legacy "baseline controls — no PHASE feedback" line below.
-                pass
-        plan.append({
-            "label": f"{deploy_type}-controls (baseline)",
-            "behavior_source": controls_source,
-            "configs_spec": None,
-            "manifest": controls_manifest,
-            "is_controls": True,
-        })
-
-    if want_feedback:
-        sources: list[dict] = []
-        if single_selector:
-            # Resolve single selector to one source
-            if source:
-                from pathlib import Path as _Path
-                src_path = _Path(source)
-                if not src_path.is_dir():
-                    output.error(f"ERROR: --source not a directory: {src_path}")
-                    return None
-                sources = [{"path": src_path, "dataset": src_path.name, "preset": "?"}]
-            elif target:
-                src_path = find_feedback_by_target(target, deploy_type=deploy_type)
-                if not src_path:
-                    output.error(f"ERROR: No feedback source for target '{target}' "
-                                 f"under /mnt/AXES2U1/feedback/{deploy_type}-controls/")
-                    return None
-                sources = [{"path": src_path, "dataset": src_path.name, "preset": "?"}]
-        else:
-            sources = find_all_feedback_sources(deploy_type)
-            if not sources:
-                output.error(f"ERROR: No PHASE feedback configs found for '{deploy_type}'")
-                output.info(f"  Searched: /mnt/AXES2U1/feedback/{deploy_type}-controls/")
-                return None
-
-        for src in sources:
-            mf = load_manifest(src["path"])
-            plan.append({
-                "label": f"{deploy_type}-feedback: {src['dataset']}",
-                "behavior_source": src["path"],
-                "configs_spec": configs_spec,
-                "manifest": mf,
-                "is_controls": False,
-            })
-
-    return plan
-
-
-def _show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
-    """Render the combined plan (controls + feedback manifests) and ask y/N.
-
-    Fails loud (returns False) if any feedback task's manifest.target
-    doesn't match deploy_type. Skips the prompt when the plan is a single
-    controls task — no ambiguity there.
-    """
-    from .core.feedback import manifest_summary_lines, validate_manifest_target
-
-    n = len(plan)
-    output.banner(f"DEPLOY PLAN ({deploy_type}, {n} task{'s' if n != 1 else ''})")
-    output.info("")
-
-    any_mismatch = False
-    for i, task in enumerate(plan, 1):
-        output.info(f"  {i}. {task['label']}")
-        if task["is_controls"]:
-            # Controls now ship a PHASE-emitted manifest (post 2026-05-08).
-            # Render the same source/date/sup_runs summary as feedback when
-            # available; fall back to the legacy line only if the controls
-            # slot hasn't been generated yet.
-            src = task.get("behavior_source")
-            mf = task.get("manifest")
-            if src is None:
-                output.info(f"      (baseline controls — no PHASE feedback)")
-            else:
-                for line in manifest_summary_lines(src, mf, indent="      "):
-                    output.info(line)
-        else:
-            mf = task["manifest"]
-            err = validate_manifest_target(mf, deploy_type)
-            for line in manifest_summary_lines(
-                task["behavior_source"], mf, indent="      ",
-            ):
-                output.info(line)
-            if err:
-                output.error(f"      FAIL: {err}")
-                any_mismatch = True
-        output.info("")
-
-    if any_mismatch:
-        output.error("Aborting: one or more manifests don't match deploy type.")
-        return False
-
-    # Don't prompt for a single controls-only deploy — legacy behavior and
-    # there's nothing to confirm beyond the banner.
-    if n == 1 and plan[0]["is_controls"]:
-        return True
-
-    if not output.confirm(f"Deploy these {n} config(s)?"):
-        output.info("Cancelled.")
-        return False
-    return True
-
-
-def _execute_plan(
-    plan: list[dict], deploy_type: str, config_name: str | None,
-) -> int:
-    """Run each task in the plan sequentially. Returns 0 iff all succeed."""
-    if deploy_type == "rampart":
-        from .rampart.spinup import run_rampart_spinup as spinup
-        default_config = "rampart-controls"
-    elif deploy_type == "ghosts":
-        from .ghosts.spinup import run_ghosts_spinup as spinup
-        default_config = "ghosts-controls"
-    else:
-        from .decoy.spinup import run_decoy_spinup as spinup
-        default_config = "decoy-controls"
-
-    base_config = config_name or default_config
-    results: list[tuple[str, int]] = []
-
-    for i, task in enumerate(plan, 1):
-        output.info("")
-        output.info(f"[{i}/{len(plan)}] Deploying {task['label']}...")
-        src = task["behavior_source"]
-        try:
-            rc = spinup(
-                base_config, DEPLOY_DIR,
-                str(src) if src else None,
-                task["configs_spec"],
-            )
-        except SystemExit as e:
-            rc = e.code if isinstance(e.code, int) else 1
-        except Exception as e:
-            output.error(f"  ERROR: {e}")
-            rc = 1
-        results.append((task["label"], rc))
-        if rc != 0:
-            output.error(f"  FAILED: {task['label']} (rc={rc})")
-
-    if len(results) > 1:
-        output.info("")
-        output.banner("DEPLOY SUMMARY")
-        for label, rc in results:
-            status = "OK" if rc == 0 else f"FAILED (rc={rc})"
-            output.info(f"  {label}: {status}")
-        output.info("")
-
-    failed = sum(1 for _, rc in results if rc != 0)
-    if failed:
-        output.info(f"DONE: {len(results) - failed}/{len(results)} succeeded, {failed} failed")
-        return 1
-    output.info(f"DONE: all {len(results)} deployment(s) launched")
-    return 0
 
 
 def _cmd_teardown(argv: list[str]) -> int:
