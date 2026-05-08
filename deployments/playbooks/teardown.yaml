@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ansible-playbook -i hosts.ini teardown.yaml \
-#       -e deployment_dir=../ruse-controls -e deployment_id=controls032226
+#       -e deployment_dir=../decoy-controls -e deployment_id=controls032226
 
 - name: Teardown SUP VMs
   hosts: openstack_controller
@@ -30,16 +30,24 @@
 
   tasks:
     - name: Get list of SUP servers
+      # Synchronous on purpose. Earlier this used `async: 120 poll: 5`,
+      # but that combo with localhost ansible_connection=local +
+      # pipelining=true (ansible.cfg defaults) silently drops stdout in
+      # the async result file. The task reports changed=ok but
+      # server_list.stdout is empty, so every downstream task skips
+      # via `when: server_list.stdout | length > 0`. The local
+      # openstack call returns in <30s; sync is fine and the only
+      # reliable way to capture stdout. teardown-all.yaml already
+      # runs this query synchronously and works.
       shell: |
         source {{ os_rc_file }}
         openstack server list -f value -c ID -c Name | awk '$2 ~ /^{{ vm_prefix }}/' || true
       args:
         executable: /bin/bash
       register: server_list
-      async: 120
-      poll: 5
 
     - name: Get volume IDs attached to SUP servers
+      # Sync — same async-loses-stdout reason as the listing task above.
       shell: |
         source {{ os_rc_file }}
         for server in $(openstack server list -f value -c Name | awk '/^{{ vm_prefix }}/'); do
@@ -49,8 +57,6 @@
         executable: /bin/bash
       register: volume_ids
       when: server_list.stdout | length > 0
-      async: 300
-      poll: 10
 
     - name: Delete SUP servers
       shell: |
