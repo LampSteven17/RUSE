@@ -5,7 +5,7 @@
 #
 # Usage:
 #   ansible-playbook -i hosts.ini provision-vms.yaml \
-#       -e deployment_dir=../ruse-controls -e deployment_id=controls032226 -e run_dir=...
+#       -e deployment_dir=../decoy-controls -e deployment_id=controls032226 -e run_dir=...
 
 - name: Provision VMs
   hosts: openstack_controller
@@ -30,9 +30,22 @@
       set_fact:
         deployment_id: "{{ deployment_id | default(deployment_name | regex_replace('-', '')) }}"
 
-    - name: Set VM prefix and output paths
+    - name: Assert vm_prefix passed by caller
+      # Callers (deployments/cli/commands/spinup.py) MUST pass vm_prefix.
+      # The legacy default `r-{deployment_id}-` was correct for RAMPART
+      # only — DECOY needs `d-`, GHOSTS `g-`. Defaulting silently routed
+      # DECOY VMs to RAMPART's namespace and broke audit, teardown, and
+      # PHASE registration in one stroke. Refuse to guess.
+      assert:
+        that:
+          - vm_prefix is defined
+          - vm_prefix | length > 0
+        fail_msg: >-
+          vm_prefix not passed by caller. Pass `-e vm_prefix=d-...-`
+          (DECOY), `r-...-` (RAMPART), or `g-...-` (GHOSTS).
+
+    - name: Set output paths
       set_fact:
-        vm_prefix: "r-{{ deployment_id }}-"
         output_dir: "{{ run_dir | default(deployment_dir) }}"
         inventory_file: "{{ (run_dir | default(deployment_dir)) }}/inventory.ini"
 
