@@ -11,7 +11,7 @@ from .. import output
 from ..ansible_runner import AnsibleRunner, default_event_handler
 from ..config import DeploymentConfig
 from ..openstack import OpenStack
-from ..ssh_config import remove_all_ruse_blocks, remove_ssh_config
+from ..ssh_config import remove_all_managed_blocks, remove_ssh_config
 
 
 def run_teardown(target: str, deploy_dir: Path) -> int:
@@ -48,7 +48,7 @@ def run_teardown_filtered(
 ) -> int:
     """Teardown all active deployments matching the given filters.
 
-    types: {"ruse": bool, "rampart": bool, "ghosts": bool}
+    types: {"decoy": bool, "rampart": bool, "ghosts": bool}
     feedback_only: if True, only tear down feedback-enabled deployments.
     """
     # If no type flags given but --feedback was used, match all types
@@ -78,7 +78,7 @@ def run_teardown_filtered(
         elif config.is_ghosts():
             group = "ghosts"
         else:
-            group = "ruse"
+            group = "decoy"
 
         # Apply type filter
         if any_type and not types.get(group, False):
@@ -159,11 +159,11 @@ def _is_run_active(
         g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
         return os_client.has_vms_with_prefix(f"g-{g_hash}-")
     else:
-        return os_client.has_vms_with_prefix(f"r-{dep_id}-")
+        return os_client.has_vms_with_prefix(f"d-{dep_id}-")
 
 
 def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: Path) -> int:
-    """Teardown a SUP deployment."""
+    """Teardown a DECOY SUP deployment."""
     run_dir = config_dir / "runs" / run_id
     if not run_dir.is_dir():
         output.error(f"ERROR: No run directory found for: {config_name}/{run_id}")
@@ -179,7 +179,7 @@ def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: P
 
     # Build dep_id
     dep_id = _make_dep_id(config_name, run_id)
-    vm_prefix = f"r-{dep_id}-"
+    vm_prefix = f"d-{dep_id}-"
 
     runner = AnsibleRunner(deploy_dir / "playbooks", deploy_dir / "logs")
 
@@ -190,6 +190,12 @@ def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: P
             "deployment_dir": str(config_dir),
             "deployment_id": dep_id,
             "run_dir": str(run_dir),
+            # Pass vm_prefix explicitly. The playbook's own default was
+            # `r-{deployment_id}-` (legacy from the bash-deploy era), which
+            # silently matched zero VMs since DECOYs are `d-{...}-`. Result:
+            # listing returned empty, all delete tasks skipped, inventory got
+            # removed, and the CLI post-check found the still-alive VMs.
+            "vm_prefix": vm_prefix,
         },
         on_event=default_event_handler,
     )
@@ -213,12 +219,12 @@ def _sup_teardown(config_dir: Path, config_name: str, run_id: str, deploy_dir: P
     # Cleanup local state — remove this run, then remove feedback config dir if empty.
     # run_dir contains both main inventory.ini AND neighborhood-inventory.ini /
     # neighborhood-ssh-snippet.txt when a sidecar was provisioned, so rmtree
-    # clears everything. VMs themselves (including r-{dep_id}-neighborhood-0)
-    # are already deleted above by the teardown.yaml r-{prefix} sweep.
+    # clears everything. VMs themselves (including d-{dep_id}-neighborhood-0)
+    # are already deleted above by the teardown.yaml d-{prefix} sweep.
     if run_dir.is_dir():
         _safe_rmtree(run_dir)
 
-    if config_name.startswith("ruse-feedback-"):
+    if config_name.startswith("decoy-feedback-"):
         runs_dir = config_dir / "runs"
         remaining_runs = [d for d in runs_dir.iterdir() if d.is_dir()] if runs_dir.is_dir() else []
         if not remaining_runs:
@@ -396,10 +402,9 @@ def _ghosts_teardown(
 
 
 def run_teardown_all(deploy_dir: Path) -> int:
-    """Delete ALL RUSE, Enterprise, and GHOSTS VMs."""
+    """Delete ALL DECOY, Enterprise, and GHOSTS VMs."""
     output.banner("TEARDOWN ALL")
-    output.info("This will DELETE ALL RUSE (r-*), Enterprise (e-*), and GHOSTS (g-*) servers and volumes!")
-    output.info("This also catches legacy sup-* VMs.")
+    output.info("This will DELETE ALL DECOY (d-*), Enterprise (e-*), and GHOSTS (g-*) servers and volumes!")
     output.info("")
 
     if not output.confirm_destructive("Confirm teardown-all?"):
@@ -422,8 +427,8 @@ def run_teardown_all(deploy_dir: Path) -> int:
         on_event=default_event_handler,
     )
 
-    # Remove all RUSE SSH config blocks
-    removed = remove_all_ruse_blocks()
+    # Remove all managed SSH config blocks
+    removed = remove_all_managed_blocks()
     if removed:
         output.info(f"  Removed {len(removed)} SSH config blocks")
 
@@ -467,7 +472,7 @@ def _find_hosts_ini(config_dir: Path | None, deploy_dir: Path) -> Path | None:
 
 def _make_dep_id(deployment_name: str, run_id: str) -> str:
     dep = deployment_name
-    for prefix in ("ruse-", "sup-", "ghosts-", "rampart-", "enterprise-"):
+    for prefix in ("decoy-", "ghosts-", "rampart-", "enterprise-"):
         if dep.startswith(prefix):
             dep = dep[len(prefix):]
     dep = dep.replace("-", "")
@@ -513,7 +518,7 @@ def _close_phase_experiment(config_name: str) -> None:
     """Set end_date on the PHASE experiments.json entry for this deployment.
 
     Previously teardown left entries with end_date=None, so PHASE batch
-    pipelines (e.g. PHASE.py --ruse) would still pick up torn-down deploys
+    pipelines (e.g. PHASE.py --decoy) would still pick up torn-down deploys
     as if they were active and try to dredge their (now-deleted) VM IPs.
     Setting end_date marks the deploy as ended without deleting the
     historical registration record.

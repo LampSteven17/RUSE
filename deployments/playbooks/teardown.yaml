@@ -24,9 +24,21 @@
       set_fact:
         deployment_id: "{{ deployment_id | default(deployment_name | regex_replace('-', '')) }}"
 
-    - name: Set VM prefix
-      set_fact:
-        vm_prefix: "{{ vm_prefix | default('r-' + deployment_id + '-') }}"
+    - name: Assert vm_prefix passed by caller
+      # Callers (deployments/cli/commands/teardown.py) MUST pass vm_prefix
+      # — otherwise the listing query matches the wrong VM cohort and the
+      # playbook silently no-ops while reporting success. The legacy
+      # `r-{deployment_id}-` default belongs to the bash-deploy era; DECOYs
+      # are now `d-`, RAMPART `e-`, GHOSTS `g-`. Refuse to guess.
+      assert:
+        that:
+          - vm_prefix is defined
+          - vm_prefix | length > 0
+        fail_msg: >-
+          vm_prefix not passed by caller. The playbook used to default
+          to 'r-{{ deployment_id }}-' which no longer matches any
+          subsystem. Pass `-e vm_prefix=d-...-` (DECOY), `e-...-`
+          (RAMPART), or `g-...-` (GHOSTS).
 
   tasks:
     - name: Get list of SUP servers
