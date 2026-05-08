@@ -1,0 +1,150 @@
+---
+# Ansible Playbook: install-neighborhood.yaml
+# Install the per-deploy topology-mimicry sidecar daemon.
+#
+# Runs ONLY on hosts in the [neighborhood_hosts] inventory group, which
+# is populated ONLY for feedback deploys. Control deploys have no
+# neighborhood VM, so this playbook is a no-op on [sup_hosts]-only
+# inventories.
+#
+# Usage:
+#   ansible-playbook -i runs/<run>/neighborhood-inventory.ini \
+#       install-neighborhood.yaml \
+#       -e deployment_dir=../decoy-feedback-... \
+#       -e run_dir=runs/<run>
+
+- name: Install DECOY neighborhood sidecar
+  hosts: neighborhood_hosts
+  become: yes
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30 -o IdentitiesOnly=yes'
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    ansible_ssh_retries: 5
+    ruse_repo: "https://github.com/LampSteven17/RUSE.git"
+    ruse_branch: "main"
+    ruse_path: "/opt/ruse"
+    neighborhood_config_dir: /etc/ruse-neighborhood
+    neighborhood_log: /var/log/ruse-neighborhood.jsonl
+
+  pre_tasks:
+    - name: Wait for SSH
+      wait_for_connection:
+        delay: 5
+        timeout: 300
+      retries: 3
+      delay: 10
+
+    - name: Wait for cloud-init
+      command: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    # Pin sidecar clock to EST/EDT — neighborhood probes are driven by
+    # diversity.topology_mimicry.inbound_*_per_hour rates. Sidecar reads the
+    # current hour to schedule probes; UTC clock would offset rates 4-5h.
+    - name: Set timezone to America/New_York
+      timezone:
+        name: America/New_York
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      register: apt_cache_update
+      until: apt_cache_update is succeeded
+      retries: 3
+      delay: 30
+
+    - name: Install prerequisites
+      apt:
+        name: [git, python3, python3-pip]
+        state: present
+      register: apt_prereqs
+      until: apt_prereqs is succeeded
+      retries: 3
+      delay: 30
+
+    - name: Clone RUSE repo (for common.network package)
+      git:
+        repo: "{{ ruse_repo }}"
+        dest: "{{ ruse_path }}"
+        version: "{{ ruse_branch }}"
+        force: yes
+      register: clone_ruse
+      until: clone_ruse is succeeded
+      retries: 3
+      delay: 15
+
+    - name: Ensure neighborhood config dir
+      file:
+        path: "{{ neighborhood_config_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Deliver sups.json (from localhost-synthesized file)
+      copy:
+        src: "{{ run_dir }}/neighborhood-sups.json"
+        dest: "{{ neighborhood_config_dir }}/sups.json"
+        mode: '0644'
+
+    - name: Create neighborhood systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=RUSE Neighborhood Traffic Daemon
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/python3 -m common.network.neighborhood_traffic --config {{ neighborhood_config_dir }}/sups.json --log {{ neighborhood_log }}
+          WorkingDirectory={{ ruse_path }}/src
+          Environment=PYTHONUNBUFFERED=1
+          Environment=PYTHONPATH={{ ruse_path }}/src
+          Restart=always
+          RestartSec=15
+          StandardOutput=append:/var/log/ruse-neighborhood.systemd.log
+          StandardError=append:/var/log/ruse-neighborhood.systemd.log
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/ruse-neighborhood.service
+        mode: '0644'
+
+    - name: Enable + start ruse-neighborhood.service
+      systemd:
+        name: ruse-neighborhood
+        enabled: yes
+        state: restarted
+        daemon_reload: yes
+
+    - name: Verify neighborhood service is active
+      shell: systemctl is-active ruse-neighborhood
+      register: neighborhood_status
+      changed_when: false
+      failed_when: false
+
+    - name: Assert neighborhood service is active
+      # Fail-loud: we don't want a feedback deploy to silently run without
+      # the topology layer. Control deploys don't reach this playbook.
+      fail:
+        msg: >-
+          ruse-neighborhood is '{{ neighborhood_status.stdout }}' on
+          {{ inventory_hostname }} (expected: active). Check:
+          journalctl -u ruse-neighborhood, /var/log/ruse-neighborhood.systemd.log
+      when: neighborhood_status.stdout != "active"
+
+    - name: Check NRestarts (catches crash loops)
+      shell: systemctl show ruse-neighborhood -p NRestarts --value
+      register: neighborhood_restarts
+      changed_when: false
+      failed_when: false
+
+    - name: Assert neighborhood is not crash-looping
+      fail:
+        msg: >-
+          ruse-neighborhood has {{ neighborhood_restarts.stdout }} restarts
+          on {{ inventory_hostname }}. Crash-loop check threshold is 5.
+          Check logs at {{ neighborhood_log }} and journalctl -u ruse-neighborhood.
+      when: (neighborhood_restarts.stdout | default('0') | trim | int) > 5
