@@ -13,7 +13,7 @@ is in CLAUDE.md.
 
 | | |
 |---|---|
-| Inputs | `deployments/decoy-controls/config.yaml`, `/mnt/AXES2U1/feedback/decoy-controls/controls/{behavior}/{sup}/behavior.json` (baseline), `/mnt/AXES2U1/feedback/decoy-controls/{dataset}/{behavior}/{sup}/behavior.json` (feedback), `INSTALL_SUP.sh` + `src/` cloned from github at install time |
+| Inputs | `deployments/decoy-controls/config.yaml`, `/mnt/AXES2U1/feedback/decoy-controls/controls/{behavior}/{sup}/behavior.json` (baseline), `/mnt/AXES2U1/feedback/decoy-controls/{dataset}/{behavior}/{sup}/behavior.json` (feedback), `INSTALL_SUP.sh` + `decoys/` cloned from github at install time |
 | Outputs | `deployments/decoy-{controls,feedback-{preset}-{dataset}-{scope}}/runs/{run_id}/` (inventory.ini, ssh_config_snippet.txt, deployment_type), per-VM `/opt/ruse/deployed_sups/{key}/` |
 | Manifest | `manifest.json` in PHASE source; loaded via `core/feedback.py::load_manifest`, validated against deploy type via `validate_manifest_target` |
 | Upstream | PHASE feedback engine (`feedback_engine.baseline` writes `controls/`; `feedback_engine.decoy_generator` writes `{dataset}/`) |
@@ -129,7 +129,7 @@ ssh d-controls050826193122-B0-gemma-0 \
 ## behavior.json schema (PHASE-emitted)
 
 `BehavioralConfig.load` slices the file into 9 dataclass fields, no key
-renaming. See `src/common/behavioral_config.py` for the loader; consumers
+renaming. See `decoys/common/behavioral_config.py` for the loader; consumers
 match the shape PHASE emits verbatim.
 
 ```json
@@ -212,7 +212,7 @@ WhoisLookup + DownloadFiles bypass the Agent's tool-decision loop:
 - BU — dedicated workflow, ONE Ollama HTTP picker (loopback `127.0.0.1:11434`, invisible to Zeek), browser never invoked
 - MCHP — `random.choice(pool)` no-LLM picker
 
-Helpers in `src/common/network/`: `whois.py`, `downloader.py`,
+Helpers in `decoys/common/network/`: `whois.py`, `downloader.py`,
 `probes.py`, `neighborhood_traffic.py`. Brain workflow files import
 directly — no cross-brain imports.
 
@@ -245,7 +245,7 @@ The `controls/` slot is excluded from feedback dataset auto-discovery via
 | `llama` | `llama3.1:8b` | (legacy) | Kept for back-compat, not in any deploy template |
 
 Aliases must agree across three call sites:
-`INSTALL_SUP.sh::MODEL_NAMES`, `src/common/config/model_config.py::MODELS`,
+`INSTALL_SUP.sh::MODEL_NAMES`, `decoys/common/config/model_config.py::MODELS`,
 runner argparse `choices=[...]` in `run_browseruse.py` /
 `run_smolagents.py` / `run_mchp.py`.
 
@@ -318,7 +318,7 @@ Feedback-only. 1 small VM per deploy (`d-{dep_id}-neighborhood-0`,
 `/etc/ruse-neighborhood/sups.json` and synthesizes inbound TCP/UDP
 probes at each SUP IP.
 
-10 probe types in `src/common/network/probes.py`:
+10 probe types in `decoys/common/network/probes.py`:
 `inbound_{smb,ldap,wsus,ntp_receive,printer,ipmi,winrm,mdns,ssdp,scan}_per_hour`.
 Produces mixed conn_state (SF / S0 / REJ / RSTO / unidir) on Zeek rows
 from the SUP — fights `local_orig=1` / ephemeral-port-only / `conn_state=SF`
@@ -339,14 +339,14 @@ not yet wired to main `./audit`.
 
 ## Hot-patch path
 
-`/opt/ruse/deployed_sups/{key}/src/` is a **copy**, not a symlink. Each
-install copies `/opt/ruse/src/` → that path. `git pull` in `/opt/ruse`
+`/opt/ruse/deployed_sups/{key}/decoys/` is a **copy**, not a symlink. Each
+install copies `/opt/ruse/decoys/` → that path. `git pull` in `/opt/ruse`
 does NOT propagate. Hot-patch:
 
-1. `git push` from mlserv (INSTALL_SUP.sh and `src/*` are pulled from
+1. `git push` from mlserv (INSTALL_SUP.sh and `decoys/*` are pulled from
    github at install time — clone URL in
    `playbooks/install-sups.yaml::ruse_repo`)
-2. SSH the VM, `cp` changed files into per-deploy `src/`
+2. SSH the VM, `cp` changed files into per-deploy `decoys/`
 3. `systemctl restart {svc}.service`
 
 Or teardown + redeploy.
@@ -386,7 +386,7 @@ ls /mnt/AXES2U1/feedback/decoy-controls/sum24/*/*/behavior.json
 
 - C0 no software, M0 read-only, no LLM fallback, MCHP no LLM (see CLAUDE.md)
 - Models run locally via Ollama
-- Per-deploy `src/` is a COPY (see hot-patch path above)
-- `INSTALL_SUP.sh` + `src/*` pulled from github → push before deploy
+- Per-deploy `decoys/` is a COPY (see hot-patch path above)
+- `INSTALL_SUP.sh` + `decoys/*` pulled from github → push before deploy
 - VMs set `America/New_York` for log readability; runtime hour reads use
   `datetime.now(timezone.utc).hour` (UTC contract in CLAUDE.md)
