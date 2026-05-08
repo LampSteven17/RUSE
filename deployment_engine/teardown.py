@@ -4,7 +4,9 @@ prefixes via teardown-all.yaml regex)."""
 
 from __future__ import annotations
 
-import hashlib
+from .core.vm_naming import (
+    make_ent_vm_prefix, make_ghosts_vm_prefix, make_vm_prefix,
+)
 import re
 import time
 from pathlib import Path
@@ -142,13 +144,11 @@ def _is_run_active(
     os_client = OpenStack()
     dep_id = make_dep_id(config_name, run_id)
     if config.is_rampart():
-        ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.has_vms_with_prefix(f"r-{ent_hash}-")
+        return os_client.has_vms_with_prefix(make_ent_vm_prefix(dep_id))
     elif config.is_ghosts():
-        g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.has_vms_with_prefix(f"g-{g_hash}-")
+        return os_client.has_vms_with_prefix(make_ghosts_vm_prefix(dep_id))
     else:
-        return os_client.has_vms_with_prefix(f"d-{dep_id}-")
+        return os_client.has_vms_with_prefix(make_vm_prefix(dep_id))
 
 
 def run_teardown_all(deploy_dir: Path) -> int:

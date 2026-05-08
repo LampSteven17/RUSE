@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
+from .core.vm_naming import (
+    make_ent_vm_prefix, make_ghosts_vm_prefix, make_vm_prefix,
+)
 import re
 from pathlib import Path
 
@@ -123,15 +125,7 @@ def _check_active(
         return True
 
     # Check OpenStack for VMs with matching prefix
-    dep_id = _make_dep_id(name, rid)
-    if config.is_rampart():
-        ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.has_vms_with_prefix(f"r-{ent_hash}-")
-    elif config.is_ghosts():
-        g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.has_vms_with_prefix(f"g-{g_hash}-")
-    else:
-        return os_client.has_vms_with_prefix(f"d-{dep_id}-")
+    return os_client.has_vms_with_prefix(_prefix_for(config, _make_dep_id(name, rid)))
 
 
 def _get_expected_count(run_dir: Path, config: DeploymentConfig) -> int:
@@ -159,15 +153,16 @@ def _count_live_vms(
     name: str, rid: str, config: DeploymentConfig, os_client: OpenStack,
 ) -> int:
     """Count VMs currently on OpenStack for this deployment."""
-    dep_id = _make_dep_id(name, rid)
+    return os_client.count_vms_with_prefix(_prefix_for(config, _make_dep_id(name, rid)))
+
+
+def _prefix_for(config: DeploymentConfig, dep_id: str) -> str:
+    """Dispatch on deploy type to the right prefix builder."""
     if config.is_rampart():
-        ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.count_vms_with_prefix(f"r-{ent_hash}-")
-    elif config.is_ghosts():
-        g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.count_vms_with_prefix(f"g-{g_hash}-")
-    else:
-        return os_client.count_vms_with_prefix(f"d-{dep_id}-")
+        return make_ent_vm_prefix(dep_id)
+    if config.is_ghosts():
+        return make_ghosts_vm_prefix(dep_id)
+    return make_vm_prefix(dep_id)
 
 
 def _get_vm_summary(run_dir: Path, config: DeploymentConfig) -> str:

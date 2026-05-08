@@ -695,10 +695,8 @@ def _row_status(checks: dict) -> str:
 
 def _dep_prefix(dep: dict) -> str:
     """Build the OpenStack VM prefix for a deployment (d-{dep_id}-)."""
-    name = dep["name"]
-    if name.startswith("decoy-"):
-        name = name[len("decoy-"):]
-    return f"d-{name.replace('-', '')}{dep['run_id']}-"
+    from ..core.vm_naming import make_run_dep_id, make_vm_prefix
+    return make_vm_prefix(make_run_dep_id(dep["name"], dep["run_id"]))
 
 
 # ── Markdown report ──────────────────────────────────────────────────────

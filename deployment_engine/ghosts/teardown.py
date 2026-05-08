@@ -6,12 +6,12 @@ finalize_teardown handles the shared epilogue.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from ..core import output
 from ..core.openstack import OpenStack
 from ..core.teardown_steps import finalize_teardown, make_dep_id
+from ..core.vm_naming import make_ghosts_vm_prefix
 
 
 def run_ghosts_teardown(
@@ -23,8 +23,7 @@ def run_ghosts_teardown(
     output.banner(f"TEARDOWN: {config_name}/{run_id} (ghosts)")
 
     dep_id = make_dep_id(config_name, run_id)
-    g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-    g_prefix = f"g-{g_hash}-"
+    g_prefix = make_ghosts_vm_prefix(dep_id)
     os_client = OpenStack()
 
     # Step 1: Delete VMs
