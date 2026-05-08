@@ -22,7 +22,7 @@ def run_list(deploy_dir: Path) -> int:
 
     # Collect rows grouped by deployment type
     groups: dict[str, list[list[str]]] = {
-        "ruse": [],
+        "decoy": [],
         "rampart": [],
         "ghosts": [],
         "other": [],
@@ -49,8 +49,8 @@ def run_list(deploy_dir: Path) -> int:
             group = "rampart"
         elif config.is_ghosts():
             group = "ghosts"
-        elif config.deployment_type == "sup":
-            group = "ruse"
+        elif config.deployment_type == "decoy":
+            group = "decoy"
         else:
             group = "other"
 
@@ -81,7 +81,7 @@ def run_list(deploy_dir: Path) -> int:
         return 0
 
     GROUP_LABELS = {
-        "ruse": "RUSE SUPs",
+        "decoy": "DECOY SUPs",
         "rampart": "RAMPART Enterprise",
         "ghosts": "GHOSTS NPCs",
         "other": "Other",
@@ -96,7 +96,7 @@ def run_list(deploy_dir: Path) -> int:
             if i < len(col_widths):
                 col_widths[i] = max(col_widths[i], len(cell))
 
-    for key in ("ruse", "rampart", "ghosts", "other"):
+    for key in ("decoy", "rampart", "ghosts", "other"):
         rows = groups[key]
         if not rows:
             continue
@@ -126,12 +126,12 @@ def _check_active(
     dep_id = _make_dep_id(name, rid)
     if config.is_rampart():
         ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.has_vms_with_prefix(f"e-{ent_hash}-")
+        return os_client.has_vms_with_prefix(f"r-{ent_hash}-")
     elif config.is_ghosts():
         g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
         return os_client.has_vms_with_prefix(f"g-{g_hash}-")
     else:
-        return os_client.has_vms_with_prefix(f"r-{dep_id}-")
+        return os_client.has_vms_with_prefix(f"d-{dep_id}-")
 
 
 def _get_expected_count(run_dir: Path, config: DeploymentConfig) -> int:
@@ -162,12 +162,12 @@ def _count_live_vms(
     dep_id = _make_dep_id(name, rid)
     if config.is_rampart():
         ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-        return os_client.count_vms_with_prefix(f"e-{ent_hash}-")
+        return os_client.count_vms_with_prefix(f"r-{ent_hash}-")
     elif config.is_ghosts():
         g_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
         return os_client.count_vms_with_prefix(f"g-{g_hash}-")
     else:
-        return os_client.count_vms_with_prefix(f"r-{dep_id}-")
+        return os_client.count_vms_with_prefix(f"d-{dep_id}-")
 
 
 def _get_vm_summary(run_dir: Path, config: DeploymentConfig) -> str:
@@ -262,9 +262,8 @@ def _get_enterprise_vm_count(run_dir: Path) -> str:
 
 def _make_dep_id(deployment_name: str, run_id: str) -> str:
     """Build dep_id from deployment name + run_id."""
-    # Strip common prefixes
     dep = deployment_name
-    for prefix in ("ruse-", "sup-", "ghosts-", "rampart-", "enterprise-"):
+    for prefix in ("decoy-", "ghosts-", "rampart-", "enterprise-"):
         if dep.startswith(prefix):
             dep = dep[len(prefix):]
     dep = dep.replace("-", "")

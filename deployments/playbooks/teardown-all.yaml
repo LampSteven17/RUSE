@@ -1,21 +1,21 @@
 ---
 # Ansible Playbook: teardown-all.yaml
-# Destroy ALL RUSE/Enterprise VMs and their volumes.
+# Destroy ALL DECOY/RAMPART/GHOSTS VMs and their volumes.
 #
 # Usage:
 #   ansible-playbook -i hosts.ini teardown-all.yaml
 
-- name: Teardown ALL SUP VMs
+- name: Teardown ALL VMs
   hosts: openstack_controller
   gather_facts: false
 
   vars:
     os_rc_file: "{{ lookup('env', 'HOME') }}/vxn3kr-bot-rc"
-    all_prefixes: "(r-|e-|g-|sup-)"
+    all_prefixes: "(d-|r-|g-)"
 
   tasks:
     # ── Find servers ─────────────────────────────────────────────────
-    - name: Get list of ALL RUSE servers
+    - name: Get list of ALL servers
       shell: |
         source {{ os_rc_file }}
         openstack server list -f value -c ID -c Name | grep -E "{{ all_prefixes }}" || true
@@ -35,7 +35,7 @@
       when: server_list.stdout | length > 0
 
     # ── Delete servers ───────────────────────────────────────────────
-    - name: Delete ALL RUSE servers
+    - name: Delete ALL servers
       shell: |
         source {{ os_rc_file }}
         openstack server delete "{{ item.split()[0] }}"
@@ -72,7 +72,7 @@
       ignore_errors: yes
 
     # ── Delete volumes ───────────────────────────────────────────────
-    - name: Get ALL RUSE volumes
+    - name: Get ALL volumes
       shell: |
         source {{ os_rc_file }}
         openstack volume list -f value -c ID -c Name | grep -E "{{ all_prefixes }}" | awk '{print $1}' || true
@@ -84,7 +84,7 @@
       set_fact:
         all_volume_ids: "{{ (all_volumes.stdout_lines | default([])) | union(attached_volume_ids.stdout_lines | default([]) | select('match', '.+') | list) | unique }}"
 
-    - name: Delete ALL RUSE volumes
+    - name: Delete ALL volumes
       shell: |
         source {{ os_rc_file }}
         openstack volume delete "{{ item }}"

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -49,7 +50,7 @@ def run_rampart_spinup(
     # Build hash-based VM prefix (5-char MD5 for NetBIOS limit)
     dep_id = _make_dep_id(deployment, run_id)
     ent_hash = hashlib.md5(dep_id.encode()).hexdigest()[:5]
-    ent_prefix = f"e-{ent_hash}-"
+    ent_prefix = f"r-{ent_hash}-"
 
     # Header
     output.banner(f"DEPLOY: RAMPART ({deployment})")
@@ -513,19 +514,15 @@ def _generate_emulation_inventory(
     user_map = {}
     for user in logins_data.get("users", []):
         home_node = user["home_node"]["name"]
-        # Strip e-{hash}- prefix if present (enterprise config uses prefixed names)
+        # Strip r-{hash}- prefix if present (enterprise config uses prefixed names)
         if home_node.startswith(ent_prefix):
             home_node = home_node[len(ent_prefix):]
         lp = user["login_profile"]
 
         # PHASE hour-of-day fields (UTC-indexed). Pulled verbatim from
-        # per-node user-roles.json. _phase_block_mode.window, when present,
-        # overrides daily randomization.
-        block_mode = lp.get("_phase_block_mode") or {}
-        block_window_str = ""
-        if block_mode.get("active") and isinstance(block_mode.get("window"), list) and len(block_mode["window"]) == 2:
-            block_window_str = f"{int(block_mode['window'][0])},{int(block_mode['window'][1])}"
-
+        # per-node user-roles.json. PHASE pre-projects any window logic onto
+        # day_start_hour_* + activity_daily_*_hours; RAMPART consumes those
+        # fields directly.
         def _csv_or_empty(v):
             if isinstance(v, list) and v:
                 return ",".join(str(int(x)) for x in v)
@@ -545,7 +542,6 @@ def _generate_emulation_inventory(
             "day_start_hour_max": int(lp.get("day_start_hour_max", 0)),
             "activity_daily_min_hours": _csv_or_empty(lp.get("activity_daily_min_hours")),
             "activity_daily_max_hours": _csv_or_empty(lp.get("activity_daily_max_hours")),
-            "block_window": block_window_str,
         }
 
     # Extract domain admin password (needed for Windows SSH)
@@ -570,7 +566,7 @@ def _generate_emulation_inventory(
     nodes = post_deploy.get("enterprise_built", {}).get("deployed", {}).get("nodes", [])
     for node in nodes:
         prefixed_name = node["name"]
-        # Strip the e-{hash}- prefix to get bare name
+        # Strip the r-{hash}- prefix to get bare name
         bare_name = prefixed_name
         if bare_name.startswith(ent_prefix):
             bare_name = bare_name[len(ent_prefix):]
@@ -617,8 +613,7 @@ def _generate_emulation_inventory(
             f"rampart_day_start_hour_min={user['day_start_hour_min']} "
             f"rampart_day_start_hour_max={user['day_start_hour_max']} "
             f"rampart_activity_daily_min_hours=\"{user['activity_daily_min_hours']}\" "
-            f"rampart_activity_daily_max_hours=\"{user['activity_daily_max_hours']}\" "
-            f"rampart_block_window=\"{user['block_window']}\""
+            f"rampart_activity_daily_max_hours=\"{user['activity_daily_max_hours']}\""
         )
 
         if node_info["is_windows"]:
@@ -715,11 +710,6 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
         u = user_map[bare]
         lp = u["login_profile"]
 
-        block_mode = lp.get("_phase_block_mode") or {}
-        block_window_str = ""
-        if block_mode.get("active") and isinstance(block_mode.get("window"), list) and len(block_mode["window"]) == 2:
-            block_window_str = f"{int(block_mode['window'][0])},{int(block_mode['window'][1])}"
-
         def _csv_or_empty(v):
             if isinstance(v, list) and v:
                 return ",".join(str(int(x)) for x in v)
@@ -741,7 +731,6 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
             "day_start_hour_max": int(lp.get("day_start_hour_max", 0)),
             "activity_daily_min_hours": _csv_or_empty(lp.get("activity_daily_min_hours")),
             "activity_daily_max_hours": _csv_or_empty(lp.get("activity_daily_max_hours")),
-            "block_window": block_window_str,
         })
         idx += 1
 
@@ -804,7 +793,6 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
                 f"--day-start-hour-max {vm['day_start_hour_max']} "
                 f"--activity-daily-min-hours {vm['activity_daily_min_hours']} "
                 f"--activity-daily-max-hours {vm['activity_daily_max_hours']} "
-                f"--block-window {vm['block_window']} "
                 f"--extra passfile C:\\tmp\\shib_login.{vm['username']}'; "
                 f"$l += '    }} catch {{'; "
                 f"$l += '        Write-Host human.py_crashed_restarting'; "
@@ -896,10 +884,10 @@ def _generate_feedback_user_roles(
       1. Walks behavior_source/*/user-roles.json to discover processed nodes.
       2. Extracts the first (tuned) role from each per-node file.
       3. Renames each tuned role from "{bare_node}_user" to the deployment-
-         prefixed form "{e-hash-prefixed_node_name}_user" so concurrent
+         prefixed form "{r-hash-prefixed_node_name}_user" so concurrent
          deployments of different hashes can coexist without role name
          collisions.
-      4. Walks the enterprise config, strips the e-{hash}- prefix from each
+      4. Walks the enterprise config, strips the r-{hash}- prefix from each
          node name to get its bare form, looks up the corresponding tuned
          role, and rewrites the node's "user" field to point at the
          renamed role.
@@ -945,6 +933,13 @@ def _generate_feedback_user_roles(
 
     # Extract the tuned role (first entry in roles array) for each node,
     # keyed by bare node name.
+    #
+    # PHASE writes _phase_metadata.mode in {"feedback", "controls"} on every
+    # per-node file. The runtime treats both modes identically — same loading,
+    # same role-rename, same enterprise-config rewrite. The mode field is a
+    # FATAL gate against schema regression: any unknown value (or missing
+    # _phase_metadata) means PHASE bumped its contract and RAMPART hasn't
+    # caught up. Fail loud rather than silently doing the wrong thing.
     tuned_by_bare: dict[str, dict] = {}
     for f in per_node_files:
         bare_name = f.parent.name  # e.g. "linep9"
@@ -953,6 +948,17 @@ def _generate_feedback_user_roles(
         except (OSError, json.JSONDecodeError) as e:
             output.info(f"  WARNING: failed to parse {f}: {e}")
             continue
+        mode = (data.get("_phase_metadata") or {}).get("mode")
+        if mode not in ("feedback", "controls"):
+            output.error("")
+            output.error("=" * 70)
+            output.error(f"FATAL: unknown _phase_metadata.mode in {f}")
+            output.error(f"  got: {mode!r}")
+            output.error(f"  expected: 'feedback' or 'controls'")
+            output.error("  This indicates a PHASE schema bump that RAMPART has not")
+            output.error("  caught up with. Aborting rather than risk silent miswiring.")
+            output.error("=" * 70)
+            sys.exit(1)
         roles = data.get("roles", [])
         if not roles:
             output.info(f"  WARNING: {f} has empty roles array, skipping")
@@ -964,18 +970,18 @@ def _generate_feedback_user_roles(
         return None
 
     # Walk the enterprise config nodes, rewriting each fed node's user field
-    # and collecting the tuned roles (renamed to include the e-{hash}- prefix).
+    # and collecting the tuned roles (renamed to include the r-{hash}- prefix).
     modified_enterprise = copy.deepcopy(enterprise)
     per_node_roles_out: list[dict] = []
     nodes_processed: list[str] = []
 
     for i, node in enumerate(modified_enterprise.get("nodes", [])):
-        node_name = node.get("name", "")  # e.g. "e-14a6d-linep9"
+        node_name = node.get("name", "")  # e.g. "r-14a6d-linep9"
         if node.get("user") is None:
             continue  # dc1/dc2/dc3/linep1 — no user, skip
 
-        # Strip the e-{5char_hex}- prefix to get the bare node name
-        bare_name = re.sub(r"^e-[a-f0-9]+-", "", node_name)
+        # Strip the r-{5char_hex}- prefix to get the bare node name
+        bare_name = re.sub(r"^r-[a-f0-9]+-", "", node_name)
 
         tuned = tuned_by_bare.get(bare_name)
         if tuned is None:
@@ -986,7 +992,7 @@ def _generate_feedback_user_roles(
 
         # Clone the tuned role and rename it to the deployment-unique form
         renamed = copy.deepcopy(tuned)
-        new_role_name = f"{node_name}_user"  # e.g. "e-14a6d-linep9_user"
+        new_role_name = f"{node_name}_user"  # e.g. "r-14a6d-linep9_user"
         renamed["name"] = new_role_name
         per_node_roles_out.append(renamed)
 
