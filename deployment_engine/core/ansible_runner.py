@@ -126,7 +126,12 @@ class AnsibleRunner:
     ) -> AnsibleResult:
         """Run an Ansible playbook, stream parsed output, return result."""
         playbook_path = self.playbooks_dir / playbook
-        log_path = self.logs_dir / f"ansible-{playbook.replace('.yaml', '')}-{_timestamp()}.log"
+        # Flatten the playbook path for log filename: shared/teardown-all.yaml
+        # → ansible-shared--teardown-all-{ts}.log (single flat file in logs_dir,
+        # no nested directory). Without this the / in the playbook name made
+        # the log path point at a non-existent subdir.
+        log_stem = playbook.replace(".yaml", "").replace("/", "--")
+        log_path = self.logs_dir / f"ansible-{log_stem}-{_timestamp()}.log"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = [
