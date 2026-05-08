@@ -17,6 +17,7 @@ from ..core.config import DeploymentConfig
 from ..core.openstack import OpenStack
 from ..core.ssh_config import install_ssh_config
 from ..core.vm_naming import make_ghosts_vm_prefix
+from ..core.deploy_steps import ssh_connectivity_test, register_phase
 
 
 def run_ghosts_spinup(
@@ -116,7 +117,7 @@ def run_ghosts_spinup(
     # [2/5] Test SSH
     output.info("")
     output.info("[2/5] Testing SSH connectivity...")
-    ssh_ok = _test_ssh_all(all_vms)
+    ssh_ok = ssh_connectivity_test(all_vms)
     total = len(all_vms)
     # G3: Fail-loud if too many VMs unreachable. Previously this was a warning
     # and the deploy continued to try to Ansible against unreachable hosts,
@@ -138,7 +139,7 @@ def run_ghosts_spinup(
     output.info("")
     output.info("[3/5] Installing GHOSTS API stack...")
     api_result = runner.run_playbook(
-        "install-ghosts-api.yaml",
+        "ghosts/install-ghosts-api.yaml",
         inventory_path,
         extra_vars={
             "ghosts_repo": config.ghosts_repo(),
@@ -161,7 +162,7 @@ def run_ghosts_spinup(
     output.info("")
     output.info(f"[4/5] Installing GHOSTS clients ({client_count} VMs)...")
     client_result = runner.run_playbook(
-        "install-ghosts-clients.yaml",
+        "ghosts/install-ghosts-clients.yaml",
         inventory_path,
         extra_vars={
             # Feedback deploys get a systemd drop-in capping the .NET client's
@@ -195,7 +196,7 @@ def run_ghosts_spinup(
     # P1: PHASE registration is fail-loud — consistent with spinup.py and
     # rampart.py. A registered-but-missing deploy means logs are invisible
     # to PHASE inference.
-    if not _register_phase(snippet_path, deployment, run_id, deploy_dir):
+    if not register_phase(snippet_path, deployment, run_id):
         output.error("")
         output.error("ABORTING: PHASE experiments.json registration failed.")
         output.error("GHOSTS VMs are running but won't appear in PHASE analysis.")
@@ -434,101 +435,6 @@ def _write_ssh_config(all_vms: list[dict], run_dir: Path, deployment_name: str) 
     lines.append("#############################################")
 
     (run_dir / "ssh_config_snippet.txt").write_text("\n".join(lines))
-
-
-# --- SSH Testing ---
-
-def _test_ssh_all(vms: list[dict], max_retries: int = 30, timeout: int = 10, delay: int = 5) -> int:
-    """Test SSH to all VMs with real-time per-VM output. Returns count of reachable."""
-    ok_count = 0
-
-    def _test_one(vm: dict) -> bool:
-        name = vm["name"]
-        ip = vm["ip"]
-        for attempt in range(1, max_retries + 1):
-            ts = time.strftime("%H:%M:%S")
-            try:
-                result = subprocess.run(
-                    ["ssh",
-                     "-i", str(Path.home() / ".ssh" / "id_ed25519"),
-                     "-o", "IdentitiesOnly=yes",
-                     "-o", "StrictHostKeyChecking=no",
-                     "-o", "UserKnownHostsFile=/dev/null",
-                     "-o", f"ConnectTimeout={timeout}",
-                     "-o", "ConnectionAttempts=1",
-                     "-o", "BatchMode=yes",
-                     "-o", "LogLevel=ERROR",
-                     f"ubuntu@{ip}", "echo ok"],
-                    capture_output=True, timeout=timeout + 5,
-                    env={**os.environ, "SSH_AUTH_SOCK": ""},
-                )
-                if result.returncode == 0:
-                    output.info(f"  [{ts}]    OK  {name} ({ip})")
-                    return True
-            except subprocess.TimeoutExpired:
-                pass
-
-            output.info(f"  [{ts}]    ..  {name} ({ip})  attempt {attempt}/{max_retries}")
-            time.sleep(delay)
-
-        ts = time.strftime("%H:%M:%S")
-        output.info(f"  [{ts}]    FAIL  {name} ({ip})  unreachable after {max_retries} attempts")
-        return False
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
-        futures = {pool.submit(_test_one, vm): vm for vm in vms}
-        for future in concurrent.futures.as_completed(futures):
-            if future.result():
-                ok_count += 1
-
-    return ok_count
-
-
-# --- Helpers ---
-
-def _register_phase(
-    snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path,
-) -> bool:
-    """Register GHOSTS deployment in PHASE experiments.json.
-
-    Returns True on success (or on skips that aren't failures — missing
-    snippet/script). Returns False when registration was attempted and
-    actually failed, so the caller can abort.
-    """
-    if not snippet_path.exists():
-        output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
-        return True
-
-    lib_dir = deploy_dir / "lib"
-    register_script = lib_dir / "register_experiment.py"
-    if not register_script.exists():
-        output.error(f"  WARNING: {register_script} not found — skipping PHASE registration")
-        return True
-
-    inventory_path = snippet_path.parent / "inventory.ini"
-
-    try:
-        result = subprocess.run(
-            [
-                "python3", str(register_script),
-                "--name", config_name,
-                "--snippet", str(snippet_path),
-                "--inventory", str(inventory_path),
-                "--run-id", run_id,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            output.info("  Registered in PHASE experiments.json")
-            return True
-        err = (result.stderr or result.stdout or "").strip()[:400]
-        output.error(f"  ERROR: PHASE registration FAILED (rc={result.returncode}): {err}")
-        return False
-    except Exception as e:
-        output.error(f"  ERROR: PHASE registration crashed ({type(e).__name__}): {e}")
-        return False
 
 
 def _find_ghosts_config(config_name: str | None, deploy_dir: Path) -> Path | None:

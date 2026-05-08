@@ -16,6 +16,7 @@ from ..core.ansible_runner import AnsibleRunner, default_event_handler
 from ..core.config import DeploymentConfig
 from ..core.ssh_config import install_ssh_config
 from ..core.vm_naming import make_ent_vm_prefix
+from ..core.deploy_steps import register_phase
 
 
 def run_rampart_spinup(
@@ -162,7 +163,7 @@ def run_rampart_spinup(
         # Linux endpoints: Ansible playbook (systemd service)
         runner = AnsibleRunner(deploy_dir / "logs")
         emu_result = runner.run_playbook(
-            "install-rampart-emulation.yaml",
+            "rampart/install-rampart-emulation.yaml",
             emulation_inventory,
             on_event=default_event_handler,
         )
@@ -208,7 +209,7 @@ def run_rampart_spinup(
     # fail-loud contract.
     snippet_path = run_dir / "ssh_config_snippet.txt"
     if snippet_path.exists():
-        if not _register_phase(snippet_path, deployment, run_id, deploy_dir):
+        if not register_phase(snippet_path, deployment, run_id):
             output.error("")
             output.error("ABORTING: PHASE experiments.json registration failed.")
             output.error("RAMPART VMs are running but won't appear in PHASE analysis.")
@@ -445,50 +446,6 @@ def _start_emulation(
         pass
     return None
 
-
-def _register_phase(
-    snippet_path: Path, config_name: str, run_id: str, deploy_dir: Path,
-) -> bool:
-    """Register RAMPART deployment in PHASE experiments.json.
-
-    Returns True on success (or on skips that aren't failures — missing
-    register script = dev env). Returns False when registration was
-    attempted and failed, so the caller can abort.
-    """
-    lib_dir = deploy_dir / "lib"
-    register_script = lib_dir / "register_experiment.py"
-    if not register_script.exists():
-        output.error(f"  WARNING: {register_script} not found — skipping PHASE registration")
-        return True
-
-    inventory_path = snippet_path.parent / "inventory.ini"
-
-    try:
-        cmd = [
-            "python3", str(register_script),
-            "--name", config_name,
-            "--snippet", str(snippet_path),
-            "--run-id", run_id,
-            "--start-date", time.strftime("%Y-%m-%d"),
-        ]
-        if inventory_path.exists():
-            cmd.extend(["--inventory", str(inventory_path)])
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            output.info("  Registered in PHASE experiments.json")
-            return True
-        err = (result.stderr or result.stdout or "").strip()[:400]
-        output.error(f"  ERROR: PHASE registration FAILED (rc={result.returncode}): {err}")
-        return False
-    except Exception as e:
-        output.error(f"  ERROR: PHASE registration crashed ({type(e).__name__}): {e}")
-        return False
 
 
 def _generate_emulation_inventory(
