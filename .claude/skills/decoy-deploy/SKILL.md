@@ -345,7 +345,7 @@ does NOT propagate. Hot-patch:
 
 1. `git push` from mlserv (INSTALL_SUP.sh and `decoys/*` are pulled from
    github at install time — clone URL in
-   `playbooks/install-sups.yaml::ruse_repo`)
+   `deployment_engine/playbooks/decoy/install-sups.yaml::ruse_repo`)
 2. SSH the VM, `cp` changed files into per-deploy `decoys/`
 3. `systemctl restart {svc}.service`
 

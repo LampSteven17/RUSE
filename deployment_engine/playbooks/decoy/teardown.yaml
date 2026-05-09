@@ -25,7 +25,7 @@
         deployment_id: "{{ deployment_id | default(deployment_name | regex_replace('-', '')) }}"
 
     - name: Assert vm_prefix passed by caller
-      # Callers (deployments/cli/commands/teardown.py) MUST pass vm_prefix
+      # Callers (deployment_engine/decoy/teardown.py) MUST pass vm_prefix
       # — otherwise the listing query matches the wrong VM cohort and the
       # playbook silently no-ops while reporting success. The legacy
       # `r-{deployment_id}-` default belongs to the bash-deploy era; DECOYs
