@@ -95,19 +95,22 @@ def run_teardown_filtered(
         if feedback_only and "-feedback-" not in config_dir.name:
             continue
 
-        # Per-run iteration
+        # Per-run iteration. Include EVERY run with local state, not just
+        # ones with live VMs on OpenStack — otherwise zombie runs (VMs
+        # deleted but local runs/{run_id}/ never cleaned up, e.g. after
+        # an interrupted deploy or a partial earlier teardown) are
+        # orphaned forever. Per-type teardown handles VMs-already-gone
+        # gracefully (prints "No VMs found", proceeds to local cleanup).
         runs_dir = config_dir / "runs"
         if not runs_dir.is_dir():
             continue
         for run_dir in sorted(runs_dir.iterdir()):
             if not run_dir.is_dir():
                 continue
-            if not _is_run_active(config_dir, run_dir, config_dir.name, run_dir.name, config):
-                continue
             matches.append((config_dir.name, run_dir.name, config_dir))
 
     if not matches:
-        output.info("No active deployments match the filter.")
+        output.info("No deployments match the filter.")
         return 0
 
     output.banner(f"FILTERED TEARDOWN — {len(matches)} deployments")
@@ -137,21 +140,6 @@ def run_teardown_filtered(
         return 1
     output.info(f"DONE: all {len(matches)} torn down")
     return 0
-
-
-def _is_run_active(
-    config_dir: Path, run_dir: Path, config_name: str, run_id: str,
-    config: DeploymentConfig,
-) -> bool:
-    """A run is "active" if any of its VMs still exist on OpenStack."""
-    os_client = OpenStack()
-    dep_id = make_dep_id(config_name, run_id)
-    if config.is_rampart():
-        return os_client.has_vms_with_prefix(make_ent_vm_prefix(dep_id))
-    elif config.is_ghosts():
-        return os_client.has_vms_with_prefix(make_ghosts_vm_prefix(dep_id))
-    else:
-        return os_client.has_vms_with_prefix(make_vm_prefix(dep_id))
 
 
 def run_teardown_all(deploy_dir: Path) -> int:
