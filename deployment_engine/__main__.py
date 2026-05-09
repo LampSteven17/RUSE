@@ -67,9 +67,12 @@ examples:
   ./deploy --ghosts                         controls + ALL GHOSTS feedback
   ./deploy --rampart --controls             RAMPART baseline only""",
     )
-    p.add_argument("--decoy", action="store_true", help="Deploy DECOY SUP agents (default)")
-    p.add_argument("--rampart", action="store_true", help="Deploy RAMPART enterprise network")
-    p.add_argument("--ghosts", action="store_true", help="Deploy GHOSTS NPC traffic generators")
+    p.add_argument("--decoy", "--decoys", action="store_true", dest="decoy",
+                   help="Deploy DECOY SUP agents (default; --decoys alias)")
+    p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
+                   help="Deploy RAMPART enterprise network (--ramparts alias)")
+    p.add_argument("--ghosts", "--ghost", action="store_true", dest="ghosts",
+                   help="Deploy GHOSTS NPC traffic generators (--ghost alias)")
     p.add_argument("config_name", nargs="?", help="Deployment config name (default: {type}-controls)")
 
     # Scope flags — opt into just controls, just feedback, or (default) both.
@@ -97,9 +100,12 @@ def _teardown_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", dest="teardown_all", help="Delete ALL DECOY, Enterprise, and GHOSTS VMs")
 
     # Filter flags for batch teardown
-    p.add_argument("--decoy", action="store_true", help="Filter: DECOY SUP deployments")
-    p.add_argument("--rampart", action="store_true", help="Filter: RAMPART enterprise deployments")
-    p.add_argument("--ghosts", action="store_true", help="Filter: GHOSTS NPC deployments")
+    p.add_argument("--decoy", "--decoys", action="store_true", dest="decoy",
+                   help="Filter: DECOY SUP deployments (--decoys alias)")
+    p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
+                   help="Filter: RAMPART enterprise deployments (--ramparts alias)")
+    p.add_argument("--ghosts", "--ghost", action="store_true", dest="ghosts",
+                   help="Filter: GHOSTS NPC deployments (--ghost alias)")
     p.add_argument("--feedback", action="store_true", help="Filter: only feedback-enabled deployments")
     return p
 
@@ -137,9 +143,12 @@ cross-deployment:
 
 Outputs a terminal summary + markdown report at deployments/logs/audit_*.md""",
     )
-    p.add_argument("--decoy", action="store_true", help="Audit DECOY deployments (default)")
-    p.add_argument("--rampart", action="store_true", help="Audit RAMPART deployments (not yet implemented)")
-    p.add_argument("--ghosts", action="store_true", help="Audit GHOSTS deployments (not yet implemented)")
+    p.add_argument("--decoy", "--decoys", action="store_true", dest="decoy",
+                   help="Audit DECOY deployments (default; --decoys alias)")
+    p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
+                   help="Audit RAMPART deployments (not yet implemented; --ramparts alias)")
+    p.add_argument("--ghosts", "--ghost", action="store_true", dest="ghosts",
+                   help="Audit GHOSTS deployments (not yet implemented; --ghost alias)")
     return p
 
 
