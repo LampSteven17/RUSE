@@ -115,7 +115,10 @@ def run_teardown_filtered(
         output.info(f"  {cn}/{rid}")
     output.info("")
 
-    if not output.confirm_destructive(f"Confirm teardown of {len(matches)} deployments?"):
+    # Single-step confirm — the listed deployments above already make the
+    # scope explicit, and the filter (e.g. --ghosts) is narrower than --all.
+    # The two-step "DELETE ALL" prompt is reserved for run_teardown_all.
+    if not output.confirm(f"Confirm teardown of {len(matches)} deployments?"):
         output.info("Teardown cancelled.")
         return 0
 
