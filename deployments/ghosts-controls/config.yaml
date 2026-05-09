@@ -3,12 +3,20 @@
 #
 # Deploys 1 API VM (Docker stack: ghosts-api, postgres, frontend, n8n, grafana)
 # plus N client VMs (GHOSTS universal client containers).
-# Baseline: default timeline, no PHASE feedback.
 #
 # Total VMs: 6 (1 api + 5 npc clients)
 
 deployment_name: ghosts-controls
 type: ghosts
+
+# PHASE owns the controls source of truth (post 2026-05-08). Per-NPC
+# timeline.json files at this path carry _phase_metadata.mode=controls;
+# the same per-NPC routing pipeline used for feedback consumes them, so
+# controls and feedback are bit-identical in shape — the difference is
+# purely in the timeline contents that PHASE emits. Without this,
+# controls deploys would fall back to the upstream cmu-sei/GHOSTS default
+# timeline, which is not under experiment control.
+behavior_source: /mnt/AXES2U1/feedback/ghosts-controls/controls
 
 ghosts:
   api_flavor: v1.14vcpu.28g

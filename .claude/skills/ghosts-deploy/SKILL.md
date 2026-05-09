@@ -17,7 +17,7 @@ behavioral timelines (BrowserFirefox, Bash, Curl handlers).
 | Manifest | PHASE source `manifest.json`; same loader as DECOY/RAMPART |
 | Upstream | PHASE feedback engine writes target-native per-NPC `timeline.json` directly (no translation layer) |
 | Downstream | PHASE Zeek pipeline (`PHASE.py --ghosts`) scoped by `start_date` |
-| Narrow exceptions | api-0 absent from feedback source (server VM, no timeline); baseline deploys with no `ghosts_timeline_file` host var fall back to playbook's default timeline |
+| Narrow exceptions | api-0 absent from PHASE source (server VM, no timeline). Both controls and feedback flow through the same per-NPC routing pipeline — controls are not a separate code path. |
 
 ## Topology
 
@@ -114,13 +114,20 @@ Routing flow (`ghosts.py::run_ghosts_spinup`):
 2. `_write_inventory()` accepts mapping, appends per-host
    `ghosts_timeline_file=/abs/path/{vm_name}.json` to each client line
 3. `install-ghosts-clients.yaml::Deploy PHASE-generated timeline` task
-   uses `{{ ghosts_timeline_file }}` per-host. Baseline deploys with no
-   var → playbook's default-timeline fallback runs
+   uses `{{ ghosts_timeline_file }}` per-host.
+
+Both controls and feedback go through this same flow. Post 2026-05-09,
+`ghosts-controls/config.yaml` declares
+`behavior_source: /mnt/AXES2U1/feedback/ghosts-controls/controls/`,
+where PHASE writes 5 per-NPC `timeline.json` files with
+`_phase_metadata.mode == "controls"`. Feedback datasets emit the same
+shape with `mode == "feedback"`. The deploy code doesn't branch on mode
+— the difference is purely in the timeline contents PHASE emits.
 
 Fail-loud (G6): if `behavior_source` has no `npc-*/timeline.json` files,
 deploy exits early. Partial coverage (some VMs missing timelines, or VMs
 without `npc-N` naming) raises `RuntimeError` — caller aborts. No silent
-fallback to default.
+fallback to upstream default.
 
 API VM never targeted: `install-ghosts-clients.yaml` has
 `hosts: ghosts_clients`; API VM is in `[ghosts_api]`.
