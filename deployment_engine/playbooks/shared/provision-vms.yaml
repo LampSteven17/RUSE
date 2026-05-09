@@ -31,7 +31,7 @@
         deployment_id: "{{ deployment_id | default(deployment_name | regex_replace('-', '')) }}"
 
     - name: Assert vm_prefix passed by caller
-      # Callers (deployments/cli/commands/spinup.py) MUST pass vm_prefix.
+      # Callers (deployment_engine/decoy/spinup.py) MUST pass vm_prefix.
       # The legacy default `r-{deployment_id}-` was correct for RAMPART
       # only — DECOY needs `d-`, GHOSTS `g-`. Defaulting silently routed
       # DECOY VMs to RAMPART's namespace and broke audit, teardown, and
