@@ -181,7 +181,7 @@ def finalize_teardown(
     Returns True on success, False if VMs are still alive (caller should
     return non-zero).
     """
-    from ...ssh_config import remove_ssh_config
+    from .ssh_config import remove_ssh_config
     remove_ssh_config(f"{config_name}/{run_id}")
 
     os_client = OpenStack()
