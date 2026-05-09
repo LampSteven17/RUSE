@@ -110,7 +110,7 @@
 
     - name: Stage Docker Hub credentials on VM
       copy:
-        src: "{{ item.decoys }}"
+        src: "{{ item.src }}"
         dest: "{{ item.dst }}"
         mode: '0600'
       loop:
