@@ -30,7 +30,7 @@ def run_ghosts_spinup(
     # If feedback args given but config is ghosts-controls, generate feedback config
     config_name = config_name or "ghosts-controls"
     if behavior_source and config_name == "ghosts-controls":
-        from .feedback import generate_ghosts_feedback_config
+        from ..core.feedback import generate_ghosts_feedback_config
         config_name = generate_ghosts_feedback_config(
             Path(behavior_source), configs_spec or "all", deploy_dir,
         )
