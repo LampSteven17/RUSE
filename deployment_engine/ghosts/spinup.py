@@ -27,8 +27,13 @@ def run_ghosts_spinup(
     configs_spec: str | None = None,
 ) -> int:
     """Deploy GHOSTS API + NPC client VMs."""
-    # If feedback args given but config is ghosts-controls, generate feedback config
     config_name = config_name or "ghosts-controls"
+
+    # Feedback args + ghosts-controls base → derive a feedback config dir
+    # (e.g. ghosts-feedback-stdctrls-fall24-all). Skip when behavior_source
+    # is None — that's the controls path (ghosts-controls/config.yaml's own
+    # behavior_source is picked up below as effective_source). Keeps controls
+    # deploys named ghosts-controls instead of getting a verbose derived dir.
     if behavior_source and config_name == "ghosts-controls":
         from ..core.feedback import generate_ghosts_feedback_config
         config_name = generate_ghosts_feedback_config(
@@ -42,6 +47,10 @@ def run_ghosts_spinup(
 
     deployment = config_dir.name
     config = DeploymentConfig.load(config_dir / "config.yaml")
+
+    # Source dispatch: explicit CLI behavior_source (feedback dataset) wins;
+    # else fall back to the deployment's own config.yaml (controls path).
+    effective_source = behavior_source or config.behavior_source
 
     client_count = config.ghosts_client_count()
     total_vms = 1 + client_count  # 1 API + N clients
@@ -59,8 +68,8 @@ def run_ghosts_spinup(
     output.info(f"  Run ID:    {run_id}")
     output.info(f"  VM prefix: {g_prefix}*")
     output.info(f"  Repo:      {config.ghosts_repo()} ({config.ghosts_branch()})")
-    if behavior_source:
-        output.info(f"  Feedback:  {behavior_source}")
+    if effective_source:
+        output.info(f"  Source:    {effective_source}")
         if configs_spec:
             output.info(f"  Configs:   {configs_spec}")
     output.info("")
@@ -88,12 +97,12 @@ def run_ghosts_spinup(
     # Fail loud on a feedback source with no npc-*/timeline.json — no
     # silent fallback to a single shared timeline.
     timeline_mapping: dict[str, Path] = {}
-    if behavior_source:
+    if effective_source:
         output.info("")
         output.info("  Routing PHASE per-NPC timelines...")
         try:
             timeline_mapping = _build_npc_timeline_mapping(
-                Path(behavior_source), client_vms, run_dir,
+                Path(effective_source), client_vms, run_dir,
             )
         except RuntimeError as e:
             # _build_npc_timeline_mapping already printed the detailed error
@@ -101,7 +110,7 @@ def run_ghosts_spinup(
             return 1
         if not timeline_mapping:
             output.error(
-                f"  FAILED: no npc-*/timeline.json files in {behavior_source}"
+                f"  FAILED: no npc-*/timeline.json files in {effective_source}"
             )
             output.error(
                 "  Expected PHASE Stage 2 layout with "
@@ -168,8 +177,11 @@ def run_ghosts_spinup(
             # Feedback deploys get a systemd drop-in capping the .NET client's
             # memory, mitigating the upstream cmu-sei/GHOSTS memleak. Controls
             # stay on the pure upstream unit (leaky-as-designed) so they
-            # remain experimentally pristine.
-            "is_feedback": "true" if behavior_source else "false",
+            # remain experimentally pristine. Now that ghosts-controls also
+            # carries a behavior_source (PHASE-emitted controls timelines),
+            # distinguish via the config_name shape: feedback runs deploy
+            # under `ghosts-feedback-*`, controls under `ghosts-controls`.
+            "is_feedback": "true" if config_name.startswith("ghosts-feedback-") else "false",
         },
         on_event=default_event_handler,
     )

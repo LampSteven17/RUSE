@@ -26,8 +26,13 @@ def run_rampart_spinup(
     configs_spec: str | None = None,
 ) -> int:
     """Deploy RAMPART enterprise network."""
-    # If feedback args given but config is rampart-controls, generate feedback config
     config_name = config_name or "rampart-controls"
+
+    # Feedback args + rampart-controls base → derive a feedback config dir.
+    # Skip when behavior_source is None — that's the controls path
+    # (rampart-controls/config.yaml's own behavior_source is picked up below
+    # as effective_source). Keeps controls deploys named rampart-controls
+    # instead of getting a verbose derived dir.
     if behavior_source and config_name == "rampart-controls":
         from ..core.feedback import generate_rampart_feedback_config
         config_name = generate_rampart_feedback_config(
@@ -42,6 +47,10 @@ def run_rampart_spinup(
     deployment = config_dir.name
     config = DeploymentConfig.load(config_dir / "config.yaml")
     wdir = config.enterprise_workflow_dir()
+
+    # Source dispatch: explicit CLI behavior_source (feedback dataset) wins;
+    # else fall back to the deployment's own config.yaml (controls path).
+    effective_source = behavior_source or config.behavior_source
 
     run_id = time.strftime("%m%d%y%H%M%S")
     run_dir = config_dir / "runs" / run_id
@@ -59,8 +68,8 @@ def run_rampart_spinup(
     output.info(f"  Workflow:  {wdir}")
     output.info(f"  Run ID:    {run_id}")
     output.info(f"  VM prefix: {ent_prefix}*")
-    if behavior_source:
-        output.info(f"  Feedback:  {behavior_source}")
+    if effective_source:
+        output.info(f"  Source:    {effective_source}")
     output.info("")
 
     # Snapshot config
@@ -117,10 +126,10 @@ def run_rampart_spinup(
     user_roles_file = config.enterprise_user_roles()
     enterprise_config_file = config.enterprise_config_file()
 
-    if behavior_source:
+    if effective_source:
         output.info("  Generating PHASE-informed user roles...")
         feedback_result = _generate_feedback_user_roles(
-            behavior_source=Path(behavior_source),
+            behavior_source=Path(effective_source),
             baseline_user_roles=wdir / config.enterprise_user_roles(),
             enterprise_config=run_dir / "enterprise-config-prefixed.json",
             output_dir=run_dir,

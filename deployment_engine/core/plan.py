@@ -213,11 +213,22 @@ def execute_plan(
     for i, task in enumerate(plan, 1):
         output.info("")
         output.info(f"[{i}/{len(plan)}] Deploying {task['label']}...")
-        src = task["behavior_source"]
+        # Controls runs deploy under their own config name ({type}-controls),
+        # not a derived feedback-style dir. The controls config.yaml already
+        # declares behavior_source, so spinup picks it up at load time —
+        # passing it again here would route through generate_feedback_config
+        # and create a parallel `decoy-feedback-stdctrls-contro-all/` dir
+        # with the verbose name + duplicated state. is_controls=True signals
+        # spinup to skip that branch.
+        if task["is_controls"]:
+            spinup_source: str | None = None
+        else:
+            src = task["behavior_source"]
+            spinup_source = str(src) if src else None
         try:
             rc = spinup(
                 base_config, deploy_dir,
-                str(src) if src else None,
+                spinup_source,
                 task["configs_spec"],
             )
         except SystemExit as e:
