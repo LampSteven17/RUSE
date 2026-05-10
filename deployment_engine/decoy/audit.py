@@ -47,11 +47,12 @@ from ..core.openstack import OpenStack
 
 
 EXPERIMENTS_JSON = Path("/mnt/AXES2U1/experiments.json")
-# V2+ calibrated agents can sleep up to ~1h between activity clusters
-# (CalibratedTiming.inter_cluster delay), so log freshness must allow for that
-# plus headroom. 4 hours catches genuinely stuck agents while ignoring normal
-# idle windows.
-LOG_FRESHNESS_SECS = 14400  # 4 hours
+# Window-mode SUPs (post 2026-05-08) sleep through OFF windows. With
+# typical schedules a SUP can legitimately have no activity for the
+# longest gap between ON windows — up to ~16h on sparse-window
+# datasets. 24h catches genuinely stuck agents (no activity across a
+# full day of windows) while not firing during normal off windows.
+LOG_FRESHNESS_SECS = 86400  # 24 hours (was 4h pre window-mode)
 
 # Expected ollama model per behavior (mirrors INSTALL_SUP.sh resolution)
 def expected_model(behavior: str) -> str | None:
@@ -244,8 +245,21 @@ fi
 
 
 def _classify_vm(vm: dict, probe: dict) -> dict:
-    """Apply pass/fail rules per check. Returns dict of check → status."""
+    """Apply pass/fail rules per check. Returns dict of check → status.
+
+    Mode-aware (post 2026-05-08): controls SUPs run a no-LLM no-GPU
+    no-bg-counter floor (decoys/brains/controls/runner.py). For controls,
+    model / gpu / warnings / volume checks are structurally inapplicable
+    and resolve to n/a rather than FAIL — matching the reality of what's
+    deployed. Feedback SUPs keep all checks active.
+    """
     behavior = vm["behavior"]
+    # Controls SUPs serve a different runtime — the controls runner
+    # (decoys/brains/controls/runner.py) does fixed-query requests.get
+    # in a windowed loop. No Ollama, no GPU, no D4 background_services,
+    # no LLM-driven warning surface. Several DECOY-feedback-era checks
+    # don't apply and should resolve to n/a, not FAIL.
+    is_controls = probe.get("WIN_STATE") == "CONTROLS"
     checks = {}
 
     # 1. SSH
@@ -286,12 +300,16 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         proc_count = int(probe.get("PROC_COUNT", "0") or "0")
         checks["process"] = "OK" if proc_count > 0 else f"FAIL (0 procs)"
 
-    # 4. Ollama model loaded matches expected
-    # Note: Ollama unloads idle models after OLLAMA_KEEP_ALIVE (default 5m).
+    # 4. Ollama model loaded matches expected.
+    # Controls runner disables LLM (llm_calls_enabled=false in controls
+    # behavior.json) → no model expected, n/a.
+    # Otherwise: Ollama unloads idle models after OLLAMA_KEEP_ALIVE (5m).
     # "Not loaded" is only a failure if the agent isn't otherwise healthy.
     expected = expected_model(behavior)
     actual = probe.get("OLLAMA_MODEL", "none")
-    if expected is None:
+    if is_controls:
+        checks["model"] = "n/a (controls)"
+    elif expected is None:
         checks["model"] = "n/a"
     elif actual == expected:
         checks["model"] = "OK"
@@ -300,8 +318,11 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     else:
         checks["model"] = f"WRONG ({actual})"
 
-    # 5. GPU model loaded (V100 should show >5GB VRAM if model is GPU-loaded)
-    if not needs_gpu(behavior):
+    # 5. GPU model loaded (V100 should show >5GB VRAM if model is GPU-loaded).
+    # Controls disables LLM → no GPU usage either.
+    if is_controls:
+        checks["gpu"] = "n/a (controls)"
+    elif not needs_gpu(behavior):
         checks["gpu"] = "n/a"
     else:
         vram = int(probe.get("VRAM_MIB", "0") or "0")
@@ -370,13 +391,16 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     info_count = int(probe.get("INFO_COUNT", "0") or "0")
     warn_g1 = int(probe.get("WARN_G1_COUNT", "0") or "0")
     # MCHP brains don't use LLMs — G1 prompt_augmentation warnings are
-    # structurally inapplicable. Subtract from the unexpected-warning total
-    # so M-brains don't perpetually FAIL the audit. Fix at source would be
-    # to skip the G1 emit on M-brains in the runtime; this audit-side
-    # subtraction handles it without needing a brain-runtime change.
+    # structurally inapplicable. Subtract from the unexpected-warning total.
     if behavior.startswith("M"):
         warn_count = max(0, warn_count - warn_g1)
-    if behavior in ("C0", "M0"):
+    # Controls runner doesn't use the feedback warning framework
+    # (D1/D2/D3/D4/G1 etc.); it logs its own [controls] info lines.
+    # Whatever lands in WARN_COUNT for a controls SUP would be runtime
+    # surprises (network errors, etc.) — surface as INFO counts only.
+    if is_controls:
+        checks["warnings"] = "n/a (controls)"
+    elif behavior in ("C0", "M0"):
         checks["warnings"] = "n/a"
     elif warn_count == 0 and info_count == 0:
         checks["warnings"] = "OK"
@@ -429,15 +453,20 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     except ValueError:
         win_target = 0.0
         win_median = 0.0
+    # Controls runner doesn't use D4 background_services.py — no
+    # [bg-counter] lines ever land in systemd.log. Volume is structurally
+    # n/a for controls SUPs.
     if behavior in ("C0", "M0"):
         checks["volume"] = "n/a"
-    elif win_state not in ("FEEDBACK", "CONTROLS") or win_target <= 0:
+    elif is_controls:
+        checks["volume"] = "n/a (controls)"
+    elif win_state != "FEEDBACK" or win_target <= 0:
         checks["volume"] = "n/a"
     else:
         ratio = win_median / win_target if win_target > 0 else 0.0
         if win_median <= 0:
-            # No counter samples yet — recently-deployed VMs see this for
-            # ~1 hour. Don't penalize; flag for visibility.
+            # No counter samples yet — recently-deployed feedback VMs see
+            # this for ~1 hour. Transient, not a failure.
             checks["volume"] = f"PENDING (no bg-counter samples)"
         elif ratio >= 0.7:
             checks["volume"] = f"OK ({win_median:.0f}/{win_target:.0f})"
