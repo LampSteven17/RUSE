@@ -1028,9 +1028,16 @@ install_agent() {
         # Create systemd service
         create_systemd_service "$service_name" "$deploy_dir"
 
-        # Start service
-        log "Starting $service_name service..."
-        sudo systemctl start "${service_name}.service"
+        # Start service (unless deploy flow asked us to wait — the deploy
+        # ordering wants behavior.json to land via distribute-behavior-configs
+        # before the service starts, otherwise the brain's mandatory-config
+        # check crash-loops the service 60-100x while distribute runs).
+        if [[ "${RUSE_NO_SERVICE_START:-0}" == "1" ]]; then
+            log "RUSE_NO_SERVICE_START=1 — skipping start, distribute step will start the service."
+        else
+            log "Starting $service_name service..."
+            sudo systemctl start "${service_name}.service"
+        fi
     fi
 
     echo ""

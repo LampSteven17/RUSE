@@ -114,12 +114,19 @@
     - name: "Stage 2: ollama + python + services"
       shell: |
         cd {{ ruse_path }}
-        ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
+        RUSE_NO_SERVICE_START=1 ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
       args:
         executable: /bin/bash
       async: 1800
       poll: 30
       register: stage2_result
+      # RUSE_NO_SERVICE_START=1: install + enable, do NOT start. The mandatory
+      # behavior.json check crash-loops the service 60-100x between INSTALL_SUP.sh
+      # finishing and distribute-behavior-configs.yaml landing the file — those
+      # restarts inflate NRestarts permanently and pollute the audit forever.
+      # distribute-behavior-configs.yaml starts the service AFTER the file is in
+      # place. M0 (which skips distribute and is expected to crash on Linux) gets
+      # started at the tail of THIS playbook.
 
     - name: Assert Stage 2 succeeded
       # S3: Previously stage2_result.rc was registered but never explicitly
@@ -183,3 +190,15 @@
       when:
         - sup_behavior is match('^M[0-9]')
         - (cron_count.stdout | default('0') | trim | int) < 2
+
+    # M0 has no behavior.json (read-only upstream control) and skips
+    # distribute-behavior-configs.yaml entirely. Start it here, since the
+    # stage-2 install left every service stopped (RUSE_NO_SERVICE_START=1).
+    # M0 is expected to crash-loop on Linux (Windows-only os.startfile()) — the
+    # audit reports `EXPECTED (M0 upstream crashes on Linux)` and treats it as
+    # the baseline. C0 has no service installed at all, so it needs no start.
+    - name: Start M0 service (skips distribute, no behavior.json required)
+      when: sup_behavior == 'M0'
+      systemd:
+        name: m0.service
+        state: started
