@@ -107,6 +107,15 @@ echo "SVC=$SVC"
 # rapid restarts. Today's RAMPART D5 arg-mismatch bug had services with
 # NRestarts=2185 over 12hrs but audit reported them as healthy.
 echo "NRESTARTS=$(systemctl show {svc} -p NRestarts --value 2>/dev/null || echo 0)"
+# Seconds the service has been continuously active. Combined with NRESTARTS,
+# this distinguishes "currently crash-looping" (active a few seconds) from
+# "stabilized after early restarts" (active for hours despite high cumulative
+# count). Without this, a service that crash-looped 71 times for 6 minutes
+# during deploy then ran healthy for 7h still showed FAIL on audit.
+ACTIVE_ENTER=$(systemctl show {svc} -p ActiveEnterTimestampMonotonic --value 2>/dev/null || echo 0)
+NOW_MONO=$(awk '{{print int($1)}}' /proc/uptime)
+ACTIVE_ENTER_SEC=$(( ACTIVE_ENTER / 1000000 ))
+echo "SVC_UPTIME_S=$(( NOW_MONO - ACTIVE_ENTER_SEC ))"
 echo "PROC_COUNT=$(pgrep -f 'runners.run_' 2>/dev/null | wc -l)"
 OLLAMA=$(curl -s --max-time 5 http://localhost:11434/api/ps 2>/dev/null)
 if [ -n "$OLLAMA" ]; then
@@ -284,14 +293,22 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     else:
         svc_state = probe.get("SVC", "?")
         nrestarts = int(probe.get("NRESTARTS", "0") or "0")
-        # H4: A service that's "active" right now but with a high restart count
-        # is in a crash loop, not healthy. Flag if NRestarts > 10.
-        if svc_state == "active" and nrestarts > 10:
-            checks["service"] = f"FAIL (crash-looping, {nrestarts} restarts)"
-        elif svc_state == "active":
-            checks["service"] = "OK" if nrestarts == 0 else f"OK ({nrestarts} restarts)"
-        else:
+        svc_uptime = int(probe.get("SVC_UPTIME_S", "0") or "0")
+        # NRestarts is cumulative — never decays. A service that crash-looped
+        # 71x during deploy (install-sups.yaml starts the service before
+        # distribute-behavior-configs.yaml lands behavior.json) and then ran
+        # healthy for 7h still reports NRestarts=71 forever. Treat continuous
+        # uptime ≥ 600s as authoritative "stable now": don't flag crash-loop
+        # on a service that's clearly past the early failure window.
+        STABLE_UPTIME_S = 600
+        if svc_state != "active":
             checks["service"] = f"FAIL ({svc_state}, {nrestarts} restarts)"
+        elif svc_uptime >= STABLE_UPTIME_S:
+            checks["service"] = "OK" if nrestarts == 0 else f"OK ({nrestarts} restarts, stable {svc_uptime//60}m)"
+        elif nrestarts > 10:
+            checks["service"] = f"FAIL (crash-looping, {nrestarts} restarts, up {svc_uptime}s)"
+        else:
+            checks["service"] = "OK" if nrestarts == 0 else f"OK ({nrestarts} restarts)"
 
     # 3. Process
     if behavior in ("C0", "M0"):

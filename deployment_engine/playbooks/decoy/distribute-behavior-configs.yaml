@@ -151,3 +151,58 @@
               on {{ inventory_hostname }} after distribution. Copy step above did
               not produce the file.
           when: not vm_behavior_json.stat.exists
+
+        # ── Start service AFTER behavior.json lands ────────────────────
+        # install-sups.yaml ran INSTALL_SUP.sh with RUSE_NO_SERVICE_START=1, so
+        # the service is enabled but stopped. Now that behavior.json is on disk
+        # the brain's mandatory-config check will pass on first start — no
+        # crash-loop, no inflated NRestarts, audit stays clean. systemd module
+        # uses `state: started` (idempotent) rather than restart, so a re-run
+        # of distribute on an already-running service doesn't bounce it.
+        - name: Derive systemd unit name
+          set_fact:
+            sup_service_name: "{{ sup_behavior | lower | replace('.', '_') }}.service"
+
+        - name: Start SUP service (post behavior.json land)
+          systemd:
+            name: "{{ sup_service_name }}"
+            state: started
+            daemon_reload: yes
+
+        - name: Wait for service to settle and probe state
+          # Brain startup (Ollama warmup, Selenium init, model load) takes
+          # 5-30s. Poll every 5s up to 30s for the service to reach `active`.
+          # `pause` would have been simpler but it's incompatible with
+          # `strategy: free`, so use a retry-until shell probe — same effect,
+          # plus we exit early if it's already up.
+          shell: |
+            STATE=$(systemctl is-active {{ sup_service_name }} 2>/dev/null || echo unknown)
+            NR=$(systemctl show {{ sup_service_name }} -p NRestarts --value 2>/dev/null || echo 0)
+            echo "state=${STATE} nrestarts=${NR}"
+          register: svc_probe
+          changed_when: false
+          retries: 6
+          delay: 5
+          until: "'state=active' in svc_probe.stdout"
+          # Don't fail the play here — the explicit assertion task below produces
+          # a richer error message with the log path. This task only polls.
+          failed_when: false
+
+        - name: Assert SUP service is active and not crash-looping
+          # NRestarts > 5 immediately after start means the brain is still
+          # rejecting something — even with behavior.json on disk. Most likely
+          # cause: schema mismatch (PHASE bumped contract, RUSE didn't catch
+          # up), Ollama unreachable, or workflow registration error. Surface
+          # journalctl in the failure message so the operator doesn't have to
+          # SSH to figure out what's broken.
+          fail:
+            msg: >-
+              {{ sup_service_name }} on {{ inventory_hostname }} is
+              {{ svc_probe.stdout }} after 30s. behavior.json IS on disk
+              ({{ ruse_path }}/deployed_sups/{{ sup_behavior }}/behavioral_configurations/behavior.json),
+              but the service won't stabilize. Check
+              `tail /opt/ruse/deployed_sups/{{ sup_behavior }}/logs/systemd_error.log`
+              on the VM.
+          when: >-
+            'state=active' not in svc_probe.stdout
+            or (svc_probe.stdout | regex_search('nrestarts=([0-9]+)', '\\1') | first | int) > 5
