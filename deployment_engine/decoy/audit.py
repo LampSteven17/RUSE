@@ -155,10 +155,16 @@ if [ -n "$SYSLOG" ]; then
   # and should not count against the VM. [INFO] tag explicitly excluded.
   echo "WARN_COUNT=$(grep -c '\\[WARNING\\]' "$SYSLOG" 2>/dev/null || echo 0)"
   echo "INFO_COUNT=$(grep -c '\\[INFO\\].*ablation-gated' "$SYSLOG" 2>/dev/null || echo 0)"
+  # G1 prompt_augmentation warnings are structurally inapplicable to MCHP
+  # brains (no LLM, no prompt). The runtime emits them anyway every
+  # cluster boundary. Counted separately so _classify_vm can subtract for
+  # M-brains.
+  echo "WARN_G1_COUNT=$(grep -c '\\[WARNING\\] G1 prompt_augmentation' "$SYSLOG" 2>/dev/null || echo 0)"
   echo "WARN_LINES=$(grep '\\[WARNING\\]' "$SYSLOG" 2>/dev/null | tail -10 | tr '\\n' '|')"
 else
   echo "WARN_COUNT=0"
   echo "INFO_COUNT=0"
+  echo "WARN_G1_COUNT=0"
   echo "WARN_LINES="
 fi
 # Window-mode probe (PHASE 2026-05-08, simplified). Emit WIN_STATE /
@@ -362,6 +368,14 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     # "real bug".
     warn_count = int(probe.get("WARN_COUNT", "0") or "0")
     info_count = int(probe.get("INFO_COUNT", "0") or "0")
+    warn_g1 = int(probe.get("WARN_G1_COUNT", "0") or "0")
+    # MCHP brains don't use LLMs — G1 prompt_augmentation warnings are
+    # structurally inapplicable. Subtract from the unexpected-warning total
+    # so M-brains don't perpetually FAIL the audit. Fix at source would be
+    # to skip the G1 emit on M-brains in the runtime; this audit-side
+    # subtraction handles it without needing a brain-runtime change.
+    if behavior.startswith("M"):
+        warn_count = max(0, warn_count - warn_g1)
     if behavior in ("C0", "M0"):
         checks["warnings"] = "n/a"
     elif warn_count == 0 and info_count == 0:
@@ -376,8 +390,10 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     # V2+ calibrated agents also sleep ~1h between clusters via inter_cluster
     # timing delays. If service + process are alive, the agent is OK even if
     # the model is currently unloaded — it'll reload on next inference.
+    # Use startswith so "OK (4 restarts)" (line 272 — restart counts ≤10
+    # are still healthy) counts as alive, not just bare "OK".
     agent_alive = (
-        checks.get("service") == "OK"
+        checks.get("service", "").startswith("OK")
         and checks.get("process") == "OK"
     )
     for k in ("model", "gpu"):
@@ -599,21 +615,30 @@ def run_audit(deploy_dir: Path) -> int:
         except OSError:
             pass
 
-    # Per-VM check failures → issues
+    # Per-VM check failures → issues. PENDING is a transient
+    # bg-counter-not-yet-populated state, not a failure — skip it so the
+    # issues list stays focused on real problems the operator can act on.
     for dep, vm, probe, checks in all_results:
         for check_name, status in checks.items():
             if (status != "?"
                 and not status.startswith("OK")
                 and not status.startswith("n/a")
-                and not status.startswith("EXPECTED")):
+                and not status.startswith("EXPECTED")
+                and not status.startswith("PENDING")):
                 issues.append(f"{dep['name']}-{dep['run_id']}/{vm['name']}: {check_name}={status}")
-        # Surface warning details from runtime logs
+        # Surface warning details from runtime logs. M-brain G1
+        # prompt_augmentation lines are inapplicable (no LLM); skip those
+        # to match the warnings-column subtraction above.
         warn_lines = probe.get("WARN_LINES", "")
+        is_mchp = vm["behavior"].startswith("M")
         if warn_lines:
             for w in warn_lines.split("|"):
                 w = w.strip()
-                if w:
-                    issues.append(f"{dep['name']}-{dep['run_id']}/{vm['name']}: {w}")
+                if not w:
+                    continue
+                if is_mchp and "G1 prompt_augmentation" in w:
+                    continue
+                issues.append(f"{dep['name']}-{dep['run_id']}/{vm['name']}: {w}")
 
     # Per-deployment summary
     output.info("")
@@ -677,7 +702,13 @@ def run_audit(deploy_dir: Path) -> int:
 
 
 def _row_status(checks: dict) -> str:
-    """Compact one-char-per-check status string for terminal."""
+    """Compact one-char-per-check status string for terminal.
+
+    Legend: . = pass, P = pending (fresh deploy), W = warn, X = fail,
+    ? = unknown. PENDING is a transient state — bg-counter takes ~1h
+    to populate after deploy. Don't render it as fail, the user's
+    eye will keep tracking it.
+    """
     parts = []
     for k in ("ssh", "service", "process", "model", "gpu", "log", "cron",
               "feedback", "warnings", "window", "volume"):
@@ -686,6 +717,8 @@ def _row_status(checks: dict) -> str:
             parts.append(".")
         elif v == "?":
             parts.append("?")
+        elif v.startswith("PENDING"):
+            parts.append("P")
         elif v.startswith("WARN"):
             parts.append("W")
         else:
