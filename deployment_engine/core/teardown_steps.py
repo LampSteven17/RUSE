@@ -51,19 +51,23 @@ def make_dep_id(deployment_name: str, run_id: str) -> str:
 def cleanup_orphaned_volumes(os_client: OpenStack) -> int:
     """Delete orphaned boot volumes (nameless, 200GB, available).
 
-    Returns the number deleted.
+    All three subsystems provision 200GB boot disks; one shared filter.
+
+    Returns the number deleted. Batches IDs into one CLI call — each
+    `openstack` invocation is ~17s of python+auth overhead, so deleting
+    23 orphans serially used to add ~6 min on top of VM teardown.
     """
     orphans = os_client.find_orphaned_volumes(size=200)
     if not orphans:
         return 0
-    deleted = 0
-    for v in orphans:
-        vid = v.get("ID", v.get("id", ""))
-        if vid and os_client.volume_delete(vid):
-            deleted += 1
-    if deleted:
-        output.info(f"  Cleaned up {deleted} orphaned boot volumes")
-    return deleted
+    ids = [v.get("ID", v.get("id", "")) for v in orphans]
+    ids = [i for i in ids if i]
+    if not ids:
+        return 0
+    if os_client.volume_delete_many(ids):
+        output.info(f"  Cleaned up {len(ids)} orphaned boot volumes")
+        return len(ids)
+    return 0
 
 
 def close_phase_experiment(config_name: str) -> None:

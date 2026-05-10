@@ -525,7 +525,7 @@ def _provision_and_install_neighborhood(
         f"  echo EXISTS; exit 0; "
         f"else "
         f"  openstack server create "
-        f"    --flavor {flavor} --image {image} --boot-from-volume 40 "
+        f"    --flavor {flavor} --image {image} --boot-from-volume 200 "
         f"    --network {network} --key-name {keypair} "
         f"    --security-group {security_group} "
         f"    --property deployment={dep_id} "
