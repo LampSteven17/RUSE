@@ -216,11 +216,25 @@ else
   echo "WIN_TARGET=0"
 fi
 if [ -n "$SYSLOG" ]; then
+  # Distinguish three states for the Volume column:
+  #   - 0 bg-counter lines TOTAL → D4 not running (real issue)
+  #   - bg-counter lines exist but none with in_window=1 → window cadence
+  #     hasn't aligned with audit time yet (transient PENDING)
+  #   - bg-counter lines with in_window=1 → real volume measurement
+  # Earlier the probe only emitted the in-window median, so the audit
+  # couldn't tell "D4 broken" from "haven't hit a window yet" and reported
+  # both as `PENDING (no bg-counter samples)`.
+  WIN_VOL_TOTAL=$(grep -c '\\[bg-counter\\]' "$SYSLOG" 2>/dev/null || echo 0)
+  WIN_VOL_INWIN=$(grep -c '\\[bg-counter\\].*in_window=1' "$SYSLOG" 2>/dev/null || echo 0)
   WIN_VOL_MEDIAN=$(grep '\\[bg-counter\\].*in_window=1' "$SYSLOG" 2>/dev/null \\
     | tail -60 | awk -F'conns=' 'NF>1{{print $2}}' | awk '{{print $1}}' \\
     | sort -n | awk 'BEGIN{{c=0}} {{a[++c]=$1}} END{{if(c==0){{print 0;exit}} print a[int((c+1)/2)]}}')
+  echo "WIN_VOL_TOTAL=${{WIN_VOL_TOTAL:-0}}"
+  echo "WIN_VOL_INWIN=${{WIN_VOL_INWIN:-0}}"
   echo "WIN_VOL_MEDIAN=${{WIN_VOL_MEDIAN:-0}}"
 else
+  echo "WIN_VOL_TOTAL=0"
+  echo "WIN_VOL_INWIN=0"
   echo "WIN_VOL_MEDIAN=0"
 fi
 """
@@ -467,9 +481,13 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     try:
         win_target = float(probe.get("WIN_TARGET", "0") or "0")
         win_median = float(probe.get("WIN_VOL_MEDIAN", "0") or "0")
+        win_total_samples = int(probe.get("WIN_VOL_TOTAL", "0") or "0")
+        win_inwin_samples = int(probe.get("WIN_VOL_INWIN", "0") or "0")
     except ValueError:
         win_target = 0.0
         win_median = 0.0
+        win_total_samples = 0
+        win_inwin_samples = 0
     # Controls runner doesn't use D4 background_services.py — no
     # [bg-counter] lines ever land in systemd.log. Volume is structurally
     # n/a for controls SUPs.
@@ -481,10 +499,21 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         checks["volume"] = "n/a"
     else:
         ratio = win_median / win_target if win_target > 0 else 0.0
-        if win_median <= 0:
-            # No counter samples yet — recently-deployed feedback VMs see
-            # this for ~1 hour. Transient, not a failure.
-            checks["volume"] = f"PENDING (no bg-counter samples)"
+        if win_total_samples == 0:
+            # D4 never emitted a counter line. Either the daemon isn't
+            # running or systemd.log got rotated. Real issue.
+            checks["volume"] = "PENDING (no bg-counter samples)"
+        elif win_inwin_samples == 0:
+            # Counter is running but the active windows haven't aligned
+            # with the audit timing yet. Some datasets have sparse windows
+            # (~26% of minutes); a fresh deploy can run 1-2h between any
+            # in-window sample. Transient, not a failure.
+            checks["volume"] = f"PENDING ({win_total_samples} samples, no in-window yet)"
+        elif win_median <= 0:
+            # In-window samples exist but every one logged conns=0. Either
+            # D4 ran but failed to make any connection (network issue) or
+            # the SUP only just entered its first window. Borderline.
+            checks["volume"] = f"PENDING ({win_inwin_samples} in-window samples, all conns=0)"
         elif ratio >= 0.7:
             checks["volume"] = f"OK ({win_median:.0f}/{win_target:.0f})"
         elif ratio >= 0.4:

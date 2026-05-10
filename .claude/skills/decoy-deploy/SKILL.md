@@ -84,9 +84,16 @@ Dataset target aliases (`core/feedback.py::DATASET_TARGETS`): `sum24` →
 2. SSH connectivity test (Python `concurrent.futures`, 20 workers) —
    abort if < 90% reachable
 3. Install (`install-sups.yaml`) — stage1 system deps → reboot (exit 100)
-   → stage2 brain deps + systemd service. C0 skipped. M0 special path.
+   → stage2 brain deps + systemd service. INSTALL_SUP.sh runs with
+   `RUSE_NO_SERVICE_START=1` so the service is enabled but NOT started —
+   distribute starts it (next phase) once behavior.json is on disk. M0 is
+   started here (it skips distribute, expected to crash on Linux). C0 skipped.
 4. Distribute behavior configs (`distribute-behavior-configs.yaml`) —
-   abort spinup if rc != 0
+   copy + JSON-validate + on-VM stat assert, then `systemd state=started`,
+   poll up to 30s for `state=active` AND `NRestarts ≤ 5`, abort if either
+   fails. With this ordering NRestarts stays at 0 on a clean deploy
+   (pre-fix it sat at 60-100 from crash-loops in the install→distribute gap).
+   C0/M0 skip via `meta: end_host`.
 5. Neighborhood sidecar (feedback only, gated on non-zero
    `topology_mimicry`)
 6. SSH config install (`install_ssh_config()` writes block to
@@ -137,15 +144,20 @@ match the shape PHASE emits verbatim.
   "_metadata": {"source", "sup_config", "dataset", "current_score", "target_score",
                 "generated_at", "mode", "ablation_gate", "timezone": "UTC"},
   "timing": {
-    "hourly_distribution": [24 floats],
-    "activity_probability_per_hour": [24 floats 0..1],
-    "long_idle_probability": 0.05,
-    "long_idle_duration_minutes": {"min": 30, "max": 120},
+    "active_minute_windows": [[start_min, end_min), ...],   // hard 0/1 schedule
+    "target_conn_per_minute_during_active": 7.0,
+    "min_window_minutes": 15,
+    "hard_fence_seconds": 90,
     "burst_percentiles": {
       "connections_per_burst":  {"5","25","50","75","95","max"},
       "idle_gap_minutes":       {"5","25","50","75","95"},
       "burst_duration_minutes": {"5","25","50","75","95"}
     },
+    // hourly_distribution / activity_probability_per_hour / long_idle_*
+    // were the pre-window soft schedule. Window-mode (2026-05-08)
+    // replaced them with active_minute_windows + per-minute target rate.
+    // PHASE no longer emits them. RUSE defaults hourly_fractions to
+    // uniform [1/24]*24 if absent — windows gate the real schedule.
     "variance": {
       "cluster_size_sigma": 0.5, "idle_gap_sigma": 0.5,
       "hourly_std_targets": {
@@ -288,8 +300,9 @@ Loader (`load_behavioral_config`) → consumers:
 
 | behavior.json path | BehavioralConfig field | Consumer |
 |---|---|---|
-| `timing.hourly_distribution` | `timing_profile` | `CalibratedTimingConfig.hourly_fractions` |
+| `timing.active_minute_windows` + `target_conn_per_minute_during_active` + `min_window_minutes` + `hard_fence_seconds` | `timing_profile` | `phase_timing.update_window_contract` → window gate in `emulation_loop` + D4 deficit-burst in `background_services` |
 | `timing.burst_percentiles.*` | `timing_profile` | `CalibratedTimingConfig.{burst_duration,idle_gap,connections_per_burst}` |
+| `timing.hourly_distribution` (legacy, vestigial) | `timing_profile` | `CalibratedTimingConfig.hourly_fractions` — defaults uniform when absent; windows gate the real schedule |
 | `timing.variance.cluster_size_sigma` | `variance_injection` | `get_cluster_size()` lognormal noise |
 | `timing.variance.idle_gap_sigma` | `variance_injection` | `get_cluster_delay()` lognormal noise |
 | `timing.variance.hourly_std_targets.{volume,duration}.hourly_std_target` | `variance_injection` | D1 per-hour sigma in `_init_variance_targets` |
@@ -355,7 +368,7 @@ Or teardown + redeploy.
 
 Per-VM checks across all DECOY VMs. Key columns:
 
-- `Service` — `systemctl is-active` + NRestarts probe; `FAIL (crash-looping, N restarts)` when active but NRestarts > 10
+- `Service` — `systemctl is-active` + NRestarts + uptime probe. NRestarts is cumulative and never decays, so a service with high restart count from past crash-loops is still treated as `OK (N restarts, stable Mm)` if it's been continuously active ≥ 600s. Only services active < 600s with NRestarts > 10 are flagged `FAIL (crash-looping)`.
 - `M0` — reports `EXPECTED (M0 upstream crashes on Linux)`
 - `Fdbk` — checks for exactly 1 `behavior.json` in `/opt/ruse/deployed_sups/*/behavioral_configurations/`
 - `Warn` — counts `[WARNING]` vs `[INFO]` separately:
