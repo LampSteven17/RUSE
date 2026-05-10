@@ -7,6 +7,7 @@ from __future__ import annotations
 from .core.vm_naming import (
     make_ent_vm_prefix, make_ghosts_vm_prefix, make_vm_prefix,
 )
+import os
 import re
 import time
 from pathlib import Path
@@ -125,14 +126,67 @@ def run_teardown_filtered(
         output.info("Teardown cancelled.")
         return 0
 
+    # Parallel fan-out via subprocess. Each child runs its own teardown
+    # CLI invocation in isolation — own OpenStack auth, own session log,
+    # own ansible runs. Concurrency-safe because:
+    #   - ~/.ssh/config edits are fcntl-locked (core/ssh_config.py)
+    #   - experiments.json read-modify-write is fcntl-locked
+    #     (core/teardown_steps.py::close_phase_experiment)
+    #   - per-deploy state lives in distinct config_dir/runs/{rid}/ trees
+    #   - OpenStack handles concurrent server/volume DELETEs natively
+    # Sequential serial run was 8 × ~3min = ~25min; parallel run is bounded
+    # by the slowest single teardown (~3min).
+    import subprocess
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    repo_root = Path(__file__).resolve().parent.parent
+    teardown_script = repo_root / "teardown"
+    logs_dir = deploy_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    parallel_ts = _time.strftime("%Y%m%d-%H%M%S")
+
+    def _one(idx: int, cn: str, rid: str) -> tuple[int, str, str, int, Path, float]:
+        target = f"{cn}-{rid}"
+        log_path = logs_dir / f"teardown-parallel-{parallel_ts}-{cn}-{rid}.log"
+        t0 = _time.monotonic()
+        with open(log_path, "w") as log_f:
+            log_f.write(f"# Parallel teardown child for {target}\n# Started {_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            log_f.flush()
+            # CI=1 keeps the child non-interactive (it has nothing to confirm —
+            # the parent already collected the y/N for the whole batch).
+            env = {**os.environ, "CI": "1"}
+            proc = subprocess.run(
+                [str(teardown_script), target],
+                cwd=str(repo_root),
+                stdout=log_f, stderr=subprocess.STDOUT,
+                env=env,
+            )
+        elapsed = _time.monotonic() - t0
+        return idx, cn, rid, proc.returncode, log_path, elapsed
+
+    output.info(f"Running {len(matches)} teardowns in parallel...")
+    output.info("(per-deployment output captured to logs/teardown-parallel-*.log)")
+    output.info("")
+
     failures = 0
-    for i, (cn, rid, _) in enumerate(matches, 1):
-        output.info("")
-        output.info(f"[{i}/{len(matches)}] Tearing down {cn}-{rid}...")
-        rc = run_teardown(f"{cn}-{rid}", deploy_dir)
-        if rc != 0:
-            failures += 1
-            output.error(f"  FAILED: {cn}-{rid} (rc={rc})")
+    completed = 0
+    with ThreadPoolExecutor(max_workers=len(matches)) as ex:
+        futures = [
+            ex.submit(_one, i, cn, rid)
+            for i, (cn, rid, _) in enumerate(matches, 1)
+        ]
+        for fut in as_completed(futures):
+            idx, cn, rid, rc, log_path, elapsed = fut.result()
+            completed += 1
+            status = "OK  " if rc == 0 else f"FAIL"
+            ts = _time.strftime("%H:%M:%S")
+            output.info(
+                f"  [{ts}] [{completed}/{len(matches)}] {status}  {cn}-{rid}  "
+                f"({int(elapsed//60)}m{int(elapsed%60):02d}s)  →  {log_path.name}"
+            )
+            if rc != 0:
+                failures += 1
 
     output.info("")
     if failures:

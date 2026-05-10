@@ -131,7 +131,10 @@ class AnsibleRunner:
         # no nested directory). Without this the / in the playbook name made
         # the log path point at a non-existent subdir.
         log_stem = playbook.replace(".yaml", "").replace("/", "--")
-        log_path = self.logs_dir / f"ansible-{log_stem}-{_timestamp()}.log"
+        # PID suffix avoids collision when parallel teardown spawns N child
+        # processes that each invoke this runner with the same wall-clock ts.
+        import os as _os
+        log_path = self.logs_dir / f"ansible-{log_stem}-{_timestamp()}-{_os.getpid()}.log"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = [

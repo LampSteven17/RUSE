@@ -60,11 +60,19 @@
 
     - name: Get volume IDs attached to SUP servers
       # Sync — same async-loses-stdout reason as the listing task above.
+      #
+      # Earlier this ran `openstack server show` once per VM in a loop —
+      # 7 servers × ~10s each in API+auth overhead = 70s. Replaced with a
+      # single `--long` listing that returns Volumes Attached for every
+      # server in one call. Output column format is a Python list-of-dicts
+      # repr (e.g. `[{'id': 'abc-123'}, ...]`), so we extract IDs with a
+      # regex rather than parsing the row format.
       shell: |
         source {{ os_rc_file }}
-        for server in $(openstack server list -f value -c Name | awk '/^{{ vm_prefix }}/'); do
-          openstack server show "$server" -f json | jq -r '.volumes_attached[]?.id' 2>/dev/null || true
-        done
+        openstack server list --long -f value -c Name -c 'Volumes Attached' \
+          | awk '/^{{ vm_prefix }}/' \
+          | grep -oE "id='[^']+'" \
+          | sed "s/id='//; s/'//" || true
       args:
         executable: /bin/bash
       register: volume_ids
@@ -108,16 +116,26 @@
       ignore_errors: yes
 
     - name: Delete orphaned SUP volumes
+      # Parallelized via bash `&` + `wait`: each `openstack volume delete`
+      # is ~5s of API overhead, so sequential delete of 7+ volumes was
+      # ~35s. Backgrounding all of them and waiting cuts that to ~5-7s.
       shell: |
         source {{ os_rc_file }}
-        for vol in $(openstack volume list -f value -c ID -c Name | awk '$2 ~ /^{{ vm_prefix }}/{print $1}'); do
-          openstack volume delete "$vol" || true
-        done
+        # Collect IDs (prefix-matched names + the IDs we found from the
+        # attached-volumes query above), dedupe, parallel-delete.
+        TMPF=$(mktemp)
+        openstack volume list -f value -c ID -c Name \
+          | awk '$2 ~ /^{{ vm_prefix }}/{print $1}' >> "$TMPF"
         {% for vol_id in (volume_ids.stdout_lines | default([])) %}
         {% if vol_id | trim | length > 0 %}
-        openstack volume delete "{{ vol_id }}" 2>/dev/null || true
+        echo "{{ vol_id | trim }}" >> "$TMPF"
         {% endif %}
         {% endfor %}
+        sort -u "$TMPF" | while read -r vol; do
+          [ -n "$vol" ] && openstack volume delete "$vol" >/dev/null 2>&1 &
+        done
+        wait
+        rm -f "$TMPF"
       args:
         executable: /bin/bash
       when: server_list.stdout | length > 0 or (volume_ids is defined and volume_ids.stdout | default('') | length > 0)

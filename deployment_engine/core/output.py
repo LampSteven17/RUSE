@@ -16,9 +16,12 @@ _session_log_path = None  # Path, set by start_session_log()
 def start_session_log(logs_dir: Path, command: str) -> Path:
     """Open a session log file. All subsequent _write() calls are teed to it."""
     global _session_log, _session_log_path
+    import os
     logs_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
-    log_path = logs_dir / f"session-{command}-{ts}.log"
+    # PID suffix avoids collision when parallel teardown fans out N children
+    # all starting within the same wall-clock second.
+    log_path = logs_dir / f"session-{command}-{ts}-{os.getpid()}.log"
     _session_log = open(log_path, "w")
     _session_log_path = log_path
     _session_log.write(f"# RUSE CLI session: {command} at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
