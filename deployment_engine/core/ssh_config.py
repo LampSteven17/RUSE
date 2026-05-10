@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import output
@@ -11,6 +14,28 @@ from . import output
 DEFAULT_SSH_CONFIG = Path.home() / ".ssh" / "config"
 MARKER_PREFIX = "# BEGIN RUSE: "
 MARKER_SUFFIX = "# END RUSE: "
+
+
+@contextmanager
+def _ssh_config_lock(ssh_config: Path):
+    """Hold an exclusive fcntl lock on a sidecar lockfile while editing
+    ~/.ssh/config. Parallel teardowns (subprocess fan-out) and concurrent
+    deploys must not clobber each other's read-modify-write of the config —
+    one such race wiped 4 deploys' Host blocks during a parallel teardown
+    test on 2026-05-10.
+    """
+    lock_path = ssh_config.with_suffix(ssh_config.suffix + ".ruse.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
 
 
 def install_ssh_config(
@@ -40,17 +65,18 @@ def install_ssh_config(
 
     ssh_config.parent.mkdir(parents=True, exist_ok=True)
 
-    if ssh_config.exists():
-        # Remove existing block for this deployment, then append
-        existing = ssh_config.read_text()
-        cleaned = _remove_block(existing, marker_begin, marker_end)
-        cleaned = cleaned.rstrip("\n")
-        new_content = f"{cleaned}\n\n{block}\n" if cleaned else f"{block}\n"
-        ssh_config.write_text(new_content)
-    else:
-        ssh_config.write_text(f"{block}\n")
+    with _ssh_config_lock(ssh_config):
+        if ssh_config.exists():
+            # Remove existing block for this deployment, then append
+            existing = ssh_config.read_text()
+            cleaned = _remove_block(existing, marker_begin, marker_end)
+            cleaned = cleaned.rstrip("\n")
+            new_content = f"{cleaned}\n\n{block}\n" if cleaned else f"{block}\n"
+            ssh_config.write_text(new_content)
+        else:
+            ssh_config.write_text(f"{block}\n")
 
-    ssh_config.chmod(0o600)
+        ssh_config.chmod(0o600)
 
     host_count = sum(1 for line in snippet.splitlines() if line.strip().startswith("Host "))
     output.success(f"  SSH config installed ({host_count} entries)")
@@ -66,13 +92,14 @@ def remove_ssh_config(deploy_name: str, ssh_config: Path | None = None) -> None:
     marker_begin = f"{MARKER_PREFIX}{deploy_name}"
     marker_end = f"{MARKER_SUFFIX}{deploy_name}"
 
-    content = ssh_config.read_text()
-    if marker_begin not in content:
-        return
+    with _ssh_config_lock(ssh_config):
+        content = ssh_config.read_text()
+        if marker_begin not in content:
+            return
 
-    cleaned = _remove_block(content, marker_begin, marker_end).rstrip("\n") + "\n"
-    ssh_config.write_text(cleaned)
-    ssh_config.chmod(0o600)
+        cleaned = _remove_block(content, marker_begin, marker_end).rstrip("\n") + "\n"
+        ssh_config.write_text(cleaned)
+        ssh_config.chmod(0o600)
     output.dim(f"  Removed SSH config for {deploy_name}")
 
 
