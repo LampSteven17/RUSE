@@ -1,6 +1,6 @@
 ---
 name: decoy-audit
-description: DECOY audit — `./audit --decoy` runs 11 per-VM SSH probes + 5 cross-deployment consistency checks across every active DECOY deployment. Code in `deployment_engine/decoy/audit.py`. Outputs terminal table + markdown report at `deployments/logs/audit_*.md`. The only audit currently implemented; --rampart and --ghosts are stubs (see /rampart-audit, /ghosts-audit). Per-VM behavior.json window-mode states, NRestarts crash-loop detection, Ollama+GPU IDLE-vs-FAIL, feature-warning grep, and orphan-VM/missing-inventory diff vs OpenStack. SSH probe inlined (not via Ansible) for parallel speed + per-VM real-time output.
+description: DECOY audit — `./audit --decoy` runs 11 per-VM SSH probes + 5 cross-deployment consistency checks across every active DECOY deployment. Code in `deployment_engine/decoy/audit.py`. Outputs terminal table + markdown report at `deployments/logs/audit_*.md`. GHOSTS audit is also implemented (see /ghosts-audit); --rampart is still a stub (see /rampart-audit). Per-VM behavior.json window-mode states, NRestarts crash-loop detection, Ollama+GPU IDLE-vs-FAIL, feature-warning grep, and orphan-VM/missing-inventory diff vs OpenStack. SSH probe inlined (not via Ansible) for parallel speed + per-VM real-time output.
 ---
 
 # decoy-audit
@@ -36,7 +36,8 @@ Probe collects:
 | key | meaning |
 |---|---|
 | `SVC` | `systemctl is-active {svc}` |
-| `NRESTARTS` | `systemctl show {svc} -p NRestarts` |
+| `NRESTARTS` | `systemctl show {svc} -p NRestarts` (cumulative, never decays) |
+| `SVC_UPTIME_S` | seconds since `ActiveEnterTimestampMonotonic` — used to ignore stale NRestarts from past crash-loops |
 | `PROC_COUNT` | `pgrep -f 'runners.run_'` |
 | `OLLAMA_MODEL` | `curl localhost:11434/api/ps` first model name |
 | `VRAM_MIB` | `nvidia-smi --query-gpu=memory.used` |
@@ -53,7 +54,7 @@ Probe collects:
 | col | check | source |
 |---|---|---|
 | SSH | reachable | probe rc |
-| Svc | systemd active + NRestarts ≤ 10 | `SVC` + `NRESTARTS` |
+| Svc | systemd active AND (uptime ≥ 600s OR NRestarts ≤ 10) | `SVC` + `NRESTARTS` + `SVC_UPTIME_S` |
 | Proc | brain process running | `PROC_COUNT >= 1` |
 | Model | Ollama loaded matches `expected_model(behavior)` | `OLLAMA_MODEL` |
 | GPU | V100 VRAM ≥ 5 GB | `VRAM_MIB` |
@@ -137,9 +138,10 @@ new behaviors.
 
 | constant | value | purpose |
 |---|---|---|
-| `LOG_FRESHNESS_SECS` | 14400 (4h) | catches stuck agents past inter-cluster sleep window |
+| `LOG_FRESHNESS_SECS` | 86400 (24h) | catches stuck agents past inter-cluster sleep window |
 | `EXPERIMENTS_JSON` | `/mnt/AXES2U1/experiments.json` | PHASE registration table |
-| service NRestarts threshold | 10 | flips Service from OK to `crash-looping` |
+| service NRestarts threshold | 10 | only flips Service to `crash-looping` if uptime < 600s; high NRestarts on a stable service is reported as `OK (N restarts, stable Mm)` |
+| `STABLE_UPTIME_S` | 600 | continuous-active gate that suppresses NRestarts noise from past crash-loops |
 | Vol OK / WARN ratios | 0.7 / 0.4 | median conn/min vs target_conn_per_minute_during_active |
 
 ## Common usage

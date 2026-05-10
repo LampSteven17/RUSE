@@ -408,18 +408,30 @@ def build_calibrated_timing_config(timing_profile: dict):
     """Build a CalibratedTimingConfig from the behavior.json timing section.
 
     timing_profile is the raw `timing` dict from behavior.json:
-      hourly_distribution:  [24 floats summing to 1]
+      active_minute_windows: [[start,end), ...]   # hard 0/1 schedule per minute
+      target_conn_per_minute_during_active: float # rate inside ON-windows
+      min_window_minutes:    int
+      hard_fence_seconds:    int
       burst_percentiles:
         connections_per_burst: {"5":..,"25":..,"50":..,"75":..,"95":..,"max":..}
         idle_gap_minutes:      {"5":..,"25":..,"50":..,"75":..,"95":..}
         burst_duration_minutes:{"5":..,"25":..,"50":..,"75":..,"95":..}
+      hourly_distribution:   OPTIONAL — vestigial from the pre-window schema.
+
+    Window-mode (2026-05-08) replaced the soft hourly-fractions approach
+    with hard active_minute_windows + per-minute target rate. PHASE no
+    longer emits hourly_distribution because windows fully specify the
+    schedule (off outside windows; target N conn/min inside). If it's
+    absent, default to uniform — the window gate enforces the real
+    schedule, so hourly is a no-op anyway.
     """
     from common.timing.phase_timing import CalibratedTimingConfig
 
     burst = timing_profile["burst_percentiles"]
+    hourly = timing_profile.get("hourly_distribution") or [1.0 / 24] * 24
     return CalibratedTimingConfig(
         dataset="feedback",
-        hourly_fractions=timing_profile["hourly_distribution"],
+        hourly_fractions=hourly,
         burst_duration=burst["burst_duration_minutes"],
         idle_gap=burst["idle_gap_minutes"],
         connections_per_burst=burst["connections_per_burst"],

@@ -180,26 +180,21 @@ class BaseEmulationLoop(ABC):
             from common.timing.phase_timing import CalibratedTiming
             old_last_activity = (self._phase_timing._last_activity_time
                                  if self._phase_timing else None)
-            try:
-                config = build_calibrated_timing_config(fc.timing_profile)
-                self._phase_timing = CalibratedTiming(
-                    config,
-                    variance_config=fc.variance_injection,
-                )
-                self._phase_timing._last_activity_time = old_last_activity
-                if self.logger:
-                    self.logger.info("[behavior] Hot-swapped timing_profile",
-                                     details={"dataset": config.dataset})
-            except (KeyError, TypeError) as e:
-                # Controls schema may not nest burst_percentiles the way
-                # CalibratedTiming expects; fall back to no-calibrated-timing
-                # so the gate still works (it only needs the windows).
-                self._phase_timing = None
-                if self.logger:
-                    self.logger.info(
-                        f"[behavior] timing_profile schema lean "
-                        f"(mode={fc.mode}) — running gate-only",
-                        details={"error": str(e)[:120]})
+            # No try/except. Earlier this swallowed KeyError/TypeError and
+            # set _phase_timing=None — which silently disabled the window
+            # gate AND D4 deficit-burst because both depend on _phase_timing.
+            # Result: every feedback SUP ran 24/7 ungated and bg-counter
+            # logged in_window=0 forever. If the schema is malformed, the
+            # build call must fail loud so the deploy/audit catches it.
+            config = build_calibrated_timing_config(fc.timing_profile)
+            self._phase_timing = CalibratedTiming(
+                config,
+                variance_config=fc.variance_injection,
+            )
+            self._phase_timing._last_activity_time = old_last_activity
+            if self.logger:
+                self.logger.info("[behavior] Hot-swapped timing_profile",
+                                 details={"dataset": config.dataset})
         elif self.calibration_profile and self._phase_timing is None:
             from common.timing.phase_timing import CalibratedTiming, load_calibration_profile
             config = load_calibration_profile(self.calibration_profile)
