@@ -26,6 +26,7 @@ Layout (post 2026-05-08 restructure):
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 from pathlib import Path
@@ -81,6 +82,11 @@ examples:
 
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory (single)")
     p.add_argument("--target", type=str, help="Dataset target, e.g. summer24, fall24, vt-50gb, cptc8 (single)")
+    # Parallel batch deploys. Default 3 workers when the plan has >1 task;
+    # `--parallel 1` forces the legacy serial path. Going wider than ~4 has
+    # historically hit OpenStack provision 503s on 8x simultaneous calls.
+    p.add_argument("--parallel", type=int, default=3,
+                   help="Concurrent deploys when plan has >1 task (default: 3, set 1 for serial)")
     return p
 
 
@@ -122,7 +128,7 @@ def _audit_parser() -> argparse.ArgumentParser:
         epilog="""subsystem flags (mutually exclusive; default --decoy):
   --decoy     audit DECOY SUP deployments (default)
   --rampart   audit RAMPART enterprise deployments (not yet implemented)
-  --ghosts    audit GHOSTS NPC deployments (not yet implemented)
+  --ghosts    audit GHOSTS NPC deployments
 
 DECOY checks per VM:
   - SSH reachable
@@ -148,7 +154,7 @@ Outputs a terminal summary + markdown report at deployments/logs/audit_*.md""",
     p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
                    help="Audit RAMPART deployments (not yet implemented; --ramparts alias)")
     p.add_argument("--ghosts", "--ghost", action="store_true", dest="ghosts",
-                   help="Audit GHOSTS deployments (not yet implemented; --ghost alias)")
+                   help="Audit GHOSTS deployments (--ghost alias)")
     return p
 
 
@@ -267,7 +273,13 @@ def _cmd_deploy(argv: list[str]) -> int:
     if not show_plan_and_confirm(plan, deploy_type):
         return 0
 
-    return execute_plan(plan, deploy_type, args.config_name, DEPLOY_DIR)
+    # Children spawned by parallel fan-out should never re-fan-out
+    # themselves (they each handle exactly one task). Force parallel=1
+    # in child invocations regardless of the inherited --parallel arg.
+    is_child = os.environ.get("RUSE_BATCH_CHILD") == "1"
+    parallel = 1 if is_child else max(1, int(args.parallel))
+    return execute_plan(plan, deploy_type, args.config_name, DEPLOY_DIR,
+                        parallel=parallel)
 
 
 
