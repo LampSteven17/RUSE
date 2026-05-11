@@ -63,7 +63,7 @@ Probe collects:
 | Fdbk | exactly one `behavior.json` in `behavioral_configurations/` | `BC_FILES + BC_HAS_BEHAVIOR` |
 | Warn | 0 `[WARNING]`s; ablation-gated `[INFO]`s reported separately | `WARN_COUNT + INFO_COUNT` |
 | Win | window-mode contract — see below | `WIN_STATE` |
-| Vol | median bg-conn/min during ON-windows ≥ 70% of target | `WIN_VOL_MEDIAN` vs `WIN_TARGET` |
+| BG | median D4-only bg-conn/min during ON-windows ≥ 30% of target (floor check — brain workflow conns NOT counted) | `WIN_VOL_MEDIAN` vs `WIN_TARGET` |
 
 ## Window-mode column states (post 2026-05-08)
 
@@ -74,15 +74,27 @@ Probe collects:
 | `parse_error` | `FAIL (behavior.json parse error)` | malformed JSON |
 | anything else | `FAIL (mode=X — contract violated)` | schema regression / version skew |
 
-## Volume column (post 2026-05-08)
+## BG column (post 2026-05-10)
 
 `bg-counter` log lines emitted by `decoys/common/background_services.py`
 are scraped from systemd.log. Last 60 in-window samples → median. State:
 
-- `OK ({median}/{target})` when ratio ≥ 0.7
-- `WARN (..., ratio X)` when ≥ 0.4
+- `OK ({median}/{target} D4-only)` when ratio ≥ 0.3
+- `WARN (..., ratio X)` when ≥ 0.15
 - `FAIL (..., ratio X)` below
-- `PENDING (no bg-counter samples)` for fresh VMs (~first hour after deploy)
+- `PENDING (no bg-counter samples)` — D4 daemon not emitting
+- `PENDING (N samples, no in-window yet)` — bg-counter running, just hasn't aligned with a window yet (typical for fresh deploys; sparse-window datasets can take 1-2h)
+- `PENDING (N in-window samples, all conns=0)` — D4 ran in-window but every minute logged 0 conns
+
+**Critical caveat — this is a D4-FLOOR check, NOT a total-network-rate
+check.** The bg-counter ONLY tracks D4 background-service probes
+(`background_services.py`: dns/http_head/ntp/smb/etc.). Brain workflow
+connections (browse_web, google_search, etc.) are NOT counted.
+Ground-truthed on 2026-05-10 with tcpdump: real total outbound was
+~35 conn/min vs target 7 while bg-counter alone reported 2-3 on the
+same SUP. Thresholds are deliberately loose because workflows dominate
+the actual emitted traffic; this column only flags "D4 isn't running
+at all." If `Win=OK` but `BG=FAIL`, the SUP is almost certainly fine.
 
 ## IDLE → OK / FAIL post-pass
 
@@ -113,7 +125,7 @@ Run after every per-VM probe completes:
 
 Written to `deployments/logs/audit_{YYYYMMDD-HHMMSS}.md`. Two sections:
 
-1. Summary table (one row per deployment, 13 columns including run_id and Win+Vol counts)
+1. Summary table (one row per deployment, 13 columns including run_id and Win+BG counts)
 2. Per-deployment per-VM detail (every check verbatim)
 
 The `_row_status()` helper emits a 11-char compact status string
@@ -142,7 +154,7 @@ new behaviors.
 | `EXPERIMENTS_JSON` | `/mnt/AXES2U1/experiments.json` | PHASE registration table |
 | service NRestarts threshold | 10 | only flips Service to `crash-looping` if uptime < 600s; high NRestarts on a stable service is reported as `OK (N restarts, stable Mm)` |
 | `STABLE_UPTIME_S` | 600 | continuous-active gate that suppresses NRestarts noise from past crash-loops |
-| Vol OK / WARN ratios | 0.7 / 0.4 | median conn/min vs target_conn_per_minute_during_active |
+| BG OK / WARN ratios | 0.3 / 0.15 | median D4-only conn/min vs target_conn_per_minute_during_active (deliberately loose — D4 is one stochastic contributor; workflows dominate total traffic) |
 
 ## Common usage
 
