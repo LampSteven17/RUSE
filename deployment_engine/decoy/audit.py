@@ -15,7 +15,8 @@ Per-VM checks (via SSH probe):
    9. Feature warnings from runtime (D1-G3 [WARNING] in systemd.log)
   10. Window-mode contract — _metadata.mode ∈ {feedback, controls}.
       States: OK feedback / OK controls / FAIL (mode=...) / FAIL (parse_error)
-  11. Volume — median bg-conn/min during ON-windows vs target
+  11. BG — median D4-only bg-conn/min during ON-windows (floor check;
+      brain workflow conns are NOT counted here)
 
 Cross-deployment consistency:
   - Inventory ↔ OpenStack orphan/missing detection
@@ -26,7 +27,7 @@ Cross-deployment consistency:
 
 Outputs:
   - Terminal summary table (11 check columns: SSH/Svc/Proc/Model/GPU/
-    Logs/Cron/Fdbk/Warn/Win/Vol)
+    Logs/Cron/Fdbk/Warn/Win/BG)
   - Markdown report at deployments/logs/audit_<timestamp>.md
 """
 
@@ -475,9 +476,17 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     else:
         checks["window"] = f"FAIL (mode={win_state} — contract violated)"
 
-    # 11. Volume — median bg-conn/min during ON-windows vs target.
-    # Self-reported counter, undercounts (excludes brain workflow conns).
-    # Threshold: ≥ target × 0.7 = OK; ≥ target × 0.4 = WARN; below = FAIL.
+    # 11. BG — median D4-only bg-conn/min during ON-windows vs target.
+    # CRITICAL: this counter ONLY tracks D4 background-service probes
+    # (dns/http_head/ntp/etc). Brain workflow conns (browse_web,
+    # google_search, etc.) are NOT counted. tcpdump ground-truth on
+    # 2026-05-10 showed real total outbound ~35 conn/min vs target 7
+    # while bg-counter alone reported 2-3 conn/min on the same SUP.
+    # So this column is an "is D4 emitting *something* reasonable" floor
+    # check, NOT a total-network-rate check. Thresholds are deliberately
+    # loose: ratios under ~0.15 mean D4 isn't running at all; above that
+    # is fine because workflows dominate the total anyway.
+    # Threshold: ≥ target × 0.3 = OK; ≥ target × 0.15 = WARN; below = FAIL.
     try:
         win_target = float(probe.get("WIN_TARGET", "0") or "0")
         win_median = float(probe.get("WIN_VOL_MEDIAN", "0") or "0")
@@ -514,12 +523,12 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
             # D4 ran but failed to make any connection (network issue) or
             # the SUP only just entered its first window. Borderline.
             checks["volume"] = f"PENDING ({win_inwin_samples} in-window samples, all conns=0)"
-        elif ratio >= 0.7:
-            checks["volume"] = f"OK ({win_median:.0f}/{win_target:.0f})"
-        elif ratio >= 0.4:
-            checks["volume"] = f"WARN ({win_median:.0f}/{win_target:.0f}, ratio {ratio:.2f})"
+        elif ratio >= 0.3:
+            checks["volume"] = f"OK ({win_median:.0f}/{win_target:.0f} D4-only)"
+        elif ratio >= 0.15:
+            checks["volume"] = f"WARN ({win_median:.0f}/{win_target:.0f} D4-only, ratio {ratio:.2f})"
         else:
-            checks["volume"] = f"FAIL ({win_median:.0f}/{win_target:.0f}, ratio {ratio:.2f})"
+            checks["volume"] = f"FAIL ({win_median:.0f}/{win_target:.0f} D4-only, ratio {ratio:.2f})"
 
     return checks
 
@@ -725,7 +734,7 @@ def run_audit(deploy_dir: Path) -> int:
         by_dep[(dep["name"], dep["run_id"])].append((vm, probe, checks))
 
     headers = ["Deployment", "VMs", "SSH", "Svc", "Proc", "Model", "GPU",
-               "Logs", "Cron", "Fdbk", "Warn", "Win", "Vol"]
+               "Logs", "Cron", "Fdbk", "Warn", "Win", "BG"]
     rows = []
 
     def _ok(v: str) -> bool:
@@ -827,7 +836,7 @@ def _write_markdown(
 
     lines.append("## Summary")
     lines.append("")
-    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | Volume |")
+    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     def _ok(v: str) -> bool:
@@ -870,7 +879,7 @@ def _write_markdown(
     for (name, rid), entries in sorted(by_dep.items()):
         lines.append(f"### `{name}-{rid}`")
         lines.append("")
-        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | Volume |")
+        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG |")
         lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for vm, probe, checks in sorted(entries, key=lambda e: e[0]["name"]):
             lines.append(
