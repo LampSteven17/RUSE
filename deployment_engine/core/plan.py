@@ -182,6 +182,13 @@ def show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
     if n == 1 and plan[0]["is_controls"]:
         return True
 
+    # Children spawned by parallel fan-out skip the interactive confirm —
+    # the parent already collected y/N for the whole batch. Without this
+    # gate, every child would hang waiting for stdin that doesn't exist.
+    import os as _os
+    if _os.environ.get("RUSE_BATCH_CHILD") == "1":
+        return True
+
     if not output.confirm(f"Deploy these {n} config(s)?"):
         output.info("Cancelled.")
         return False
@@ -190,9 +197,17 @@ def show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
 
 def execute_plan(
     plan: list[dict], deploy_type: str, config_name: str | None,
-    deploy_dir: Path,
+    deploy_dir: Path, parallel: int = 1,
 ) -> int:
-    """Run each task in the plan sequentially. Returns 0 iff all succeed.
+    """Run each task in the plan. Returns 0 iff all succeed.
+
+    parallel: 1 = serial (legacy); >1 = subprocess fan-out with that many
+    concurrent workers. Each child invokes ./deploy as its own process with
+    RUSE_BATCH_CHILD=1 so it skips the confirm prompt and the batch summary.
+    Concurrency safety is shared with the teardown fan-out path:
+      - ~/.ssh/config and experiments.json are fcntl-locked
+      - session log + ansible log paths get pid suffixes
+      - each task deploys into a disjoint config_dir/runs/{rid}/ tree
 
     Lazy-imports the per-type spinup so this module doesn't pull in all
     three subsystems unconditionally.
@@ -209,6 +224,11 @@ def execute_plan(
 
     base_config = config_name or default_config
     results: list[tuple[str, int]] = []
+
+    if parallel > 1 and len(plan) > 1:
+        return _execute_plan_parallel(
+            plan, deploy_type, deploy_dir, max_workers=parallel,
+        )
 
     for i, task in enumerate(plan, 1):
         output.info("")
@@ -251,6 +271,115 @@ def execute_plan(
     failed = sum(1 for _, rc in results if rc != 0)
     if failed:
         output.info(f"DONE: {len(results) - failed}/{len(results)} succeeded, {failed} failed")
+        return 1
+    output.info(f"DONE: all {len(results)} deployment(s) launched")
+    return 0
+
+
+def _execute_plan_parallel(
+    plan: list[dict], deploy_type: str, deploy_dir: Path,
+    *, max_workers: int,
+) -> int:
+    """Subprocess fan-out across plan tasks. Bounded by max_workers.
+
+    Same approach as filtered teardown: each plan task becomes its own
+    ./deploy CLI invocation with RUSE_BATCH_CHILD=1 to skip the confirm
+    prompt. Per-child stdout/stderr captured to a log file; parent prints
+    one-line status as each completes.
+
+    Why subprocess rather than threads: the output module is process-global
+    state (session log handle, stderr writes). Threading would interleave
+    all 8 deploys' output into one stream. Subprocess gives each child its
+    own session log path (pid-suffixed) and a clean per-child log file.
+
+    Risk: max_workers=3 default keeps OpenStack provisioning + apt mirror
+    + ollama model pull concurrency reasonable. Going wider (e.g. workers=8
+    for a full batch) is allowed but operators have hit OpenStack 503s on
+    8 simultaneous provision calls historically.
+    """
+    import os
+    import subprocess
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    deploy_script = repo_root / "deploy"
+    logs_dir = deploy_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    batch_ts = _time.strftime("%Y%m%d-%H%M%S")
+
+    def _cmd_for_task(task: dict) -> list[str]:
+        """Reduce a plan task to the CLI flags that produce exactly that task.
+
+        Controls → `./deploy --{type} --controls`.
+        Feedback → `./deploy --{type} --feedback --source <abs path>`
+        (--source bypasses dataset-alias resolution so we don't depend
+        on aliases agreeing across two code paths).
+        """
+        cmd = [str(deploy_script), f"--{deploy_type}"]
+        if task["is_controls"]:
+            cmd.append("--controls")
+        else:
+            cmd += ["--feedback", "--source", str(task["behavior_source"])]
+        return cmd
+
+    def _slug(label: str) -> str:
+        # `decoy-feedback: axes-summer24` → `decoy-feedback-axes-summer24`
+        return label.replace(":", "").replace(" ", "-").replace("(", "").replace(")", "")
+
+    def _one(idx: int, task: dict) -> tuple[int, str, int, Path, float]:
+        label = task["label"]
+        log_path = logs_dir / f"deploy-parallel-{batch_ts}-{_slug(label)}.log"
+        t0 = _time.monotonic()
+        env = {**os.environ, "RUSE_BATCH_CHILD": "1"}
+        with open(log_path, "w") as log_f:
+            log_f.write(f"# Parallel deploy child for {label}\n# Started {_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            log_f.flush()
+            proc = subprocess.run(
+                _cmd_for_task(task),
+                cwd=str(repo_root),
+                stdout=log_f, stderr=subprocess.STDOUT,
+                env=env,
+            )
+        return idx, label, proc.returncode, log_path, _time.monotonic() - t0
+
+    output.info("")
+    output.info(
+        f"Running {len(plan)} deploys in parallel (max {max_workers} concurrent)..."
+    )
+    output.info("(per-deployment output captured to logs/deploy-parallel-*.log)")
+    output.info("")
+
+    results: list[tuple[str, int]] = []
+    failures = 0
+    completed = 0
+    workers = min(max_workers, len(plan))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [
+            ex.submit(_one, i, task)
+            for i, task in enumerate(plan, 1)
+        ]
+        for fut in as_completed(futures):
+            idx, label, rc, log_path, elapsed = fut.result()
+            completed += 1
+            status = "OK  " if rc == 0 else "FAIL"
+            output.info(
+                f"  [{completed}/{len(plan)}] {status}  {label}  "
+                f"({int(elapsed//60)}m{int(elapsed%60):02d}s)  →  {log_path.name}"
+            )
+            results.append((label, rc))
+            if rc != 0:
+                failures += 1
+
+    output.info("")
+    output.banner("DEPLOY SUMMARY")
+    for label, rc in sorted(results, key=lambda x: x[0]):
+        status = "OK" if rc == 0 else f"FAILED (rc={rc})"
+        output.info(f"  {label}: {status}")
+    output.info("")
+
+    if failures:
+        output.error(f"DONE: {len(results) - failures}/{len(results)} succeeded, {failures} failed")
         return 1
     output.info(f"DONE: all {len(results)} deployment(s) launched")
     return 0
