@@ -96,6 +96,52 @@ same SUP. Thresholds are deliberately loose because workflows dominate
 the actual emitted traffic; this column only flags "D4 isn't running
 at all." If `Win=OK` but `BG=FAIL`, the SUP is almost certainly fine.
 
+## Neighborhood sidecar probe (post 2026-05-11)
+
+Each feedback deploy has one neighborhood VM (`d-{dep_id}-neighborhood-0`)
+listed in `runs/{rid}/neighborhood-inventory.ini` — separate from
+sup_hosts. `_neighborhood_probe()` SSHes the sidecar and emits:
+
+| key | meaning |
+|---|---|
+| `ACT` | `systemctl is-active ruse-neighborhood` |
+| `NR` | NRestarts |
+| `UPTIME_S` | seconds since service became active (stale-NR gate) |
+| `PROBES_LAST_HR` | probe events in `/var/log/ruse-neighborhood.systemd.log` in last hour |
+| `PROBES_TOTAL` | cumulative probes in `/var/log/ruse-neighborhood.jsonl` |
+| `SUPS_HIT` | distinct sup names in last 400 probe events |
+| `PROBE_TYPES` | distinct probe types (out of 10 configured) |
+| `TARGETS` | sup count in `/etc/ruse-neighborhood/sups.json` |
+
+**Why two log files**: daemon writes pure JSON (no timestamps) to
+`/var/log/ruse-neighborhood.jsonl` and timestamped stdout to
+`/var/log/ruse-neighborhood.systemd.log` (via systemd
+`StandardOutput=append:`). Time-windowed counts MUST come from
+`.systemd.log` (the jsonl is timestamp-less). Don't grep journalctl —
+the unit redirects stdout to a file, journalctl only has systemd's
+own start/stop messages.
+
+**Timestamps are LOCAL time, not UTC**. The bracketed prefix
+`[YYYY-MM-DD HH:MM:SS,microseconds]` is whatever the daemon process saw
+from `time.strftime` — VM tz is `America/New_York` per
+`install-neighborhood.yaml`. The probe's cutoff uses local `date`, not
+`date -u`. Lifting that to UTC requires either tz-aware daemon output
+or a tz-converting awk filter.
+
+`_classify_neighborhood()` returns:
+
+- `OK ({probes_hr}/hr, {sups_hit}/{targets} SUPs)`
+- `WARN ({probes_hr}/hr, only {sups_hit}/{targets} SUPs hit)` — partial routing
+- `FAIL (silent daemon — 0 probes/hr)` — service active but emitting nothing
+- `FAIL (no jsonl — daemon never wrote)`
+- `FAIL (crash-looping, N restarts, up Ns)` — NR>5 within first 600s
+- `FAIL (service {state})` — not active
+
+Rendered as a separate "Neighborhood sidecars" table after the main
+13-column SUP summary. Sidecar failures become issues in the same
+ISSUES list. Per-row marker in the live probe progress is `..nbhd...X`
+or `..nbhd....` to visually distinguish from SUP rows.
+
 ## IDLE → OK / FAIL post-pass
 
 Ollama unloads idle models after 5 min. V2+ calibrated agents sleep up
@@ -179,5 +225,5 @@ ssh d-controls050826193122-B0-gemma-0 \
 
 - Full deploy lifecycle: `/decoy-deploy`
 - RAMPART audit (stub): `/rampart-audit`
-- GHOSTS audit (stub): `/ghosts-audit`
+- GHOSTS audit (real implementation): `/ghosts-audit`
 - behavior.json schema + window-mode contract: `/decoy-deploy`

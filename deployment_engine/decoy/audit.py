@@ -1,7 +1,8 @@
 """Health audit of all active DECOY SUP deployments.
 
-Sister modules `audit_rampart.py` / `audit_ghosts.py` are placeholders;
-the deploy-CLI dispatch in __main__.py routes `--decoy` here.
+Sister modules: `ghosts/audit.py` is a real implementation
+(role-aware api vs npc probe); `rampart/audit.py` is still a stub.
+The deploy-CLI dispatch in __main__.py routes `--decoy` here.
 
 Per-VM checks (via SSH probe):
    1. SSH reachable
@@ -567,11 +568,17 @@ def _discover_deployments(deploy_dir: Path) -> list[dict]:
             vms = _parse_inventory(inv)
             if not vms:
                 continue
+            # Neighborhood sidecar(s) — feedback-only, file may not exist
+            # for controls deploys or for feedback configs with all
+            # topology_mimicry rates set to 0.
+            nbh_inv = run_dir / "neighborhood-inventory.ini"
+            nbh_vms = _parse_neighborhood_inventory(nbh_inv)
             deployments.append({
                 "name": config_dir.name,
                 "run_id": run_dir.name,
                 "run_dir": run_dir,
                 "vms": vms,
+                "neighborhood_vms": nbh_vms,
             })
     return deployments
 
@@ -588,6 +595,118 @@ def _parse_inventory(inv_path: Path) -> list[dict]:
                 "behavior": m.group(3),
             })
     return vms
+
+
+def _parse_neighborhood_inventory(inv_path: Path) -> list[dict]:
+    """Parse neighborhood-inventory.ini → list of {name, ip}. Different
+    line shape from sup_hosts (no sup_behavior); just hostname + ansible_host."""
+    vms = []
+    if not inv_path.exists():
+        return vms
+    for line in inv_path.read_text().splitlines():
+        m = re.match(r"^(\S+)\s+ansible_host=(\S+)", line.strip())
+        if m and m.group(1).endswith("-neighborhood-0"):
+            vms.append({"name": m.group(1), "ip": m.group(2)})
+    return vms
+
+
+def _neighborhood_probe(name: str, ip: str,
+                        key_path: str = "~/.ssh/id_ed25519") -> dict:
+    """SSH to a neighborhood sidecar VM and probe daemon health.
+
+    The daemon (decoys/common/network/neighborhood_traffic.py) logs to
+    /var/log/ruse-neighborhood.jsonl, NOT to systemd journal — the
+    service unit redirects StandardOutput to a file. journalctl is
+    empty for this service, only systemd's own start/stop events land
+    there. Probe from the jsonl directly.
+    """
+    bash = """
+ACT=$(systemctl is-active ruse-neighborhood 2>/dev/null || echo notfound)
+NR=$(systemctl show ruse-neighborhood -p NRestarts --value 2>/dev/null || echo 0)
+ACTIVE_ENTER=$(systemctl show ruse-neighborhood -p ActiveEnterTimestampMonotonic --value 2>/dev/null || echo 0)
+NOW_MONO=$(awk '{print int($1)}' /proc/uptime)
+ACTIVE_ENTER_SEC=$(( ACTIVE_ENTER / 1000000 ))
+echo "ACT=$ACT"
+echo "NR=$NR"
+echo "UPTIME_S=$(( NOW_MONO - ACTIVE_ENTER_SEC ))"
+# Daemon writes pure JSON (no timestamps) to .jsonl, and timestamped
+# stdout lines to .systemd.log. Use .systemd.log for time-windowed
+# counts and .jsonl for total/diversity counts.
+SYSLOG=/var/log/ruse-neighborhood.systemd.log
+JSONL=/var/log/ruse-neighborhood.jsonl
+if [ ! -f "$SYSLOG" ] && [ ! -f "$JSONL" ]; then
+  echo "PROBES_LAST_HR=0"
+  echo "PROBES_TOTAL=0"
+  echo "SUPS_HIT=0"
+  echo "PROBE_TYPES=0"
+  echo "TARGETS=0"
+  echo "NO_JSONL=1"
+else
+  # Last-hour probe count from .systemd.log (each line prefixed with
+  # [YYYY-MM-DD HH:MM:SS,microseconds]). substr($0, 2, 19) extracts the
+  # leading "YYYY-MM-DD HH:MM:SS" — same length as the cutoff string so
+  # lexicographic comparison gives the right ordering.
+  CUTOFF=$(date '+%Y-%m-%d %H:%M:%S' -d '1 hour ago')
+  echo "PROBES_LAST_HR=$(sudo awk -v cutoff="$CUTOFF" '/"event": "probe"/ && substr($0, 2, 19) >= cutoff { c++ } END { print c+0 }' "$SYSLOG" 2>/dev/null)"
+  echo "PROBES_TOTAL=$(sudo grep -c '"event": "probe"' "$JSONL" 2>/dev/null || echo 0)"
+  TAIL=$(sudo tail -400 "$JSONL" 2>/dev/null)
+  echo "SUPS_HIT=$(echo "$TAIL" | grep '"event": "probe"' | grep -oE 'sup": "[^"]+' | sort -u | wc -l)"
+  echo "PROBE_TYPES=$(echo "$TAIL" | grep '"event": "probe"' | grep -oE 'probe": "[^"]+' | sort -u | wc -l)"
+  echo "TARGETS=$(test -f /etc/ruse-neighborhood/sups.json && python3 -c 'import json; print(len(json.load(open(\"/etc/ruse-neighborhood/sups.json\")).get(\"sups\",[])))' 2>/dev/null || echo 0)"
+fi
+"""
+    ssh_cmd = [
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=10",
+        "-i", os.path.expanduser(key_path),
+        "-o", "IdentitiesOnly=yes",
+        "-o", "BatchMode=yes",
+        "-o", "LogLevel=ERROR",
+        name, bash,
+    ]
+    env = {**os.environ, "SSH_AUTH_SOCK": ""}
+    try:
+        result = subprocess.run(
+            ssh_cmd, capture_output=True, text=True, timeout=30, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ssh_ok": False, "ssh_error": "timeout"}
+    if result.returncode != 0:
+        return {"ssh_ok": False,
+                "ssh_error": (result.stderr or "")[:120]}
+    probe = {"ssh_ok": True}
+    for line in result.stdout.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            probe[k] = v.strip()
+    return probe
+
+
+def _classify_neighborhood(probe: dict) -> str:
+    """Single-row status string for a neighborhood sidecar. Returns one of:
+       OK / FAIL (reason) / WARN (reason)."""
+    if not probe.get("ssh_ok"):
+        return f"FAIL (ssh: {probe.get('ssh_error', '?')})"
+    if probe.get("ACT") != "active":
+        return f"FAIL (service {probe.get('ACT','?')})"
+    nr = int(probe.get("NR", "0") or "0")
+    up = int(probe.get("UPTIME_S", "0") or "0")
+    # Same uptime-gate logic as the SUP service: a high cumulative
+    # NRestarts on a service that's been continuously active for ≥10min
+    # is stale noise from past crash-loops, not a current issue.
+    if nr > 5 and up < 600:
+        return f"FAIL (crash-looping, {nr} restarts, up {up}s)"
+    if probe.get("NO_JSONL"):
+        return "FAIL (no jsonl — daemon never wrote)"
+    probes_hr = int(probe.get("PROBES_LAST_HR", "0") or "0")
+    if probes_hr == 0:
+        return "FAIL (silent daemon — 0 probes/hr)"
+    sups_hit = int(probe.get("SUPS_HIT", "0") or "0")
+    targets = int(probe.get("TARGETS", "0") or "0")
+    if targets > 0 and sups_hit < targets:
+        return f"WARN ({probes_hr}/hr, only {sups_hit}/{targets} SUPs hit)"
+    return f"OK ({probes_hr}/hr, {sups_hit}/{targets} SUPs)"
 
 
 # ── Main entry point ─────────────────────────────────────────────────────
@@ -618,31 +737,59 @@ def run_audit(deploy_dir: Path) -> int:
         except Exception:
             pass
 
+    total_nbh = sum(len(d.get("neighborhood_vms", [])) for d in deployments)
     output.info("")
-    output.info(f"  Probing {total_vms} VMs in parallel...")
+    output.info(
+        f"  Probing {total_vms} SUPs + {total_nbh} neighborhood sidecars in parallel..."
+    )
 
-    # Probe all VMs in parallel
-    all_results = []  # list of (deployment, vm, probe, checks)
+    # Probe all SUPs + neighborhoods in parallel. Use distinct keys so we
+    # don't conflate the two probe types when collecting results.
+    all_results = []                     # list of (deployment, vm, probe, checks)
+    neighborhood_results = []            # list of (deployment, vm, probe, status)
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
-        futures = {}
+        sup_futures = {}
+        nbh_futures = {}
         for dep in deployments:
             for vm in dep["vms"]:
                 fut = pool.submit(_ssh_probe, vm["name"], vm["ip"], vm["behavior"])
-                futures[fut] = (dep, vm)
+                sup_futures[fut] = (dep, vm)
+            for nbh in dep.get("neighborhood_vms", []):
+                fut = pool.submit(_neighborhood_probe, nbh["name"], nbh["ip"])
+                nbh_futures[fut] = (dep, nbh)
 
         done = 0
-        for fut in concurrent.futures.as_completed(futures):
-            dep, vm = futures[fut]
-            try:
-                probe = fut.result()
-            except Exception as e:
-                probe = {"ssh_ok": False, "ssh_error": str(e)[:100]}
-            checks = _classify_vm(vm, probe)
-            all_results.append((dep, vm, probe, checks))
-            done += 1
-            ts = time.strftime("%H:%M:%S")
-            status = _row_status(checks)
-            output.info(f"  [{ts}]  [{done}/{total_vms}]  {status}  {vm['name']}")
+        for fut in concurrent.futures.as_completed({**sup_futures, **nbh_futures}):
+            if fut in sup_futures:
+                dep, vm = sup_futures[fut]
+                try:
+                    probe = fut.result()
+                except Exception as e:
+                    probe = {"ssh_ok": False, "ssh_error": str(e)[:100]}
+                checks = _classify_vm(vm, probe)
+                all_results.append((dep, vm, probe, checks))
+                done += 1
+                ts = time.strftime("%H:%M:%S")
+                status = _row_status(checks)
+                output.info(f"  [{ts}]  [{done}/{total_vms + total_nbh}]  {status}  {vm['name']}")
+            else:
+                dep, nbh = nbh_futures[fut]
+                try:
+                    probe = fut.result()
+                except Exception as e:
+                    probe = {"ssh_ok": False, "ssh_error": str(e)[:100]}
+                status = _classify_neighborhood(probe)
+                neighborhood_results.append((dep, nbh, probe, status))
+                done += 1
+                ts = time.strftime("%H:%M:%S")
+                # Short row tag for sidecars to distinguish from SUP rows
+                short = "..nbhd...."  # 10 dots-ish, matches _row_status width
+                row_marker = "." if status.startswith("OK") else (
+                    "W" if status.startswith("WARN") else "X"
+                )
+                output.info(
+                    f"  [{ts}]  [{done}/{total_vms + total_nbh}]  {short}{row_marker}  {nbh['name']}"
+                )
 
     output.info("")
 
@@ -698,6 +845,15 @@ def run_audit(deploy_dir: Path) -> int:
                     issues.append(f"  {w}")
         except OSError:
             pass
+
+    # Neighborhood sidecars → issues. Anything that doesn't start with OK
+    # is operator-actionable. Silent daemon (active service, 0 probes/hr)
+    # is the most common real failure here.
+    for dep, nbh, probe, status in neighborhood_results:
+        if not status.startswith("OK"):
+            issues.append(
+                f"{dep['name']}-{dep['run_id']}/{nbh['name']}: neighborhood={status}"
+            )
 
     # Per-VM check failures → issues. PENDING is a transient
     # bg-counter-not-yet-populated state, not a failure — skip it so the
@@ -765,6 +921,33 @@ def run_audit(deploy_dir: Path) -> int:
         ])
     output.table(headers, rows)
     output.info("")
+
+    # Neighborhood sidecar summary table (feedback only — controls deploys
+    # have no sidecar). Shown after the main table so it doesn't crowd the
+    # 13-column layout.
+    if neighborhood_results:
+        nbh_headers = ["Deployment", "Sidecar", "Service", "NR", "Up", "Probes/h", "SUPs", "Status"]
+        nbh_rows = []
+        for dep, nbh, probe, status in sorted(
+            neighborhood_results, key=lambda x: x[0]["name"]
+        ):
+            up = int(probe.get("UPTIME_S", "0") or "0")
+            up_str = f"{up // 3600}h{(up % 3600) // 60}m" if up >= 3600 else f"{up // 60}m"
+            sups_hit = probe.get("SUPS_HIT", "?")
+            targets = probe.get("TARGETS", "?")
+            nbh_rows.append([
+                f"{dep['name']}-{dep['run_id']}"[:48],
+                nbh["name"].rsplit("-", 2)[-2] if "-" in nbh["name"] else nbh["name"],
+                probe.get("ACT", "?"),
+                probe.get("NR", "?"),
+                up_str,
+                probe.get("PROBES_LAST_HR", "?"),
+                f"{sups_hit}/{targets}",
+                status if not status.startswith("OK") else "OK",
+            ])
+        output.info("Neighborhood sidecars (feedback only):")
+        output.table(nbh_headers, nbh_rows)
+        output.info("")
 
     if issues:
         output.info(f"ISSUES ({len(issues)}):")
