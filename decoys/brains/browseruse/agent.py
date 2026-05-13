@@ -231,7 +231,7 @@ class BrowserUseAgent:
         self,
         prompts: BUPrompts = DEFAULT_PROMPTS,
         model: str = None,
-        headless: bool = True,
+        headless: bool = False,
         max_steps: int = 10,
         logger: Optional["AgentLogger"] = None,
     ):
@@ -344,7 +344,7 @@ class BrowserUseAgent:
 
 
 def run(task: str, model: str = None, prompts: BUPrompts = DEFAULT_PROMPTS,
-        headless: bool = True, max_steps: int = 10) -> Optional[str]:
+        headless: bool = False, max_steps: int = 10) -> Optional[str]:
     """Convenience function to run BrowserUse agent."""
     agent = BrowserUseAgent(
         prompts=prompts,
@@ -363,7 +363,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default=None, help='Model key: llama, gemma, deepseek')
     parser.add_argument('--phase', action='store_true', help='Use PHASE-improved prompts')
     parser.add_argument('--max-steps', type=int, default=10)
-    parser.add_argument('--headless', action='store_true', default=True)
+    parser.add_argument('--headless', action='store_true', default=False)
     args = parser.parse_args()
 
     from brains.browseruse.prompts import PHASE_PROMPTS
