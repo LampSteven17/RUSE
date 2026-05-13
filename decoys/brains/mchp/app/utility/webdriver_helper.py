@@ -27,8 +27,9 @@ class WebDriverHelper(BaseDriverHelper):
 
         try:
             self.options = webdriver.FirefoxOptions()
-            self.options.add_argument("--headless")
-            # Options to improve headless stability in VMs
+            # Run inside Xvfb (xvfb-run -a in INSTALL_SUP.sh) instead of
+            # headless — headless silences service workers, push channels,
+            # third-party trackers, and most page-level ambient traffic.
             self.options.add_argument("--no-sandbox")
             self.options.add_argument("--disable-dev-shm-usage")
             # Reduce startup overhead

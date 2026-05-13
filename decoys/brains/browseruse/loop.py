@@ -30,7 +30,7 @@ class BrowserUseLoop(BaseEmulationLoop):
         self,
         model: str = None,
         prompts: BUPrompts = None,
-        headless: bool = True,
+        headless: bool = False,
         max_steps: int = 10,
         cluster_size: int = DEFAULT_CLUSTER_SIZE,
         task_interval: int = DEFAULT_TASK_INTERVAL,
