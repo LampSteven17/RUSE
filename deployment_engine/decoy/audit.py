@@ -1023,7 +1023,11 @@ def _write_markdown(
     lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     def _ok(v: str) -> bool:
-        return v.startswith("n/a") or v.startswith("OK")
+        # Match the terminal-summary _ok at line 896. Both must accept
+        # "EXPECTED" so M0's expected-Linux-crash row counts as pass —
+        # otherwise the markdown summary shows controls Svc 6/7 while
+        # the terminal shows 7/7 (and there's no actual issue).
+        return v.startswith("n/a") or v.startswith("OK") or v.startswith("EXPECTED")
 
     for (name, rid), entries in sorted(by_dep.items()):
         n = len(entries)
