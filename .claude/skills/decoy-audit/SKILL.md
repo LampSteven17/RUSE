@@ -49,7 +49,7 @@ Probe collects:
 | `WIN_STATE` / `WIN_N` / `WIN_ON_MIN` / `WIN_TARGET` | window-mode contract from `behavior.json` |
 | `WIN_VOL_MEDIAN` | median `[bg-counter]` conns/min during ON-windows over last 60 minutes |
 
-## 11 columns in the terminal summary
+## 16 columns in the terminal summary
 
 | col | check | source |
 |---|---|---|
@@ -64,6 +64,11 @@ Probe collects:
 | Warn | 0 `[WARNING]`s; ablation-gated `[INFO]`s reported separately | `WARN_COUNT + INFO_COUNT` |
 | Win | window-mode contract — see below | `WIN_STATE` |
 | BG | median D4-only bg-conn/min during ON-windows ≥ 30% of target (floor check — brain workflow conns NOT counted) | `WIN_VOL_MEDIAN` vs `WIN_TARGET` |
+| Seed | session_id from latest `session_*.jsonl` filename matches `Random(_metadata.seed).getrandbits(32):08x` — catches Phase 0c install-path bypass bugs | `PHASE_SEED` + `EXPECTED_SID` + `ACTUAL_SID` |
+| Pools | Phase 1 fields present in `content` (browse_url_pool / youtube_video_pool / google_search_pool); empty list is OK (intentional floor), missing key is FAIL | `POOL_BROWSE_N` + `POOL_YT_N` + `POOL_SEARCH_N` + `POOL_MISSING` |
+| Sched | Phase 2 — `content.schedule` covers all 24 UTC hours when present; `n/a` when PHASE hasn't shipped | `SCHED_STATE` + `SCHED_BLOCKS` + `SCHED_COVERAGE` |
+| Svcs | Phase 3 — when any `diversity.background_services.*_enabled` is true, `[scripted-svc]` lines must appear in systemd.log | `SVCS_ENABLED` + `SVC_HITS` |
+| DL | Phase 4 — `download_url_pool` shape detected (dict for bucketed, list for legacy); `behavior.download.{size_mix, outcome_mix}` presence reported in detail | `DL_SHAPE` + `DL_BUCKETS` + `DL_SIZE_MIX` + `DL_OUTCOME_MIX` |
 
 ## Window-mode column states (post 2026-05-08)
 

@@ -136,9 +136,14 @@ LATEST=$(ls -t /opt/ruse/deployed_sups/*/logs/*.jsonl 2>/dev/null | head -1)
 if [ -n "$LATEST" ]; then
   echo "LOG_MTIME=$(stat -c %Y "$LATEST")"
   echo "LOG_PATH=$LATEST"
+  # Phase 0c — extract the session_id from the latest session_*.jsonl name
+  # for the SEED column to compare against the seeded derivation.
+  ACTUAL_SID=$(basename "$LATEST" .jsonl | awk -F_ '{{print $NF}}')
+  echo "ACTUAL_SID=$ACTUAL_SID"
 else
   echo "LOG_MTIME=0"
   echo "LOG_PATH=none"
+  echo "ACTUAL_SID=none"
 fi
 echo "CRON_COUNT=$(sudo crontab -l 2>/dev/null | grep -cE 'mchp-(daily|weekly)' || echo 0)"
 echo "NOW=$(date +%s)"
@@ -173,11 +178,19 @@ if [ -n "$SYSLOG" ]; then
   # M-brains.
   echo "WARN_G1_COUNT=$(grep -c '\\[WARNING\\] G1 prompt_augmentation' "$SYSLOG" 2>/dev/null || echo 0)"
   echo "WARN_LINES=$(grep '\\[WARNING\\]' "$SYSLOG" 2>/dev/null | tail -10 | tr '\\n' '|')"
+  # Phase 0c seed-override visibility: should appear ONCE per service start
+  # (apply_phase_seed prints with flush=True). Catches the runner-bypass bug.
+  echo "SEED_LINE_COUNT=$(grep -c 'PHASE _metadata.seed=' "$SYSLOG" 2>/dev/null || echo 0)"
+  # Phase 3 scripted-services activity: count [scripted-svc] log lines.
+  # Only meaningful when SVCS_ENABLED is non-empty.
+  echo "SVC_HITS=$(grep -c '\\[scripted-svc\\]' "$SYSLOG" 2>/dev/null || echo 0)"
 else
   echo "WARN_COUNT=0"
   echo "INFO_COUNT=0"
   echo "WARN_G1_COUNT=0"
   echo "WARN_LINES="
+  echo "SEED_LINE_COUNT=0"
+  echo "SVC_HITS=0"
 fi
 # Window-mode probe (PHASE 2026-05-08, simplified). Emit WIN_STATE /
 # WIN_N / WIN_ON_MIN / WIN_TARGET / WIN_VOL_MEDIAN. PHASE consolidated
@@ -210,12 +223,106 @@ print("WIN_STATE=%s" % state)
 print("WIN_N=%d" % n)
 print("WIN_ON_MIN=%d" % on)
 print("WIN_TARGET=%s" % target)
+
+# ── Phase 0c: PHASE _metadata.seed → expected session_id ───────────
+import random as _r
+seed = m.get("seed")
+if seed is not None:
+    try:
+        seed = int(seed)
+        expected_sid = "%08x" % _r.Random(seed).getrandbits(32)
+        print("PHASE_SEED=%d" % seed)
+        print("EXPECTED_SID=%s" % expected_sid)
+    except (TypeError, ValueError):
+        print("PHASE_SEED=invalid")
+        print("EXPECTED_SID=none")
+else:
+    print("PHASE_SEED=none")
+    print("EXPECTED_SID=none")
+
+# ── Phase 1: content pools ───────────────────────────────────────
+c = d.get("content") or dict()
+def _pool_len(v):
+    if isinstance(v, list): return len(v)
+    if v is None: return -1   # MISSING (key absent)
+    return -2                  # wrong type
+missing = []
+for k in ("browse_url_pool", "youtube_video_pool", "google_search_pool"):
+    if k not in c: missing.append(k)
+print("POOL_BROWSE_N=%d" % _pool_len(c.get("browse_url_pool")))
+print("POOL_YT_N=%d" % _pool_len(c.get("youtube_video_pool")))
+print("POOL_SEARCH_N=%d" % _pool_len(c.get("google_search_pool")))
+print("POOL_MISSING=%s" % ",".join(missing))
+
+# ── Phase 2: content.schedule (24h coverage) ─────────────────────
+sched = c.get("schedule")
+if sched is None:
+    print("SCHED_STATE=missing")
+    print("SCHED_BLOCKS=0")
+    print("SCHED_COVERAGE=0")
+elif not isinstance(sched, list):
+    print("SCHED_STATE=invalid")
+    print("SCHED_BLOCKS=0")
+    print("SCHED_COVERAGE=0")
+else:
+    covered = [False] * 24
+    bad_block = False
+    for block in sched:
+        try:
+            lo, hi = block["hour_range"]
+            for h in range(int(lo), int(hi)):
+                if 0 <= h < 24: covered[h] = True
+        except (KeyError, TypeError, ValueError):
+            bad_block = True
+    cov = sum(covered)
+    print("SCHED_STATE=%s" % ("malformed" if bad_block else "ok" if cov == 24 else "gap"))
+    print("SCHED_BLOCKS=%d" % len(sched))
+    print("SCHED_COVERAGE=%d" % cov)
+
+# ── Phase 3: scripted-service toggles ────────────────────────────
+bg = (d.get("diversity") or dict()).get("background_services") or dict()
+enabled_svcs = [k.replace("_enabled","") for k, v in bg.items() if k.endswith("_enabled") and v]
+print("SVCS_ENABLED=%s" % ",".join(enabled_svcs))
+
+# ── Phase 4: bucketed download_url_pool + behavior.download.* ────
+dl = c.get("download_url_pool")
+if isinstance(dl, dict):
+    dl_shape = "dict"
+    dl_buckets = ",".join("%s=%d" % (k, len(v) if isinstance(v, list) else -1) for k, v in dl.items())
+elif isinstance(dl, list):
+    dl_shape = "list"
+    dl_buckets = "n=%d" % len(dl)
+elif dl is None:
+    dl_shape = "missing"
+    dl_buckets = ""
+else:
+    dl_shape = "invalid"
+    dl_buckets = ""
+beh_dl = (d.get("behavior") or dict()).get("download") or dict()
+print("DL_SHAPE=%s" % dl_shape)
+print("DL_BUCKETS=%s" % dl_buckets)
+print("DL_SIZE_MIX=%d" % (1 if beh_dl.get("size_mix") else 0))
+print("DL_OUTCOME_MIX=%d" % (1 if beh_dl.get("outcome_mix") else 0))
 PYEOF
 else
   echo "WIN_STATE=n/a"
   echo "WIN_N=0"
   echo "WIN_ON_MIN=0"
   echo "WIN_TARGET=0"
+  echo "PHASE_SEED=none"
+  echo "EXPECTED_SID=none"
+  echo "POOL_BROWSE_N=-1"
+  echo "POOL_YT_N=-1"
+  echo "POOL_SEARCH_N=-1"
+  echo "POOL_MISSING="
+  echo "SCHED_STATE=n/a"
+  echo "SCHED_BLOCKS=0"
+  echo "SCHED_COVERAGE=0"
+  echo "SVCS_ENABLED="
+  echo "DL_SHAPE=n/a"
+  echo "DL_BUCKETS="
+  echo "DL_SIZE_MIX=0"
+  echo "DL_OUTCOME_MIX=0"
 fi
 if [ -n "$SYSLOG" ]; then
   # Distinguish three states for the Volume column:
@@ -531,6 +638,103 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         else:
             checks["volume"] = f"FAIL ({win_median:.0f}/{win_target:.0f} D4-only, ratio {ratio:.2f})"
 
+    # 12. Seed (Phase 0c). PHASE _metadata.seed must (a) be present and
+    # (b) produce a session_id matching Random(seed).getrandbits(32):08x.
+    # Mismatch caught the install-path bypass bug where runners didn't
+    # consume the seed. n/a for VMs without behavior.json (C0/M0).
+    phase_seed = probe.get("PHASE_SEED", "none")
+    expected_sid = probe.get("EXPECTED_SID", "none")
+    actual_sid = probe.get("ACTUAL_SID", "none")
+    seed_line_count = int(probe.get("SEED_LINE_COUNT", "0") or "0")
+    if behavior in ("C0", "M0"):
+        checks["seed"] = "n/a"
+    elif phase_seed == "none":
+        checks["seed"] = "n/a (PHASE not shipping seed yet)"
+    elif phase_seed == "invalid":
+        checks["seed"] = "FAIL (PHASE seed not int)"
+    elif actual_sid == "none":
+        checks["seed"] = "FAIL (no session jsonl)"
+    elif expected_sid == actual_sid:
+        checks["seed"] = (f"OK (seed={phase_seed})"
+                          + ("" if seed_line_count >= 1
+                             else " [no override line in syslog]"))
+    else:
+        checks["seed"] = (f"FAIL (expected sid={expected_sid} "
+                          f"actual={actual_sid}, seed={phase_seed})")
+
+    # 13. Pools (Phase 1). PHASE must ship at least one of browse / yt /
+    # search pools. Empty list is OK (intentional floor — e.g. controls
+    # yt_pool=[]); MISSING field is FAIL.
+    pool_browse_n = int(probe.get("POOL_BROWSE_N", "-1") or "-1")
+    pool_yt_n = int(probe.get("POOL_YT_N", "-1") or "-1")
+    pool_search_n = int(probe.get("POOL_SEARCH_N", "-1") or "-1")
+    pool_missing = (probe.get("POOL_MISSING") or "").strip()
+    if behavior in ("C0", "M0"):
+        checks["pools"] = "n/a"
+    elif pool_missing:
+        checks["pools"] = f"FAIL (missing: {pool_missing})"
+    elif pool_browse_n < 0 or pool_yt_n < 0 or pool_search_n < 0:
+        checks["pools"] = "FAIL (pool field not a list)"
+    else:
+        checks["pools"] = (f"OK (b={pool_browse_n} y={pool_yt_n} s={pool_search_n})")
+
+    # 14. Schedule (Phase 2). PHASE-emitted content.schedule when present
+    # must cover all 24 hours UTC, no malformed blocks. n/a when not shipped.
+    sched_state = probe.get("SCHED_STATE", "n/a")
+    sched_blocks = int(probe.get("SCHED_BLOCKS", "0") or "0")
+    sched_cov = int(probe.get("SCHED_COVERAGE", "0") or "0")
+    if behavior in ("C0", "M0"):
+        checks["schedule"] = "n/a"
+    elif sched_state == "missing":
+        checks["schedule"] = "n/a (not shipped)"
+    elif sched_state == "ok":
+        checks["schedule"] = f"OK ({sched_blocks} blocks, 24h)"
+    elif sched_state == "gap":
+        checks["schedule"] = f"FAIL (covers only {sched_cov}/24 hours)"
+    elif sched_state == "malformed":
+        checks["schedule"] = "FAIL (malformed hour_range)"
+    else:
+        checks["schedule"] = f"FAIL ({sched_state})"
+
+    # 15. Scripted services (Phase 3). When PHASE flips any *_enabled true,
+    # systemd.log should contain [scripted-svc] lines at the per-service
+    # schedule cadence. Zero hits with toggles on = silent failure.
+    svcs_enabled = (probe.get("SVCS_ENABLED") or "").strip()
+    svc_hits = int(probe.get("SVC_HITS", "0") or "0")
+    if behavior in ("C0", "M0"):
+        checks["scripted_svc"] = "n/a"
+    elif not svcs_enabled:
+        checks["scripted_svc"] = "n/a (none enabled)"
+    elif svc_hits == 0:
+        checks["scripted_svc"] = f"FAIL (enabled: {svcs_enabled} but 0 firings)"
+    else:
+        checks["scripted_svc"] = f"OK ({svc_hits} hits, enabled: {svcs_enabled})"
+
+    # 16. Downloader (Phase 4). download_url_pool shape: dict means
+    # bucketed (Phase 4 shape), list means legacy flat. PHASE must always
+    # ship one of these; the size_mix/outcome_mix presence indicates
+    # whether the full Phase 4 schema landed. n/a until Phase 4 ships.
+    dl_shape = probe.get("DL_SHAPE", "n/a")
+    dl_buckets = probe.get("DL_BUCKETS", "")
+    dl_size_mix = probe.get("DL_SIZE_MIX", "0") == "1"
+    dl_outcome_mix = probe.get("DL_OUTCOME_MIX", "0") == "1"
+    if behavior in ("C0", "M0"):
+        checks["downloader"] = "n/a"
+    elif dl_shape == "missing":
+        checks["downloader"] = "n/a (no download_url_pool)"
+    elif dl_shape == "invalid":
+        checks["downloader"] = "FAIL (download_url_pool wrong type)"
+    elif dl_shape == "list":
+        checks["downloader"] = "OK legacy (flat list)"
+    elif dl_shape == "dict":
+        mixes = []
+        if dl_size_mix: mixes.append("size_mix")
+        if dl_outcome_mix: mixes.append("outcome_mix")
+        suffix = f" + {','.join(mixes)}" if mixes else " (shape only, no mixes)"
+        checks["downloader"] = f"OK bucketed [{dl_buckets}]{suffix}"
+    else:
+        checks["downloader"] = f"FAIL (unknown dl_shape={dl_shape})"
+
     return checks
 
 
@@ -783,7 +987,7 @@ def run_audit(deploy_dir: Path) -> int:
                 done += 1
                 ts = time.strftime("%H:%M:%S")
                 # Short row tag for sidecars to distinguish from SUP rows
-                short = "..nbhd...."  # 10 dots-ish, matches _row_status width
+                short = "..nbhd........."  # 15 dots-ish, matches _row_status width (16 chars w/ marker)
                 row_marker = "." if status.startswith("OK") else (
                     "W" if status.startswith("WARN") else "X"
                 )
@@ -890,7 +1094,8 @@ def run_audit(deploy_dir: Path) -> int:
         by_dep[(dep["name"], dep["run_id"])].append((vm, probe, checks))
 
     headers = ["Deployment", "VMs", "SSH", "Svc", "Proc", "Model", "GPU",
-               "Logs", "Cron", "Fdbk", "Warn", "Win", "BG"]
+               "Logs", "Cron", "Fdbk", "Warn", "Win", "BG",
+               "Seed", "Pools", "Sched", "Svcs", "DL"]
     rows = []
 
     def _ok(v: str) -> bool:
@@ -912,12 +1117,19 @@ def run_audit(deploy_dir: Path) -> int:
         warn_ok = sum(1 for _, _, c in entries if _ok(c.get("warnings", "")))
         win_ok = sum(1 for _, _, c in entries if _ok(c.get("window", "")))
         vol_ok = sum(1 for _, _, c in entries if _ok(c.get("volume", "")))
+        seed_ok = sum(1 for _, _, c in entries if _ok(c.get("seed", "")))
+        pools_ok = sum(1 for _, _, c in entries if _ok(c.get("pools", "")))
+        sched_ok = sum(1 for _, _, c in entries if _ok(c.get("schedule", "")))
+        svcs_ok = sum(1 for _, _, c in entries if _ok(c.get("scripted_svc", "")))
+        dl_ok = sum(1 for _, _, c in entries if _ok(c.get("downloader", "")))
         rows.append([
             f"{name}-{rid}", str(n),
             f"{ssh_ok}/{n}", f"{svc_ok}/{n}", f"{proc_ok}/{n}",
             f"{model_ok}/{n}", f"{gpu_ok}/{n}", f"{log_ok}/{n}", f"{cron_ok}/{n}",
             f"{fdbk_ok}/{n}", f"{warn_ok}/{n}",
             f"{win_ok}/{n}", f"{vol_ok}/{n}",
+            f"{seed_ok}/{n}", f"{pools_ok}/{n}", f"{sched_ok}/{n}",
+            f"{svcs_ok}/{n}", f"{dl_ok}/{n}",
         ])
     output.table(headers, rows)
     output.info("")
@@ -978,7 +1190,8 @@ def _row_status(checks: dict) -> str:
     """
     parts = []
     for k in ("ssh", "service", "process", "model", "gpu", "log", "cron",
-              "feedback", "warnings", "window", "volume"):
+              "feedback", "warnings", "window", "volume",
+              "seed", "pools", "schedule", "scripted_svc", "downloader"):
         v = checks.get(k, "?")
         if v.startswith("OK") or v.startswith("n/a") or v.startswith("EXPECTED"):
             parts.append(".")
@@ -1019,8 +1232,8 @@ def _write_markdown(
 
     lines.append("## Summary")
     lines.append("")
-    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| Deployment | VMs | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG | Seed | Pools | Schedule | Scripted-svc | Downloader |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
 
     def _ok(v: str) -> bool:
         # Match the terminal-summary _ok at line 896. Both must accept
@@ -1042,10 +1255,16 @@ def _write_markdown(
         warn_ok = sum(1 for _, _, c in entries if _ok(c.get("warnings", "")))
         win_ok = sum(1 for _, _, c in entries if _ok(c.get("window", "")))
         vol_ok = sum(1 for _, _, c in entries if _ok(c.get("volume", "")))
+        seed_ok = sum(1 for _, _, c in entries if _ok(c.get("seed", "")))
+        pools_ok = sum(1 for _, _, c in entries if _ok(c.get("pools", "")))
+        sched_ok = sum(1 for _, _, c in entries if _ok(c.get("schedule", "")))
+        svcs_ok = sum(1 for _, _, c in entries if _ok(c.get("scripted_svc", "")))
+        dl_ok = sum(1 for _, _, c in entries if _ok(c.get("downloader", "")))
         lines.append(
             f"| `{name}-{rid}` | {n} | {ssh_ok}/{n} | {svc_ok}/{n} | {proc_ok}/{n} | "
             f"{model_ok}/{n} | {gpu_ok}/{n} | {log_ok}/{n} | {cron_ok}/{n} | "
-            f"{fdbk_ok}/{n} | {warn_ok}/{n} | {win_ok}/{n} | {vol_ok}/{n} |"
+            f"{fdbk_ok}/{n} | {warn_ok}/{n} | {win_ok}/{n} | {vol_ok}/{n} | "
+            f"{seed_ok}/{n} | {pools_ok}/{n} | {sched_ok}/{n} | {svcs_ok}/{n} | {dl_ok}/{n} |"
         )
     lines.append("")
 
@@ -1066,8 +1285,8 @@ def _write_markdown(
     for (name, rid), entries in sorted(by_dep.items()):
         lines.append(f"### `{name}-{rid}`")
         lines.append("")
-        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG | Seed | Pools | Schedule | Scripted-svc | Downloader |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for vm, probe, checks in sorted(entries, key=lambda e: e[0]["name"]):
             lines.append(
                 f"| `{vm['name']}` | {vm['behavior']} | {vm['ip']} | "
@@ -1076,7 +1295,10 @@ def _write_markdown(
                 f"{checks.get('gpu', '?')} | {checks.get('log', '?')} | "
                 f"{checks.get('cron', '?')} | {checks.get('feedback', '?')} | "
                 f"{checks.get('warnings', '?')} | "
-                f"{checks.get('window', '?')} | {checks.get('volume', '?')} |"
+                f"{checks.get('window', '?')} | {checks.get('volume', '?')} | "
+                f"{checks.get('seed', '?')} | {checks.get('pools', '?')} | "
+                f"{checks.get('schedule', '?')} | {checks.get('scripted_svc', '?')} | "
+                f"{checks.get('downloader', '?')} |"
             )
         lines.append("")
 
@@ -1087,7 +1309,9 @@ def _write_markdown(
     lines.append("- **FAIL / WRONG / STALE / MISSING** — investigate")
     lines.append("- **?** — could not determine (usually SSH failed)")
     lines.append("")
-    lines.append("Compact terminal status: each VM gets 9 chars (ssh/service/process/model/gpu/log/cron/feedback/warnings). "
-                 "`.` = pass, `X` = fail, `W` = warnings present, `?` = unknown.")
+    lines.append("Compact terminal status: each VM gets 16 chars in order: "
+                 "ssh / service / process / model / gpu / log / cron / feedback / "
+                 "warnings / window / volume / seed / pools / schedule / scripted_svc / downloader. "
+                 "`.` = pass, `X` = fail, `W` = warnings, `P` = pending, `?` = unknown.")
 
     path.write_text("\n".join(lines))
