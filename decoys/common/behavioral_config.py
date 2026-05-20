@@ -237,8 +237,10 @@ def apply_phase_seed(config, behavior_config_dir: Path) -> Optional[int]:
     if seed is None:
         return None
     if config is not None and getattr(config, "seed", None) != seed:
+        # flush=True so the line lands in systemd.log immediately rather
+        # than waiting for Python's stdout block buffer to fill.
         print(f"  PHASE _metadata.seed={seed} overrides config.seed="
-              f"{getattr(config, 'seed', None)}")
+              f"{getattr(config, 'seed', None)}", flush=True)
     if config is not None:
         config.seed = seed
     _rand.seed(seed)
