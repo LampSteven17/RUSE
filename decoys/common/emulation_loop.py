@@ -329,14 +329,15 @@ class BaseEmulationLoop(ABC):
                 float(ww.get(getattr(w, 'name', '') or w.__class__.__name__, 0.0))
                 for w in self.workflows
             ]
+            # PHASE convention (2026-05-20): empty workflow_weights {} OR a
+            # dict whose values all sum to 0 means OFF for this hour — the
+            # SUP is allowed by active_minute_windows but should not pick
+            # any workflow this tick. Store an empty list as the sentinel
+            # (distinct from None=unassigned) so _select_workflow can
+            # detect OFF and the loop skips workflow execution. NOT a
+            # schema error.
             if sum(block_weights) <= 0:
-                msg = (
-                    f"[FATAL] content.schedule block {block.get('hour_range')} "
-                    f"has zero total weight across {len(self.workflows)} workflows. "
-                    f"workflow_weights={ww}"
-                )
-                print(msg, flush=True)
-                raise RuntimeError(msg)
+                block_weights = []  # OFF sentinel
             for h in range(lo_i, hi_i):
                 if 0 <= h < 24:
                     by_hour[h] = block_weights
@@ -354,12 +355,28 @@ class BaseEmulationLoop(ABC):
         """Return the weights list to use right now (parallel to self.workflows).
 
         Schedule (Phase 2) wins when present — looks up current UTC hour.
+        Returns the empty list [] as the OFF sentinel when the schedule has
+        an empty workflow_weights block for this hour (PHASE OFF semantic).
         Otherwise falls back to the flat self._workflow_weights. None when
         neither is configured (caller picks uniform).
         """
         if self._schedule_by_hour:
             return self._schedule_by_hour[datetime.now(timezone.utc).hour]
         return self._workflow_weights
+
+    def _schedule_off_for_now(self):
+        """True iff content.schedule is configured AND the current UTC hour's
+        workflow_weights sums to zero (an intentional OFF block per PHASE).
+
+        Main loop gates workflow execution on this — D4 background services
+        and Phase 3 scripted services still fire (they have their own
+        scheduling), but no Workflow is selected this tick. The SUP idles
+        through the off-hour even with active_minute_windows open.
+        """
+        if not self._schedule_by_hour:
+            return False
+        hour_weights = self._schedule_by_hour[datetime.now(timezone.utc).hour]
+        return hour_weights == []  # OFF sentinel
 
     def _select_workflow(self):
         """Select next workflow using diversity rotation, weights, or uniform random."""
@@ -559,6 +576,19 @@ class BaseEmulationLoop(ABC):
                 # on any schedule.
                 if self._scripted_svc:
                     self._scripted_svc.maybe_run()
+
+                # Phase 2 — schedule OFF gate. PHASE may emit empty
+                # workflow_weights {} for OFF hours (e.g. night blocks).
+                # Skip workflow execution this tick — D4 + scripted services
+                # already fired above so passive traffic continues. Loop
+                # comes back next iteration after the inter-task sleep.
+                if self._schedule_off_for_now():
+                    if self.logger:
+                        hour = datetime.now(timezone.utc).hour
+                        self.logger.info(
+                            f"[schedule] hour={hour} UTC is OFF "
+                            f"(empty workflow_weights) — skipping workflow")
+                    continue
 
                 # Select workflow
                 workflow = self._select_workflow()
