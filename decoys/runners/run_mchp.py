@@ -31,8 +31,16 @@ def run_mchp(config: SUPConfig, behavior_config_dir: str = None):
     calibration_profile = config.calibration
 
     # Resolve behavioral config directory
-    from common.behavioral_config import resolve_behavioral_config_dir, load_behavioral_config, MODE_CONTROLS
+    from common.behavioral_config import (
+        resolve_behavioral_config_dir, load_behavioral_config,
+        apply_phase_seed, MODE_CONTROLS,
+    )
     resolved_behavior_config_dir = resolve_behavioral_config_dir(config.config_key, override_dir=behavior_config_dir)
+
+    # PHASE _metadata.seed override BEFORE AgentLogger creation, so the
+    # session_id derives from the PHASE seed (deterministic per-deploy)
+    # rather than falling back to uuid.uuid4().
+    apply_phase_seed(config, resolved_behavior_config_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
 

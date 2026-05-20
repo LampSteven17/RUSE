@@ -20,8 +20,14 @@ def log(msg: str):
 def run_browseruse(config: SUPConfig, task: str = None, behavior_config_dir: str = None):
     """Run BrowserUse brain in single-task mode."""
     # Resolve behavioral config directory
-    from common.behavioral_config import resolve_behavioral_config_dir, load_behavioral_config
+    from common.behavioral_config import (
+        resolve_behavioral_config_dir, load_behavioral_config, apply_phase_seed,
+    )
     resolved_behavior_config_dir = resolve_behavioral_config_dir(config.config_key, override_dir=behavior_config_dir)
+
+    # PHASE _metadata.seed override before AgentLogger creation — see
+    # apply_phase_seed docstring for why this lives in the runner.
+    apply_phase_seed(config, resolved_behavior_config_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
     logger.session_start(config={
@@ -75,8 +81,14 @@ def run_browseruse_loop(config: SUPConfig, behavior_config_dir: str = None):
     calibration_profile = config.calibration
 
     # Resolve behavioral config directory
-    from common.behavioral_config import resolve_behavioral_config_dir, load_behavioral_config, MODE_CONTROLS
+    from common.behavioral_config import (
+        resolve_behavioral_config_dir, load_behavioral_config,
+        apply_phase_seed, MODE_CONTROLS,
+    )
     resolved_behavior_config_dir = resolve_behavioral_config_dir(config.config_key, override_dir=behavior_config_dir)
+
+    # PHASE _metadata.seed override before AgentLogger creation.
+    apply_phase_seed(config, resolved_behavior_config_dir)
 
     logger = AgentLogger(agent_type=config.config_key)
 

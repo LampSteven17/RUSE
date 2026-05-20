@@ -220,6 +220,32 @@ def resolve_behavioral_config_dir(config_key: str, override_dir: Optional[str] =
     return path
 
 
+def apply_phase_seed(config, behavior_config_dir: Path) -> Optional[int]:
+    """Read _metadata.seed from PHASE behavior.json and apply process-wide.
+
+    Each brain runner calls this BEFORE creating AgentLogger so the session_id
+    derives from the PHASE seed (deterministic per-(config, dataset)) and
+    Ollama LLM output is seeded consistently. systemd invokes the runners
+    directly (not sup/__main__.py), so the override has to live here.
+
+    Sets: random.seed, os.environ['SUP_OLLAMA_SEED'], config.seed.
+    Returns the applied seed, or None if PHASE shipped no seed.
+    """
+    import os
+    import random as _rand
+    seed = peek_seed(behavior_config_dir)
+    if seed is None:
+        return None
+    if config is not None and getattr(config, "seed", None) != seed:
+        print(f"  PHASE _metadata.seed={seed} overrides config.seed="
+              f"{getattr(config, 'seed', None)}")
+    if config is not None:
+        config.seed = seed
+    _rand.seed(seed)
+    os.environ["SUP_OLLAMA_SEED"] = str(seed)
+    return seed
+
+
 def peek_seed(config_dir: Path) -> Optional[int]:
     """Read just _metadata.seed from behavior.json without full validation.
 
