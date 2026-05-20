@@ -50,8 +50,11 @@ IMAP_PROBE_HOST = "imap.gmail.com"
 IMAP_PROBE_PORT = 993
 DOH_URL = "https://cloudflare-dns.com/dns-query"
 MDNS_GROUP = ("224.0.0.251", 5353)
-FAIL_CONN_HOST = "127.0.0.1"
-FAIL_CONN_PORT = 1   # reliably-closed port → REJ
+# Phase 3 failed_conn target: 1.1.1.1:1 — Cloudflare DNS, port 1 almost
+# certainly closed. SYN → RST (or DROP). Previously pointed at 127.0.0.1
+# which Zeek can't see (loopback); fix shipped 2026-05-20.
+FAIL_CONN_HOST = "1.1.1.1"
+FAIL_CONN_PORT = 1
 
 TCP_TIMEOUT_SECS = 5.0
 HTTP_TIMEOUT_SECS = 10.0

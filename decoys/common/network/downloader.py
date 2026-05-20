@@ -21,6 +21,7 @@ Future PHASE knob (not consumed today, documented for reference):
 from __future__ import annotations
 
 import random
+import socket
 import time
 import uuid
 from urllib.parse import urlparse
@@ -73,7 +74,43 @@ FALLBACK_URLS = SMALL_URLS + MEDIUM_URLS + LARGE_URLS
 
 # Phase 4: outcome_mix values RUSE knows how to produce. Anything else is
 # logged as [WARNING] and falls back to "success".
-SUPPORTED_OUTCOMES = {"success", "http_404"}
+SUPPORTED_OUTCOMES = {"success", "http_404", "timeout", "reset"}
+
+# Hardcoded targets for the non-success outcomes. Chosen for reliable
+# Zeek signal:
+#   timeout: RFC 5737 TEST-NET-2 (198.51.100/24) — reserved for documentation,
+#            unroutable on the public internet → TCP SYN gets no response →
+#            connection times out → Zeek conn_state=S0.
+#   reset:   Cloudflare 1.1.1.1 on port 1 — major public service with a port
+#            that's almost certainly closed. SYN → RST back (or DROP, which
+#            degrades to S0, still not SF). Either way Zeek does NOT see SF.
+# These constants are intentionally Zeek-visible (NOT loopback) — the whole
+# point of the outcome mix is conn_state diversity in conn.log.
+TIMEOUT_TARGET_IP = "198.51.100.1"
+TIMEOUT_TARGET_PORT = 80
+TIMEOUT_CONNECT_SECS = 5.0
+RESET_TARGET_HOST = "1.1.1.1"
+RESET_TARGET_PORT = 1
+RESET_CONNECT_SECS = 5.0
+
+
+def _tcp_attempt(host: str, port: int, timeout: float) -> tuple[str, int]:
+    """TCP-connect-and-close, classifying the outcome.
+
+    Returns (outcome_token, elapsed_ms). outcome_token ∈
+    {"completed", "timeout", "refused", "oserror"}.
+    """
+    start = time.monotonic()
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        s.close()
+        return "completed", int((time.monotonic() - start) * 1000)
+    except socket.timeout:
+        return "timeout", int((time.monotonic() - start) * 1000)
+    except ConnectionRefusedError:
+        return "refused", int((time.monotonic() - start) * 1000)
+    except OSError as e:
+        return f"oserror({e.errno})", int((time.monotonic() - start) * 1000)
 
 
 def select_pool_subset(pool, size_mix=None):
@@ -149,10 +186,27 @@ def download_with_outcome(url, outcome="success", max_bytes=MAX_BYTES_PER_CALL):
         parsed = urlparse(url)
         bogus = f"{parsed.scheme}://{parsed.netloc}/ruse-404-{uuid.uuid4().hex[:8]}"
         return download_file(bogus, max_bytes=max_bytes)
-    if outcome in ("timeout", "reset"):
-        print(f"[WARNING] download outcome '{outcome}' requested but not yet "
-              f"implemented in RUSE; falling back to success for {url[:60]}")
-        return download_file(url, max_bytes=max_bytes)
+    if outcome == "timeout":
+        # TCP SYN to RFC 5737 TEST-NET-2 → no response → S0 in Zeek.
+        # No HTTPS, no real bytes moved — pure conn_state signal.
+        result, ms = _tcp_attempt(
+            TIMEOUT_TARGET_IP, TIMEOUT_TARGET_PORT, TIMEOUT_CONNECT_SECS
+        )
+        host = urlparse(url).netloc
+        return (f"download_outcome=timeout target={TIMEOUT_TARGET_IP}:"
+                f"{TIMEOUT_TARGET_PORT} result={result} elapsed={ms}ms "
+                f"(would have downloaded from {host})")
+    if outcome == "reset":
+        # TCP SYN to 1.1.1.1:1 → typically RST → REJ in Zeek. May degrade
+        # to S0 if Cloudflare's firewall drops instead of rejecting; both
+        # are conn_state diversity (non-SF), which is the goal.
+        result, ms = _tcp_attempt(
+            RESET_TARGET_HOST, RESET_TARGET_PORT, RESET_CONNECT_SECS
+        )
+        host = urlparse(url).netloc
+        return (f"download_outcome=reset target={RESET_TARGET_HOST}:"
+                f"{RESET_TARGET_PORT} result={result} elapsed={ms}ms "
+                f"(would have downloaded from {host})")
     print(f"[WARNING] unknown download outcome '{outcome}'; falling back to success")
     return download_file(url, max_bytes=max_bytes)
 
