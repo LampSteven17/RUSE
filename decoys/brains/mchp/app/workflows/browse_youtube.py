@@ -37,6 +37,11 @@ class YoutubeSearch(BaseWorkflow):
 
         self.input_wait_time = input_wait_time
         self.search_list = self._load_search_list()
+        # video_pool: PHASE-emitted content.youtube_video_pool (Phase 1). When
+        # set, skips the search-engine step and navigates directly to
+        # /watch?v={id}. Subsequent watch + suggested-video clicks still
+        # work the same. None = fall back to search flow.
+        self.video_pool = None
 
     def action(self, extra=None, logger=None):
         if self.driver is None:
@@ -46,67 +51,91 @@ class YoutubeSearch(BaseWorkflow):
     """ PRIVATE """
 
     def _search_web(self, logger=None):
-        use_llm = _use_llm_augmentation()
-        random_search = self._get_random_search()
-
-        # Log search term decision
-        if logger:
-            logger.decision(
-                choice="youtube_search_term",
-                selected=random_search,
-                context="LLM-generated YouTube search" if use_llm else "YouTube video search query",
-                method="llm" if use_llm else "random"
-            )
-
-        # Navigate to youtube
-        if logger:
-            logger.step_start("navigate", category="video", message="https://www.youtube.com")
-        try:
-            self.driver.driver.get('https://www.youtube.com')
-            if logger:
-                logger.step_success("navigate")
-        except Exception as e:
-            if logger:
-                logger.step_error("navigate", str(e), exception=e)
-            raise
-        sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
-
-        # Perform a youtube search
-        if logger:
-            logger.step_start("search", category="video", message=random_search)
-        try:
-            search_element = self.driver.driver.find_element(By.CSS_SELECTOR, 'input#search') # search bar
-            search_element.send_keys(random_search)
-            search_element.submit()
-            if logger:
-                logger.step_success("search")
-        except Exception as e:
-            if logger:
-                logger.step_error("search", str(e), exception=e)
-            raise
-        sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
-
-        # Click on a random video from the search results
-        if logger:
-            logger.step_start("select_result", category="video", message="Selecting video from search results")
-        try:
-            WebDriverWait(self.driver.driver, 10).until(EC.presence_of_all_elements_located((By.ID, "video-title")))
-            search_results = self.driver.driver.find_elements(By.ID, "video-title")
-            video_index = random.randrange(0, len(search_results)-1)
+        # Phase 1: PHASE video_pool, when set, replaces the search→click step
+        # with a direct /watch?v={id} navigation. The watch + suggested-video
+        # logic below is reused as-is — same DOM, same elements.
+        if self.video_pool:
+            video_id = random.choice(self.video_pool)
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
             if logger:
                 logger.decision(
-                    choice="video_selection",
-                    selected=str(video_index),
-                    context=f"Video from {len(search_results)} search results",
-                    method="random"
+                    choice="youtube_video_direct",
+                    selected=video_id,
+                    context=f"Video from PHASE pool ({len(self.video_pool)} videos)",
+                    method="phase_video_pool"
                 )
-            search_results[video_index].click()
+                logger.step_start("navigate", category="video", message=video_url)
+            try:
+                self.driver.driver.get(video_url)
+                if logger:
+                    logger.step_success("navigate")
+            except Exception as e:
+                if logger:
+                    logger.step_error("navigate", str(e), exception=e)
+                raise
+            sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
+        else:
+            use_llm = _use_llm_augmentation()
+            random_search = self._get_random_search()
+
+            # Log search term decision
             if logger:
-                logger.step_success("select_result")
-        except Exception as e:
+                logger.decision(
+                    choice="youtube_search_term",
+                    selected=random_search,
+                    context="LLM-generated YouTube search" if use_llm else "YouTube video search query",
+                    method="llm" if use_llm else "random"
+                )
+
+            # Navigate to youtube
             if logger:
-                logger.step_error("select_result", str(e), exception=e)
-            raise
+                logger.step_start("navigate", category="video", message="https://www.youtube.com")
+            try:
+                self.driver.driver.get('https://www.youtube.com')
+                if logger:
+                    logger.step_success("navigate")
+            except Exception as e:
+                if logger:
+                    logger.step_error("navigate", str(e), exception=e)
+                raise
+            sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
+
+            # Perform a youtube search
+            if logger:
+                logger.step_start("search", category="video", message=random_search)
+            try:
+                search_element = self.driver.driver.find_element(By.CSS_SELECTOR, 'input#search') # search bar
+                search_element.send_keys(random_search)
+                search_element.submit()
+                if logger:
+                    logger.step_success("search")
+            except Exception as e:
+                if logger:
+                    logger.step_error("search", str(e), exception=e)
+                raise
+            sleep(random.randrange(MIN_WAIT_TIME, MAX_WAIT_TIME))
+
+            # Click on a random video from the search results
+            if logger:
+                logger.step_start("select_result", category="video", message="Selecting video from search results")
+            try:
+                WebDriverWait(self.driver.driver, 10).until(EC.presence_of_all_elements_located((By.ID, "video-title")))
+                search_results = self.driver.driver.find_elements(By.ID, "video-title")
+                video_index = random.randrange(0, len(search_results)-1)
+                if logger:
+                    logger.decision(
+                        choice="video_selection",
+                        selected=str(video_index),
+                        context=f"Video from {len(search_results)} search results",
+                        method="random"
+                    )
+                search_results[video_index].click()
+                if logger:
+                    logger.step_success("select_result")
+            except Exception as e:
+                if logger:
+                    logger.step_error("select_result", str(e), exception=e)
+                raise
 
         # Watch video
         watch_time = random.randrange(MIN_WATCH_TIME, MAX_WATCH_TIME)
@@ -137,7 +166,26 @@ class YoutubeSearch(BaseWorkflow):
                 logger.step_start("click", category="video", message=f"Suggested video {i+1}/{num_suggested}")
             try:
                 suggested_videos = self.driver.driver.find_elements(By.ID, "video-title")
-                suggested_videos[random.randrange(0,len(suggested_videos)-1)].click()
+                if not suggested_videos:
+                    # Fail-loud: empty list almost always means the DOM
+                    # selector ('id=video-title') doesn't match this page.
+                    # Likely YouTube changed the sidebar markup OR (Phase 1
+                    # path) direct-URL navigation lands on a page whose
+                    # sidebar uses different IDs than the search-results
+                    # path. Either way audit/[WARNING] grep surfaces it.
+                    msg = (
+                        f"[WARNING] BrowseYouTube suggested_videos empty — "
+                        f"selector By.ID 'video-title' returned 0 elements on "
+                        f"{self.driver.driver.current_url} (pool_mode="
+                        f"{'phase' if self.video_pool else 'search'})"
+                    )
+                    print(msg)
+                    if logger:
+                        logger.step_error("click", msg)
+                    break
+                # Pre-existing off-by-one (randrange(0, len-1)) would crash
+                # on len==1 with ValueError. Use the full len.
+                suggested_videos[random.randrange(0, len(suggested_videos))].click()
                 if logger:
                     logger.step_success("click")
             except ElementNotInteractableException as e:

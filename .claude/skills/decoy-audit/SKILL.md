@@ -1,6 +1,6 @@
 ---
 name: decoy-audit
-description: DECOY audit — `./audit --decoy` runs 11 per-VM SSH probes + 5 cross-deployment consistency checks across every active DECOY deployment. Code in `deployment_engine/decoy/audit.py`. Outputs terminal table + markdown report at `deployments/logs/audit_*.md`. GHOSTS audit is also implemented (see /ghosts-audit); --rampart is still a stub (see /rampart-audit). Per-VM behavior.json window-mode states, NRestarts crash-loop detection, Ollama+GPU IDLE-vs-FAIL, feature-warning grep, and orphan-VM/missing-inventory diff vs OpenStack. SSH probe inlined (not via Ansible) for parallel speed + per-VM real-time output.
+description: DECOY audit — `./audit --decoy` runs 11 per-VM SSH probes + 5 cross-deployment consistency checks across every active DECOY deployment. Code in `deployment_engine/decoy/audit.py`. Outputs terminal table + markdown report at `deployments/logs/audit_*.md`. All three audits are now implemented (see /ghosts-audit, /rampart-audit). Per-VM behavior.json window-mode states, NRestarts crash-loop detection, Ollama+GPU IDLE-vs-FAIL, feature-warning grep, and orphan-VM/missing-inventory diff vs OpenStack. SSH probe inlined (not via Ansible) for parallel speed + per-VM real-time output.
 ---
 
 # decoy-audit
@@ -224,6 +224,6 @@ ssh d-controls050826193122-B0-gemma-0 \
 ## Related
 
 - Full deploy lifecycle: `/decoy-deploy`
-- RAMPART audit (stub): `/rampart-audit`
-- GHOSTS audit (real implementation): `/ghosts-audit`
+- RAMPART audit: `/rampart-audit`
+- GHOSTS audit: `/ghosts-audit`
 - behavior.json schema + window-mode contract: `/decoy-deploy`

@@ -88,7 +88,7 @@ _STEP_TASKS = {
     "Create emulation scheduled task":  "Creating scheduled task (Windows)",
     "Start emulation task":             "Starting emulation (Windows)",
     # install-ghosts-clients.yaml
-    "Install .NET 9 SDK":         "Installing .NET 9 SDK",
+    "Install .NET 10 SDK":        "Installing .NET 10 SDK",
     "Build GHOSTS universal client": "Building GHOSTS client",
     "Configure GHOSTS client (application.json)": "Configuring GHOSTS client",
     "Configure GHOSTS client timeline": "Configuring timeline",

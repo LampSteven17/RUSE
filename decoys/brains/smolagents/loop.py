@@ -129,6 +129,17 @@ class SmolAgentLoop(BaseEmulationLoop):
                 w.domain_pool = fc.whois_domain_pool
             elif wname == "DownloadFiles" and hasattr(w, "url_pool"):
                 w.url_pool = fc.download_url_pool
+                # Phase 4: size_mix + outcome_mix pass-through
+                if hasattr(w, "size_mix"):
+                    w.size_mix = fc.download_size_mix
+                if hasattr(w, "outcome_mix"):
+                    w.outcome_mix = fc.download_outcome_mix
+            elif wname == "BrowseWeb" and hasattr(w, "url_pool"):
+                w.url_pool = fc.browse_url_pool
+            elif wname == "BrowseYoutube" and hasattr(w, "video_pool"):
+                w.video_pool = fc.youtube_video_pool
+            elif wname == "WebSearch" and hasattr(w, "query_pool"):
+                w.query_pool = fc.google_search_pool
 
         # W3 site_config — propagate content.site_categories to BrowseWebWorkflow.
         # Only BrowseWebWorkflow consumes site_weights; WebSearch + YouTube

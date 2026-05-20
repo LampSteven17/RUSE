@@ -7,8 +7,30 @@ type: skill
 # ghosts-deploy
 
 GHOSTS = CMU SEI NPC traffic generators. Upstream `cmu-sei/GHOSTS`
-provides a .NET 9 client that registers with an API server and runs
+provides a .NET 10 client that registers with an API server and runs
 behavioral timelines (BrowserFirefox, Bash, Curl handlers).
+
+## CLI scope flags
+
+```bash
+./deploy --ghosts                              # controls + ALL feedback datasets (default)
+./deploy --ghosts --controls                   # controls only
+./deploy --ghosts --feedback                   # all feedback (no controls)
+./deploy --ghosts --feedback --target sum25    # single dataset (no controls)
+./deploy --ghosts --feedback --source /path    # explicit PHASE source dir
+./deploy --ghosts --controls --target sum25    # controls + single feedback
+```
+
+`--feedback` is a boolean switch, NOT a value flag. Single-dataset
+selection uses `--target NAME` (or `--source /path`). Typing
+`./deploy --ghosts --feedback axes-summer25` parses `axes-summer25` as
+a positional `config_name`, the filter is silently ignored, and the
+deploy runs ALL feedback datasets.
+
+Dataset target aliases live in `core/feedback.py::DATASET_TARGETS`:
+`sum25` → `axes-summer25`, `vt50g` → `vt-fall22-50gb`, `axall` →
+`axes-all`, etc. Full-name forms (`axes-summer25`, `vt-fall22-50gb`)
+also work.
 
 | | |
 |---|---|
@@ -29,7 +51,7 @@ g-{hash}-api-0    Docker stack: ghosts-api(:5000), frontend(:4200),
           ┌───────────────┼───────────────┐
           ▼               ▼               ▼
   g-{hash}-npc-0   g-{hash}-npc-1   g-{hash}-npc-N
-  .NET 9 client    .NET 9 client    .NET 9 client
+  .NET 10 client   .NET 10 client   .NET 10 client
   systemd          systemd          systemd
   timeline.json    timeline.json    timeline.json
 ```
@@ -60,7 +82,7 @@ ghosts:
    inventory write)
 4. Install GHOSTS API (`install-ghosts-api.yaml` — Docker + docker
    compose up)
-5. Install GHOSTS clients (`install-ghosts-clients.yaml` — .NET 9 SDK +
+5. Install GHOSTS clients (`install-ghosts-clients.yaml` — .NET 10 SDK +
    build + systemd)
 6. Finalize: SSH config, `deployment_type` marker, PHASE register
    (fail-loud)

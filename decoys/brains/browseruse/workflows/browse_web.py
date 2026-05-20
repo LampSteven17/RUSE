@@ -77,6 +77,10 @@ class BrowseWebWorkflow(BUWorkflow):
         # BrowserUseLoop._apply_brain_specific_config from PHASE
         # behavior_modifiers.page_dwell. None = no per-step delay.
         self.page_dwell = None
+        # url_pool: PHASE-emitted content.browse_url_pool (Phase 1). When set,
+        # each task is "Visit {url} and read the content" — bypasses the
+        # hard-coded BROWSE_WEB_TASKS. None = fall back to BROWSE_WEB_TASKS.
+        self.url_pool: Optional[list] = None
 
     def _get_llm(self, logger: Optional["AgentLogger"] = None):
         """Lazy-load the LLM with logging callbacks."""
@@ -137,18 +141,28 @@ class BrowseWebWorkflow(BUWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            if self.task_weights:
+            if self.url_pool:
+                url = random.choice(self.url_pool)
+                task = f"Visit {url} and read the content. Spend a few minutes browsing the page."
+                selection_method = "phase_url_pool"
+                options_preview = self.url_pool[:5]
+                pool_size = len(self.url_pool)
+            elif self.task_weights:
                 task = random.choices(BROWSE_WEB_TASKS, weights=self.task_weights, k=1)[0]
                 selection_method = "behavior_weighted"
+                options_preview = BROWSE_WEB_TASKS[:5]
+                pool_size = len(BROWSE_WEB_TASKS)
             else:
                 task = random.choice(BROWSE_WEB_TASKS)
                 selection_method = "random"
+                options_preview = BROWSE_WEB_TASKS[:5]
+                pool_size = len(BROWSE_WEB_TASKS)
             if logger:
                 logger.decision(
                     choice="browse_web_task",
-                    options=BROWSE_WEB_TASKS[:5],
+                    options=options_preview,
                     selected=task,
-                    context=f"Task from {len(BROWSE_WEB_TASKS)} available tasks",
+                    context=f"Task from {pool_size} available tasks",
                     method=selection_method
                 )
 

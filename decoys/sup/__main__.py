@@ -102,6 +102,19 @@ Configuration Keys:
     # CLI --seed takes precedence over config default
     config.seed = args.seed
 
+    # PHASE-emitted _metadata.seed overrides CLI default when present, so each
+    # (config, dataset) pair has a stable distinct seed. Resolve behavior dir
+    # and peek for the seed BEFORE random.seed() so all downstream state is
+    # consistent (AgentLogger session_id, Ollama LLM seed, emulation_loop RNG).
+    from common.behavioral_config import resolve_behavioral_config_dir, peek_seed
+    behavior_dir = resolve_behavioral_config_dir(
+        config.config_key, override_dir=args.behavior_config_dir
+    )
+    phase_seed = peek_seed(behavior_dir)
+    if phase_seed is not None and phase_seed != config.seed:
+        print(f"  PHASE _metadata.seed={phase_seed} overrides CLI seed={config.seed}")
+        config.seed = phase_seed
+
     # Seed random early, before any runner/task selection calls
     if config.seed != 0:
         random.seed(config.seed)

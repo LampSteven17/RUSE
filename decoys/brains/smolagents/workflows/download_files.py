@@ -26,7 +26,10 @@ from smolagents import LiteLLMModel
 
 from brains.smolagents.workflows.base import SmolWorkflow
 from common.config.model_config import get_model, get_num_ctx
-from common.network.downloader import FALLBACK_URLS, download_file
+from common.network.downloader import (
+    FALLBACK_URLS, download_file, download_with_outcome,
+    select_pool_subset, pick_outcome,
+)
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -58,9 +61,14 @@ class DownloadFilesWorkflow(SmolWorkflow):
         self.model_name = get_model(model)
         self._llm = None
         # Set by SmolAgentLoop._apply_brain_specific_config from
-        # content.download_url_pool when PHASE supplies it. None → use
+        # content.download_url_pool when PHASE supplies it. May be list[str]
+        # (legacy flat) OR dict[str, list[str]] (Phase 4 bucketed); None →
         # module-level FALLBACK_URLS.
-        self.url_pool: Optional[list[str]] = None
+        self.url_pool = None
+        # Phase 4: size_mix selects which bucket of url_pool to draw from;
+        # outcome_mix picks success/http_404/etc. None → all success on flat pool.
+        self.size_mix: Optional[dict] = None
+        self.outcome_mix: Optional[dict] = None
 
     def _get_llm(self):
         if self._llm is None:
@@ -103,17 +111,24 @@ class DownloadFilesWorkflow(SmolWorkflow):
         return random.choice(pool)
 
     def action(self, extra=None, logger: Optional["AgentLogger"] = None):
-        pool = self.url_pool or FALLBACK_URLS
+        # Phase 4: bucket-select first (when pool is dict + size_mix shipped),
+        # then LLM picks within bucket. Legacy flat pool path unchanged.
+        pool = select_pool_subset(self.url_pool, self.size_mix)
         url = self._pick_url(pool, logger)
+        outcome = pick_outcome(self.outcome_mix)
         if logger:
             logger.decision(
                 choice="download_url",
                 options=pool[:5],
                 selected=url,
-                context=f"LLM-picked URL from pool of {len(pool)}",
+                context=(f"LLM-picked URL from {len(pool)}-url subset "
+                         f"(outcome={outcome})"),
                 method="llm_picker",
             )
-        result = download_file(url)
+        result = download_with_outcome(url, outcome=outcome)
+        # success outcome reports "downloaded ..."; http_404 returns the same
+        # prefix on a real-but-404 fetch. Differentiate via http_404 in the
+        # bogus URL path appearing in result.
         success = result.startswith("downloaded ")
         if logger:
             logger.step_start("download_file", category="browser",

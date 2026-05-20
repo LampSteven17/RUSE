@@ -26,14 +26,24 @@ def run_ghosts_teardown(
     g_prefix = make_ghosts_vm_prefix(dep_id)
     os_client = OpenStack()
 
-    # Step 1: Delete VMs
+    # Step 1: Delete VMs.
+    # Each `openstack` CLI call costs ~17s (python startup + auth), so
+    # the historical serial loop scaled linearly with N. Batch with
+    # --wait collapses N round trips into one ~17s invocation that
+    # blocks until OpenStack reports them gone.
     output.info("[1/1] Deleting GHOSTS VMs...")
     servers = os_client.server_list_with_ids(prefix=g_prefix)
     if servers:
         output.info(f"  Deleting {len(servers)} VMs...")
         for s in servers:
-            os_client.server_delete(s["id"])
-            output.info(f"    Deleted {s['name']}")
+            output.dim(f"    queued {s['name']}")
+        ok_delete = os_client.server_delete_many(
+            [s["id"] for s in servers], wait=True,
+        )
+        if ok_delete:
+            output.info(f"  Deleted {len(servers)} VMs")
+        else:
+            output.error("  WARNING: server_delete_many reported non-zero rc")
     else:
         output.info("  No GHOSTS VMs found")
 

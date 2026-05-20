@@ -106,6 +106,10 @@ class BrowseYouTubeWorkflow(SmolWorkflow):
         # has more reason to keep going past a single search. PHASE
         # behavior_modifiers.max_steps still overrides per-deploy.
         self.max_steps = 10
+        # video_pool: PHASE-emitted content.youtube_video_pool (Phase 1). When
+        # set, task = "Watch the YouTube video at .../watch?v={id}". None =
+        # fall back to BROWSE_YOUTUBE_TASKS.
+        self.video_pool = None
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -143,16 +147,26 @@ class BrowseYouTubeWorkflow(SmolWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            # Tasks are (query, category) tuples since 2026-04-27. YouTube
-            # does not consume site_weights — flat random over all tasks.
-            task = random.choice(BROWSE_YOUTUBE_TASKS)[0]
+            if self.video_pool:
+                vid = random.choice(self.video_pool)
+                task = f"Watch the YouTube video at https://www.youtube.com/watch?v={vid} and browse around the page."
+                options_preview = self.video_pool[:5]
+                pool_size = len(self.video_pool)
+                selection_method = "phase_video_pool"
+            else:
+                # Tasks are (query, category) tuples since 2026-04-27. YouTube
+                # does not consume site_weights — flat random over all tasks.
+                task = random.choice(BROWSE_YOUTUBE_TASKS)[0]
+                options_preview = [t for t, _ in BROWSE_YOUTUBE_TASKS[:5]]
+                pool_size = len(BROWSE_YOUTUBE_TASKS)
+                selection_method = "random"
             if logger:
                 logger.decision(
                     choice="browse_youtube_task",
-                    options=[t for t, _ in BROWSE_YOUTUBE_TASKS[:5]],
+                    options=options_preview,
                     selected=task,
-                    context=f"Task from {len(BROWSE_YOUTUBE_TASKS)} available tasks",
-                    method="random"
+                    context=f"Task from {pool_size} available tasks",
+                    method=selection_method
                 )
 
         self.category = "video"

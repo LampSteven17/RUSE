@@ -447,6 +447,7 @@ def _synthesize_neighborhood_config(behavior_source: Path, inventory_path: Path,
 
     # Parse inventory for SUP name/ip/behavior tuples
     sups = []
+    sidecar_seed = None  # first non-None _metadata.seed encountered
     for line in inventory_path.read_text().splitlines():
         m = re.match(r'^(\S+)\s+ansible_host=(\S+)\s+sup_behavior=(\S+)', line)
         if not m:
@@ -465,6 +466,13 @@ def _synthesize_neighborhood_config(behavior_source: Path, inventory_path: Path,
             data = json.loads(bjson.read_text())
         except (OSError, json.JSONDecodeError):
             continue
+        if sidecar_seed is None:
+            raw = (data.get("_metadata") or {}).get("seed")
+            if raw is not None:
+                try:
+                    sidecar_seed = int(raw)
+                except (TypeError, ValueError):
+                    pass
         rates = ((data.get("diversity") or {}).get("topology_mimicry") or {})
         # Filter to int-ish positive values only
         clean_rates = {}
@@ -483,6 +491,11 @@ def _synthesize_neighborhood_config(behavior_source: Path, inventory_path: Path,
         return None
 
     cfg = {"sups": sups}
+    if sidecar_seed is not None:
+        # Sidecar reads this and seeds random.seed() at daemon start.
+        # Picks the first SUP's _metadata.seed — all SUPs in a deploy share
+        # the same dataset, so any one is fine for the sidecar's RNG anchor.
+        cfg["seed"] = sidecar_seed
     out_path = run_dir / "neighborhood-sups.json"
     out_path.write_text(json.dumps(cfg, indent=2) + "\n")
     output.info("")

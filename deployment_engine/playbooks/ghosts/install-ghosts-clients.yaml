@@ -1,6 +1,6 @@
 ---
 # Ansible Playbook: install-ghosts-clients.yaml
-# Install GHOSTS universal client (.NET 9) on NPC VMs.
+# Install GHOSTS universal client (.NET 10) on NPC VMs.
 # Clones the GHOSTS repo, builds the client, runs as a systemd service.
 # Each client connects to the API VM via ghosts_api_ip (set in inventory).
 #
@@ -46,16 +46,16 @@
         name: [git, curl, wget]
         state: present
 
-    - name: Install .NET 9 SDK
+    - name: Install .NET 10 SDK
       shell: |
         set -euo pipefail
-        if command -v dotnet &>/dev/null && dotnet --list-sdks | grep -q "^9\."; then
-          echo ".NET 9 SDK already installed"
+        if command -v dotnet &>/dev/null && dotnet --list-sdks | grep -q "^10\."; then
+          echo ".NET 10 SDK already installed"
           exit 0
         fi
         wget -q https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh
         chmod +x /tmp/dotnet-install.sh
-        /tmp/dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet
+        /tmp/dotnet-install.sh --channel 10.0 --install-dir /usr/share/dotnet
         ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet
         echo 'export DOTNET_ROOT=/usr/share/dotnet' >> /etc/profile.d/dotnet.sh
         echo 'export PATH=$PATH:/usr/share/dotnet' >> /etc/profile.d/dotnet.sh

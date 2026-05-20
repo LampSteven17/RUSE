@@ -93,6 +93,8 @@ def register_phase(
     run_id: str,
     *,
     extra_ips: list[str] | None = None,
+    start_date: str | None = None,
+    baseline_user_roles: str | None = None,
 ) -> bool:
     """Register in PHASE experiments.json via the canonical script.
 
@@ -103,6 +105,13 @@ def register_phase(
     extra_ips is a list of `IP=HOSTNAME` pairs (DECOY uses this for the
     neighborhood sidecar VM so it shows up in experiments.json alongside
     the SUPs).
+
+    start_date (YYYY-MM-DD) explicitly scopes PHASE Zeek dredging. Without
+    it (and without an inventory.ini for the script to extract from),
+    register_experiment.py writes start_date=None and PHASE.py later
+    materializes ALL eno2 history — disk-fill incident observed
+    2026-05-12 against rampart-controls (no inventory.ini → null
+    start_date → DuckDB spilled 7+ months of traffic to /tmp).
     """
     if not snippet_path.exists():
         output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
@@ -125,6 +134,10 @@ def register_phase(
         "--inventory", str(inventory_path),
         "--run-id", run_id,
     ]
+    if start_date:
+        cmd.extend(["--start-date", start_date])
+    if baseline_user_roles:
+        cmd.extend(["--baseline-user-roles", baseline_user_roles])
     for pair in extra_ips or []:
         cmd.extend(["--extra-ip", pair])
 

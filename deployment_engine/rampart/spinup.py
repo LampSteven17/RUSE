@@ -218,7 +218,22 @@ def run_rampart_spinup(
     # fail-loud contract.
     snippet_path = run_dir / "ssh_config_snippet.txt"
     if snippet_path.exists():
-        if not register_phase(snippet_path, deployment, run_id):
+        # RAMPART has no inventory.ini for register_experiment.py to parse,
+        # so the start_date must be passed explicitly. Without it, PHASE.py
+        # later dredges ALL eno2 history into one DuckDB COPY and spills
+        # /tmp until disk fills (incident 2026-05-12).
+        today = time.strftime("%Y-%m-%d")
+        # baseline_user_roles is RAMPART-only — PHASE's rampart_generator
+        # reads it via `entry.get("baseline_user_roles")` to clone pyhuman
+        # baseline roles for feedback generation. DECOY/GHOSTS don't need
+        # this field (their baselines live where PHASE already looks).
+        # Per PHASE 4.2-rampart SKILL.md A6.
+        baseline_path = str(Path(wdir) / config.enterprise_user_roles())
+        if not register_phase(
+            snippet_path, deployment, run_id,
+            start_date=today,
+            baseline_user_roles=baseline_path,
+        ):
             output.error("")
             output.error("ABORTING: PHASE experiments.json registration failed.")
             output.error("RAMPART VMs are running but won't appear in PHASE analysis.")
@@ -406,25 +421,26 @@ def _create_prefixed_cloud_config(
 def _generate_ssh_config(
     deploy_output: Path, deployment: str, run_id: str, run_dir: Path, deploy_dir: Path,
 ) -> None:
-    """Generate and install SSH config from enterprise deploy output."""
-    lib_dir = deploy_dir / "lib"
-    ssh_script = lib_dir / "enterprise_ssh_config.py"
-    if not ssh_script.exists():
-        return
+    """Generate and install SSH config from enterprise deploy output.
+
+    Snippet is mandatory: register_phase reads it to find each VM's IP.
+    A missing snippet silently kills PHASE registration, which then makes
+    Zeek dredge unscoped logs (disk-fill risk).
+    """
+    from ..core.enterprise_ssh_config import generate_ssh_config
 
     snippet_path = run_dir / "ssh_config_snippet.txt"
     try:
-        result = subprocess.run(
-            ["python3", str(ssh_script), str(deploy_output), deployment, run_id,
-             "-o", str(snippet_path)],
-            check=True, capture_output=True, text=True,
-        )
+        with open(deploy_output) as f:
+            data = json.load(f)
+        snippet = generate_ssh_config(data, deployment, run_id)
+        snippet_path.write_text(snippet + "\n")
         install_ssh_config(snippet_path, f"{deployment}/{run_id}")
-    except subprocess.CalledProcessError as e:
+    except (OSError, json.JSONDecodeError, ValueError) as e:
         # Don't fail the deploy — operators can still SSH by IP — but warn
-        # loudly so they know SSH config block isn't installed.
-        err = (e.stderr or "").strip()[:200]
-        output.error(f"  WARNING: SSH config generation failed (rc={e.returncode}): {err}")
+        # loudly so they know SSH config block isn't installed AND PHASE
+        # registration will be skipped downstream.
+        output.error(f"  WARNING: SSH config generation failed: {e}")
         output.error(f"  You'll need to SSH by IP for this deployment.")
 
 
@@ -490,10 +506,17 @@ def _generate_emulation_inventory(
         # per-node user-roles.json. PHASE pre-projects any window logic onto
         # day_start_hour_* + activity_daily_*_hours; RAMPART consumes those
         # fields directly.
-        def _csv_or_empty(v):
+        #
+        # Emit as Python list literal (e.g. "[2,4,4,4,4,4,2]") not CSV: Ansible's
+        # INI inventory parser runs ast.literal_eval on values, and a quoted CSV
+        # like "2,4,4,4,4,4,2" gets coerced to a tuple, which Jinja then renders
+        # as "[2, 4, 4, ...]" — pyhuman then sees space-split tokens like "[2"
+        # and crashes. List-literal form round-trips cleanly through literal_eval
+        # and is converted back to CSV by `| join(",")` in the playbook.
+        def _list_literal(v):
             if isinstance(v, list) and v:
-                return ",".join(str(int(x)) for x in v)
-            return ""
+                return "[" + ",".join(str(int(x)) for x in v) + "]"
+            return "[]"
 
         user_map[home_node] = {
             "username": user["user_profile"]["username"],
@@ -507,8 +530,8 @@ def _generate_emulation_inventory(
             "taskgroupinterval": lp.get("taskgroupinterval", "500"),
             "day_start_hour_min": int(lp.get("day_start_hour_min", 0)),
             "day_start_hour_max": int(lp.get("day_start_hour_max", 0)),
-            "activity_daily_min_hours": _csv_or_empty(lp.get("activity_daily_min_hours")),
-            "activity_daily_max_hours": _csv_or_empty(lp.get("activity_daily_max_hours")),
+            "activity_daily_min_hours": _list_literal(lp.get("activity_daily_min_hours")),
+            "activity_daily_max_hours": _list_literal(lp.get("activity_daily_max_hours")),
         }
 
     # Extract domain admin password (needed for Windows SSH)
@@ -579,8 +602,8 @@ def _generate_emulation_inventory(
             f"rampart_taskgroupinterval={user['taskgroupinterval']} "
             f"rampart_day_start_hour_min={user['day_start_hour_min']} "
             f"rampart_day_start_hour_max={user['day_start_hour_max']} "
-            f"rampart_activity_daily_min_hours=\"{user['activity_daily_min_hours']}\" "
-            f"rampart_activity_daily_max_hours=\"{user['activity_daily_max_hours']}\""
+            f"rampart_activity_daily_min_hours={user['activity_daily_min_hours']} "
+            f"rampart_activity_daily_max_hours={user['activity_daily_max_hours']}"
         )
 
         if node_info["is_windows"]:
@@ -758,8 +781,12 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
                 f"--seed {vm['seed']} --workflows {vm['workflows']} "
                 f"--day-start-hour-min {vm['day_start_hour_min']} "
                 f"--day-start-hour-max {vm['day_start_hour_max']} "
-                f"--activity-daily-min-hours {vm['activity_daily_min_hours']} "
-                f"--activity-daily-max-hours {vm['activity_daily_max_hours']} "
+                # Wrap CSV in PowerShell single quotes so the comma list isn't
+                # parsed as an array literal when run-emulation.ps1 invokes
+                # human.py via `&`. The doubled '' inside the outer $l += '...'
+                # collapses to a literal ' in the emitted script line.
+                f"--activity-daily-min-hours ''{vm['activity_daily_min_hours']}'' "
+                f"--activity-daily-max-hours ''{vm['activity_daily_max_hours']}'' "
                 f"--extra passfile C:\\tmp\\shib_login.{vm['username']}'; "
                 f"$l += '    }} catch {{'; "
                 f"$l += '        Write-Host human.py_crashed_restarting'; "

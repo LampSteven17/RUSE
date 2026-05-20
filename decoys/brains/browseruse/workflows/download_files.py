@@ -23,7 +23,10 @@ import requests
 
 from brains.browseruse.workflows.base import BUWorkflow
 from common.config.model_config import get_model
-from common.network.downloader import FALLBACK_URLS, download_file
+from common.network.downloader import (
+    FALLBACK_URLS, download_file, download_with_outcome,
+    select_pool_subset, pick_outcome,
+)
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -56,7 +59,12 @@ class DownloadFilesWorkflow(BUWorkflow):
             category="browser",
         )
         self.model_name = get_model(model)
-        self.url_pool: Optional[list[str]] = None
+        # url_pool may be list[str] (legacy) OR dict[str, list[str]] (Phase 4).
+        self.url_pool = None
+        # Phase 4: PHASE behavior.download.{size_mix, outcome_mix} — None
+        # falls through to legacy success-only behavior on a flat pool.
+        self.size_mix: Optional[dict] = None
+        self.outcome_mix: Optional[dict] = None
 
     def _ollama_pick(self, prompt: str, logger: Optional["AgentLogger"]) -> str:
         """One-shot Ollama chat completion. Loud failure: prints + logs on error."""
@@ -104,17 +112,21 @@ class DownloadFilesWorkflow(BUWorkflow):
         return random.choice(pool)
 
     def action(self, extra=None, logger: Optional["AgentLogger"] = None):
-        pool = self.url_pool or FALLBACK_URLS
+        # Phase 4: bucket-select via size_mix when pool is dict, then LLM
+        # picks within bucket. Legacy flat-pool path unchanged.
+        pool = select_pool_subset(self.url_pool, self.size_mix)
         url = self._pick_url(pool, logger)
+        outcome = pick_outcome(self.outcome_mix)
         if logger:
             logger.decision(
                 choice="download_url",
                 options=pool[:5],
                 selected=url,
-                context=f"LLM-picked URL from pool of {len(pool)} (BU)",
+                context=(f"LLM-picked URL from {len(pool)}-url subset "
+                         f"(outcome={outcome}, BU)"),
                 method="llm_picker",
             )
-        result = download_file(url)
+        result = download_with_outcome(url, outcome=outcome)
         success = result.startswith("downloaded ")
         if logger:
             logger.step_start("download_file", category="browser",

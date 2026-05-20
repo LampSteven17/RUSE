@@ -63,6 +63,29 @@ class OpenStack:
         result = self._run("server", "delete", server_id, check=False)
         return result.returncode == 0
 
+    def server_delete_many(self, server_ids: list[str], *, wait: bool = False) -> bool:
+        """Delete multiple servers in a single CLI call.
+        Each `openstack ...` invocation costs ~17s (python startup + auth),
+        so serial-loop deletes scale linearly: 23 RAMPART VMs took ~6 min.
+        One call with all IDs collapses that to a single ~17s round trip;
+        `--wait` then blocks until OpenStack reports them gone.
+        """
+        if not server_ids:
+            return True
+        args = ["server", "delete"]
+        if wait:
+            args.append("--wait")
+        args.extend(server_ids)
+        result = self._run(*args, check=False)
+        return result.returncode == 0
+
+    def volume_delete_many(self, volume_ids: list[str]) -> bool:
+        """Delete multiple volumes in one CLI call. Same batching reason."""
+        if not volume_ids:
+            return True
+        result = self._run("volume", "delete", *volume_ids, check=False)
+        return result.returncode == 0
+
     def server_show(self, name_or_id: str) -> dict | None:
         """Get server details as dict. Returns None if not found."""
         result = self._run("server", "show", name_or_id, "-f", "json", check=False)

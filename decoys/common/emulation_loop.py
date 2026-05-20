@@ -47,8 +47,17 @@ class BaseEmulationLoop(ABC):
         self._behavior_config_dir = behavior_config_dir
         self._config_key = config_key
         self._workflow_weights = None
+        # Phase 2 — PHASE-emitted content.schedule parsed into 24-element
+        # array of per-hour workflow_weights lists (parallel to self.workflows).
+        # None when PHASE shipped no schedule; flat self._workflow_weights then
+        # governs selection.
+        self._schedule_by_hour = None
         self._diversity_config = None
         self._background_svc = None
+        # Phase 3 — scripted protocol probes (smb/ldap/imap/doh/mdns/failed_conn).
+        # Created lazily on first feedback reload; toggled via per-service
+        # *_enabled booleans under diversity.background_services.
+        self._scripted_svc = None
         self._recent_workflows = []
         self._cluster_distinct = set()
         self._cluster_remaining = 0
@@ -169,8 +178,17 @@ class BaseEmulationLoop(ABC):
                 self.logger.info(
                     f"[behavior] Loaded workflow_weights for {self._config_key}",
                     details={"weights": fc.workflow_weights})
+            # Phase 2 — content.schedule replaces flat workflow_weights when
+            # present. Parsed into a 24-elem per-hour weights list; fail-loud
+            # if any hour 0..23 is not covered.
+            self._schedule_by_hour = self._build_schedule_by_hour(fc.schedule)
+            if self._schedule_by_hour and self.logger:
+                self.logger.info(
+                    f"[behavior] Loaded content.schedule for {self._config_key}",
+                    details={"n_blocks": len(fc.schedule)})
         else:
             self._workflow_weights = None
+            self._schedule_by_hour = None
         self._apply_brain_specific_config(fc)
 
         # CalibratedTiming setup. Both modes carry burst_percentiles +
@@ -212,6 +230,14 @@ class BaseEmulationLoop(ABC):
                 self._background_svc = BackgroundServiceGenerator(bg_config, self.logger)
             else:
                 self._background_svc.update_config(bg_config)
+            # Phase 3 — same bg_config dict carries the *_enabled toggles
+            # for scripted services. Both consumers ignore keys they
+            # don't recognize, so coexistence is clean.
+            if self._scripted_svc is None:
+                from common.network.scripted_services import ScriptedServiceScheduler
+                self._scripted_svc = ScriptedServiceScheduler(bg_config, self.logger)
+            else:
+                self._scripted_svc.update_config(bg_config)
 
         # Push window contract — both modes consume it identically.
         if self._phase_timing is not None:
@@ -272,14 +298,77 @@ class BaseEmulationLoop(ABC):
 
     # ── Workflow selection ────────────────────────────────────────────
 
+    def _build_schedule_by_hour(self, schedule):
+        """Parse content.schedule into 24-element per-hour weights list.
+
+        schedule is a list of {"hour_range": [a, b], "workflow_weights": {...}}.
+        Hour ranges are half-open [a, b). Per-block workflow_weights map
+        workflow names to floats; missing workflows weight 0.
+
+        Returns None when input is None/empty. Raises RuntimeError fail-loud
+        if any hour 0..23 is not covered, hour_range is malformed, or every
+        block's weights sum to 0.
+        """
+        if not schedule:
+            return None
+        by_hour = [None] * 24
+        for block in schedule:
+            try:
+                lo, hi = block["hour_range"]
+                ww = block["workflow_weights"]
+                lo_i = int(lo)
+                hi_i = int(hi)
+            except (KeyError, TypeError, ValueError) as e:
+                msg = (
+                    f"[FATAL] content.schedule block malformed "
+                    f"(missing/bad hour_range or workflow_weights): {block!r} ({e})"
+                )
+                print(msg, flush=True)
+                raise RuntimeError(msg)
+            block_weights = [
+                float(ww.get(getattr(w, 'name', '') or w.__class__.__name__, 0.0))
+                for w in self.workflows
+            ]
+            if sum(block_weights) <= 0:
+                msg = (
+                    f"[FATAL] content.schedule block {block.get('hour_range')} "
+                    f"has zero total weight across {len(self.workflows)} workflows. "
+                    f"workflow_weights={ww}"
+                )
+                print(msg, flush=True)
+                raise RuntimeError(msg)
+            for h in range(lo_i, hi_i):
+                if 0 <= h < 24:
+                    by_hour[h] = block_weights
+        missing = [h for h, w in enumerate(by_hour) if w is None]
+        if missing:
+            msg = (
+                f"[FATAL] content.schedule does not cover all 24 hours — "
+                f"missing hours (UTC): {missing}. Every hour must be assigned."
+            )
+            print(msg, flush=True)
+            raise RuntimeError(msg)
+        return by_hour
+
+    def _current_workflow_weights(self):
+        """Return the weights list to use right now (parallel to self.workflows).
+
+        Schedule (Phase 2) wins when present — looks up current UTC hour.
+        Otherwise falls back to the flat self._workflow_weights. None when
+        neither is configured (caller picks uniform).
+        """
+        if self._schedule_by_hour:
+            return self._schedule_by_hour[datetime.now(timezone.utc).hour]
+        return self._workflow_weights
+
     def _select_workflow(self):
         """Select next workflow using diversity rotation, weights, or uniform random."""
         if self._diversity_config:
             return self._select_workflow_with_rotation()
-        elif self._workflow_weights:
-            return random.choices(self.workflows, weights=self._workflow_weights, k=1)[0]
-        else:
-            return self.workflows[random.randrange(len(self.workflows))]
+        weights = self._current_workflow_weights()
+        if weights:
+            return random.choices(self.workflows, weights=weights, k=1)[0]
+        return self.workflows[random.randrange(len(self.workflows))]
 
     def _select_workflow_with_rotation(self):
         """Select workflow with diversity-aware rotation.
@@ -293,7 +382,8 @@ class BaseEmulationLoop(ABC):
         max_consec = rotation.get("max_consecutive_same", 99)
         min_distinct = rotation.get("min_distinct_per_cluster", 0)
 
-        weights = list(self._workflow_weights) if self._workflow_weights else [1.0] * len(self.workflows)
+        current = self._current_workflow_weights()
+        weights = list(current) if current else [1.0] * len(self.workflows)
 
         # Penalize consecutive same workflow
         if len(self._recent_workflows) >= max_consec:
@@ -464,6 +554,12 @@ class BaseEmulationLoop(ABC):
                 if self._background_svc:
                     self._background_svc.maybe_generate()
 
+                # Phase 3 — scripted protocol probes. Cron-style schedule;
+                # cheap when no service is enabled or current minute isn't
+                # on any schedule.
+                if self._scripted_svc:
+                    self._scripted_svc.maybe_run()
+
                 # Select workflow
                 workflow = self._select_workflow()
                 workflow_name = workflow.description
@@ -475,7 +571,11 @@ class BaseEmulationLoop(ABC):
                         options=workflow_options,
                         selected=workflow.name,
                         context=workflow_name,
-                        method="behavior_weighted" if self._workflow_weights else "random"
+                        method=(
+                            "schedule_block" if self._schedule_by_hour
+                            else "behavior_weighted" if self._workflow_weights
+                            else "random"
+                        )
                     )
 
                 print(workflow.display)
@@ -507,6 +607,8 @@ class BaseEmulationLoop(ABC):
 
     def run(self):
         """Start the emulation loop."""
+        # Seed source: PHASE _metadata.seed (peeked + applied in sup/__main__.py
+        # before this is reached) → config.seed → constructor self.seed.
         if self.seed != 0:
             random.seed(self.seed)
         else:

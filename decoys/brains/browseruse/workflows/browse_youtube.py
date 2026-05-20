@@ -76,6 +76,10 @@ class BrowseYouTubeWorkflow(BUWorkflow):
         # BrowserUseLoop._apply_brain_specific_config from PHASE
         # behavior_modifiers.page_dwell. None = no per-step delay.
         self.page_dwell = None
+        # video_pool: PHASE-emitted content.youtube_video_pool (Phase 1). When
+        # set, each task is "Watch the YouTube video at .../watch?v={id}".
+        # None = fall back to BROWSE_YOUTUBE_TASKS.
+        self.video_pool: Optional[list] = None
 
     def _get_llm(self, logger: Optional["AgentLogger"] = None):
         """Lazy-load the LLM with logging callbacks."""
@@ -136,14 +140,24 @@ class BrowseYouTubeWorkflow(BUWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            task = random.choice(BROWSE_YOUTUBE_TASKS)
+            if self.video_pool:
+                vid = random.choice(self.video_pool)
+                task = f"Watch the YouTube video at https://www.youtube.com/watch?v={vid} and browse around the page."
+                options_preview = self.video_pool[:5]
+                pool_size = len(self.video_pool)
+                selection_method = "phase_video_pool"
+            else:
+                task = random.choice(BROWSE_YOUTUBE_TASKS)
+                options_preview = BROWSE_YOUTUBE_TASKS[:5]
+                pool_size = len(BROWSE_YOUTUBE_TASKS)
+                selection_method = "random"
             if logger:
                 logger.decision(
                     choice="browse_youtube_task",
-                    options=BROWSE_YOUTUBE_TASKS[:5],
+                    options=options_preview,
                     selected=task,
-                    context=f"Task from {len(BROWSE_YOUTUBE_TASKS)} available tasks",
-                    method="random"
+                    context=f"Task from {pool_size} available tasks",
+                    method=selection_method
                 )
 
         self.category = "video"

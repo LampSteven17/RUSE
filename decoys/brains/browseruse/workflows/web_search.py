@@ -76,6 +76,10 @@ class WebSearchWorkflow(BUWorkflow):
         # BrowserUseLoop._apply_brain_specific_config from PHASE
         # behavior_modifiers.page_dwell. None = no per-step delay.
         self.page_dwell = None
+        # query_pool: PHASE-emitted content.google_search_pool (Phase 1). When
+        # set, each task is "Search Google for {query}". None = fall back to
+        # WEB_SEARCH_TASKS.
+        self.query_pool: Optional[list] = None
 
     def _get_llm(self, logger: Optional["AgentLogger"] = None):
         """Lazy-load the LLM with logging callbacks."""
@@ -136,14 +140,24 @@ class WebSearchWorkflow(BUWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            task = random.choice(WEB_SEARCH_TASKS)
+            if self.query_pool:
+                q = random.choice(self.query_pool)
+                task = f"Search Google for '{q}' and browse the results."
+                options_preview = self.query_pool[:5]
+                pool_size = len(self.query_pool)
+                selection_method = "phase_query_pool"
+            else:
+                task = random.choice(WEB_SEARCH_TASKS)
+                options_preview = WEB_SEARCH_TASKS[:5]
+                pool_size = len(WEB_SEARCH_TASKS)
+                selection_method = "random"
             if logger:
                 logger.decision(
                     choice="web_search_task",
-                    options=WEB_SEARCH_TASKS[:5],
+                    options=options_preview,
                     selected=task,
-                    context=f"Task from {len(WEB_SEARCH_TASKS)} available tasks",
-                    method="random"
+                    context=f"Task from {pool_size} available tasks",
+                    method=selection_method
                 )
 
         self.category = "browser"

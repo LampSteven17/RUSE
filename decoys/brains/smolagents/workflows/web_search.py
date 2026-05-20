@@ -110,6 +110,10 @@ class WebSearchWorkflow(SmolWorkflow):
         # has more reason to keep going past a single search. PHASE
         # behavior_modifiers.max_steps still overrides per-deploy.
         self.max_steps = 10
+        # query_pool: PHASE-emitted content.google_search_pool (Phase 1). When
+        # set, task = "Search Google for '{query}' ...". None = fall back to
+        # WEB_SEARCH_TASKS.
+        self.query_pool = None
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -147,16 +151,26 @@ class WebSearchWorkflow(SmolWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            # Tasks are (query, category) tuples since 2026-04-27. WebSearch
-            # does not consume site_weights — flat random over all tasks.
-            task = random.choice(WEB_SEARCH_TASKS)[0]
+            if self.query_pool:
+                q = random.choice(self.query_pool)
+                task = f"Search Google for '{q}' and browse the results."
+                options_preview = self.query_pool[:5]
+                pool_size = len(self.query_pool)
+                selection_method = "phase_query_pool"
+            else:
+                # Tasks are (query, category) tuples since 2026-04-27. WebSearch
+                # does not consume site_weights — flat random over all tasks.
+                task = random.choice(WEB_SEARCH_TASKS)[0]
+                options_preview = [t for t, _ in WEB_SEARCH_TASKS[:5]]
+                pool_size = len(WEB_SEARCH_TASKS)
+                selection_method = "random"
             if logger:
                 logger.decision(
                     choice="web_search_task",
-                    options=[t for t, _ in WEB_SEARCH_TASKS[:5]],
+                    options=options_preview,
                     selected=task,
-                    context=f"Task from {len(WEB_SEARCH_TASKS)} available tasks",
-                    method="random"
+                    context=f"Task from {pool_size} available tasks",
+                    method=selection_method
                 )
 
         self.category = "browser"

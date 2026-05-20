@@ -19,6 +19,7 @@ Usage:
 import atexit
 import json
 import os
+import random
 import signal
 import uuid
 import time
@@ -120,7 +121,21 @@ class AgentLogger:
             session_id: Optional session ID. Auto-generated if not provided.
         """
         self.agent_type = agent_type
-        self.session_id = session_id or str(uuid.uuid4())[:8]
+        # Deterministic session_id when seed is set (via SUP_OLLAMA_SEED env
+        # var, exported by sup/__main__.py after seed resolution). Uses a
+        # separate Random() instance so global RNG state is not consumed.
+        # Same seed across replays → same session_id → diff tooling can align.
+        if session_id is None:
+            seed_env = os.environ.get("SUP_OLLAMA_SEED")
+            if seed_env:
+                try:
+                    sid_rng = random.Random(int(seed_env))
+                    session_id = f"{sid_rng.getrandbits(32):08x}"
+                except (TypeError, ValueError):
+                    session_id = str(uuid.uuid4())[:8]
+            else:
+                session_id = str(uuid.uuid4())[:8]
+        self.session_id = session_id
         self.current_workflow: Optional[str] = None
         self._workflow_start_time: Optional[float] = None
         self._session_start_time: Optional[float] = None

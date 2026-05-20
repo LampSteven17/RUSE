@@ -1,5 +1,5 @@
 ---
-# ruse-controls: Lean baseline (gemma4 cutover 2026-04-08)
+# decoy-controls: Lean baseline (gemma4 cutover 2026-04-08)
 #
 # Includes:
 #   C0        - Bare Ubuntu VM (pure control, no software)
@@ -12,14 +12,14 @@
 #
 # Total VMs: 7 (5 non-GPU, 2 V100)
 
-deployment_name: ruse-controls
+deployment_name: decoy-controls
 
-# Default behavioral configuration. RUSE deploys must always have a
+# Default behavioral configuration. DECOY deploys must always have a
 # behavior.json on every non-control SUP — the controls dataset slots into
 # the same /mnt/AXES2U1/feedback/{type}-controls/{dataset}/ tree as PHASE
 # feedback datasets. spinup.py validates resolution before provisioning;
 # distribute-behavior-configs.yaml fails loud if any source file is missing.
-behavior_source: /mnt/AXES2U1/feedback/ruse-controls/controls
+behavior_source: /mnt/AXES2U1/feedback/decoy-controls/controls
 
 flavor_capacity:
   v1.14vcpu.28g: 5

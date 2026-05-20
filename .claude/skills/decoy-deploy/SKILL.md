@@ -58,8 +58,6 @@ Plus `d-{dep_id}-neighborhood-0` sidecar (feedback only, when any
 ./deploy --decoy --feedback --target sum24 # single dataset
 ./deploy --decoy --feedback --source /path # explicit PHASE source
 ./deploy --decoy --controls --target sum24 # controls + single feedback
-./deploy --decoy --parallel 1              # force serial (default is 3-way parallel)
-./deploy --decoy --parallel 6              # wider fan-out (risk OpenStack 503s)
 ```
 
 Granular per-config-file flags (`--timing`, `--workflow`, `--modifiers`,
@@ -69,43 +67,10 @@ Granular per-config-file flags (`--timing`, `--workflow`, `--modifiers`,
 
 Batch is the default when `--feedback` is given without a single-target
 selector. CLI scans `/mnt/AXES2U1/feedback/decoy-controls/`, prompts
-confirmation, then deploys.
-
-## Parallel batch deploys (post 2026-05-11)
-
-When the plan has >1 task (default `./deploy --decoy` = 8 tasks: controls
-+ 7 feedback datasets), tasks fan out via subprocess with ThreadPoolExecutor,
-3 concurrent workers by default. Each child runs its own `./deploy --{type}
-[--controls | --feedback --source PATH]` invocation with `RUSE_BATCH_CHILD=1`
-in env — child skips the confirm prompt in `show_plan_and_confirm` and
-forces `parallel=1` for itself (no recursive fan-out).
-
-Per-child output is captured to `deployments/logs/deploy-parallel-{ts}-{slug}.log`.
-Parent prints `[n/N] OK/FAIL {label} (XmYs) → log_name` as each child
-completes (via `as_completed`).
-
-Tunable via `--parallel N`:
-  - `--parallel 1` forces serial (legacy path inside `execute_plan`)
-  - default `3` is the conservative safe-zone for OpenStack provisioning
-  - `--parallel 6+` works but historically hit OpenStack 503s on
-    simultaneous server-create calls; bandwidth saturation from N×5
-    VMs all pulling Ollama models is the other risk
-
-Concurrency-safe pieces (also documented in the teardown fan-out):
-  - `~/.ssh/config` write — fcntl lock on sidecar `~/.ssh/config.ruse.lock`
-  - `experiments.json` read-modify-write — fcntl lock on
-    `experiments.json.lock`
-  - session log + ansible log paths get a `pid` suffix so N children
-    starting in the same wall-clock second don't write to the same file
-  - per-task config dir is disjoint (`decoy-controls/` vs
-    `decoy-feedback-stdctrls-{ds}-all/`), and within each, `runs/{rid}/`
-    is per-deploy. Same run_id across tasks at the same second is safe
-    because `dep_id = config_name + run_id` differs.
-
-Total wall-time on an 8-task batch:
-  - Serial: ~22min × 8 = ~3hr
-  - Parallel 3: ~22min × ceil(8/3) = ~66min
-  - Parallel 8: ~22min (bounded by slowest single deploy + setup variance)
+confirmation, then deploys each task sequentially. No cross-deploy
+parallel fan-out — `--parallel` was removed 2026-05-11 (operator
+preference: clean inline output and easier debugging beat the
+wall-time win).
 
 Dataset target aliases (`core/feedback.py::DATASET_TARGETS`): `sum24` →
 `summer24`, `spr25` → `spring25`, `vt1g` → `vt-fall22-1gb`, `vt50g` →
@@ -180,7 +145,9 @@ match the shape PHASE emits verbatim.
 ```json
 {
   "_metadata": {"source", "sup_config", "dataset", "current_score", "target_score",
-                "generated_at", "mode", "ablation_gate", "timezone": "UTC"},
+                "generated_at", "mode", "ablation_gate", "timezone": "UTC",
+                "seed": int},  // optional; PHASE-emitted, overrides CLI --seed default
+                               // via peek_seed() in sup/__main__.py
   "timing": {
     "active_minute_windows": [[start_min, end_min), ...],   // hard 0/1 schedule
     "target_conn_per_minute_during_active": 7.0,
@@ -359,6 +326,7 @@ Loader (`load_behavioral_config`) → consumers:
 | `diversity.topology_mimicry.inbound_*_per_hour` | `diversity_injection` | Neighborhood sidecar daemon |
 | `_metadata.mode` | `mode` | Baseline short-circuit in `_reload_behavioral_config` |
 | `_metadata.ablation_gate` | `ablation_gate` | `is_ablation_gated()` → `[WARNING]` → `[INFO]` downgrade |
+| `_metadata.seed` | `seed` | `sup/__main__.py` peeks before `random.seed()`; overrides CLI `--seed`. Also propagated into `neighborhood-sups.json` top-level `seed` field for sidecar RNG anchor. `AgentLogger.session_id` derives from this via separate `Random()` instance (no global RNG consumption) |
 | `prompt_content` | `prompt_augmentation.prompt_content` | G1: BU + Smol prompt prepend |
 
 ## Topology mimicry (neighborhood sidecar)

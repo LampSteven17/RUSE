@@ -1,107 +1,132 @@
 ---
 name: rampart-audit
-description: RAMPART audit — `./audit --rampart`. STUB only at the moment. Routes to `deployment_engine/rampart/audit.py::run_rampart_audit` which prints a TODO list and returns rc=1. RAMPART check semantics differ enough from DECOY (AD health on dc1-3, pyhuman scheduled-task state across Win+Linux endpoints, DNS zone freshness, Moodle reachability, simulate-logins seed sanity) that the DECOY probe doesn't transfer. Skill exists so the dispatch shape is symmetric with /decoy-audit and /ghosts-audit; see /rampart-deploy for what an implementation would need to probe. Implementation deferred until we have a deploy lifecycle stable enough to need it.
+description: RAMPART audit — `./audit --rampart` runs per-VM SSH probes across every active RAMPART deployment (Linux: id_rsa + systemctl is-active + NRestarts + journalctl hour-gate + ExecStart sigma/activity wiring + realm list; Windows + DCs: sshpass with forest-leader admin pw + Get-ScheduledTask state, Get-Service NTDS/ADWS, Get-ADDomain.DNSRoot). Plus cross-deployment OpenStack cohort diff, experiments.json registration (start_date sanity), and DNS zone presence. Code in `deployment_engine/rampart/audit.py`. Outputs terminal table + markdown report at `deployments/logs/audit_rampart_*.md`.
 ---
 
 # rampart-audit
 
-`./audit --rampart` — currently a placeholder. Returns rc=1 with a TODO
-list of what a real implementation would check.
+`./audit --rampart` runs health probes across every active RAMPART
+deployment and reports per-VM + cross-deployment status. Replaced the
+stub on 2026-05-12 alongside the start_date contract fix.
 
 | | |
 |---|---|
 | Entry point | `./audit --rampart` at RUSE root |
 | Code | `deployment_engine/rampart/audit.py::run_rampart_audit` |
-| Status | **stub only** — exits 1 with `RAMPART audit not yet implemented` |
+| Outputs | terminal table + `deployments/logs/audit_rampart_*.md` |
+| Exit code | 0 clean; 1 if any per-VM check fails or cross-deployment issue |
 
-## Why no implementation yet
+## What it probes
 
-DECOY's audit logic doesn't transfer cleanly. DECOY checks:
+Walks `deployments/rampart-*/runs/<latest>/` for every config dir
+starting with `rampart`. For each deploy, parses
+`enterprise-config-prefixed.json` (canonical VM list + roles + user
+slot) and `deploy-output.json` (per-VM IPs + cloud-init admin
+passwords). Builds per-VM probe jobs and fans out via
+`concurrent.futures.ThreadPoolExecutor(max_workers=20)`.
 
-- Per-behavior systemd service (e.g., `b0_gemma.service`)
-- Ollama-loaded model + V100 VRAM
-- jsonl log freshness
-- behavior.json window-mode contract
+### Linux endpoints (`ssh -i ~/.ssh/id_rsa ubuntu@<ip>`)
 
-None of those map to RAMPART's mix of:
+Single round-trip bash collects:
 
-- AD forest health (NTDS, ADWS, DNS replication across dc1/dc2/dc3)
-- pyhuman delivery: systemd `rampart-human.service` on Linux endpoints
-  vs. scheduled task `RampartHuman` on Windows endpoints
-- DNS zone freshness scoped to `r-{md5(dep_id)[:5]}-` per-deploy isolation
-- Moodle / Shibboleth reachability
-- `simulate-logins.py` `logins.json` seed sanity / hour-gate fields
-- pyhuman `--clustersize-sigma` / `--taskinterval-sigma` per-host arg
-  presence (D5 sigma flow)
-- per-node `user-roles.json` `_phase_metadata.mode ∈ {feedback,controls}`
-  — same FATAL gate as DECOY's window-mode contract
+- `systemctl is-active rampart-human` (expected `active`)
+- `systemctl show -p NRestarts` (≤ 10; crash-loop catch — this is the
+  D5 arg-mismatch failure mode that previously masked 2000+ restarts
+  as "healthy")
+- `journalctl -u rampart-human | grep -c '[hour-gate]'` (UTC hour-gate
+  wiring proof; > 0 means pyhuman is logging its per-day active window)
+- ExecStart grep for `--clustersize-sigma|--taskinterval-sigma` (D5
+  sigma actually on the wire)
+- ExecStart grep for `--activity-daily-min-hours` (activity-window
+  flags actually on the wire — see 2026-05-11 incident where Ansible's
+  INI safe_eval converted the CSV string to a tuple, breaking pyhuman)
+- `realm list` (domain join still intact)
 
-Implementing for real means a separate probe shape (`sshpass` for
-Windows, plus `Get-ScheduledTask` PowerShell on Win, plus AD-aware
-health queries) that doesn't reuse much of `decoy/audit.py`.
+### Windows VMs (DCs + endpoints; `sshpass` + UPN auth)
 
-## What the implementation would check (TODO)
-
-Per-VM (via SSH probe; sshpass + PubkeyAuthentication=no for Windows):
-
-1. SSH reachable (Linux: id_rsa; Windows: sshpass + admin pass)
-2. Domain join: `realm list` on Linux endpoints; `(Get-ADDomain).DNSRoot`
-   on Windows endpoints
-3. pyhuman delivery:
-   - Linux: `systemctl is-active rampart-human` + NRestarts ≤ 10
-   - Windows: `(Get-ScheduledTask -TaskName RampartHuman).State == Ready/Running`
-4. AD service health on dc1/dc2/dc3:
-   - `Get-Service NTDS, ADWS` State == Running
-   - `Get-EventLog -LogName 'Directory Service' -EntryType Error -Newest 5`
-   - DNS replication: `repadmin /replsummary`
-5. Hour-gating wiring on endpoints:
-   - Linux: `journalctl -u rampart-human | grep '\[hour-gate\]'` last 24h
-   - Windows: read scheduled-task action for `--day-start-hour-min`/etc args
-6. user-roles.json mode contract:
-   - Pull `enterprise-config-feedback.json` from run_dir, walk per-node
-     roles, for each non-null user node verify `_phase_metadata.mode ∈
-     {feedback, controls}`. Anything else → FATAL.
-7. logins.json seed: parse run_dir's `logins.json`, verify
-   `start_date` is tz-aware UTC and within `duration_days` of today.
-8. Workflow availability: each role's `workflows` array intersected
-   with the available pyhuman workflow set
-   (`browse_iis browse_shibboleth browse_web browse_youtube
-   build_software download_files google_search moodle spawn_shell`).
-
-Cross-deployment:
-
-- Orphan / missing diff: `r-{md5(dep_id)[:5]}-` prefix on OpenStack vs.
-  `enterprise-config-prefixed.json::nodes[]`
-- PHASE registration in `experiments.json`
-- DNS zone present + matches `dns_zone.txt` per run
-- D5 sigma values (`clustersize_sigma` / `taskinterval_sigma`) actually
-  on the wire — grep ExecStart line in
-  `/etc/systemd/system/rampart-human.service`
-- pyhuman + workflows.zip version skew (the
-  `workflows.zip` was mentioned in /rampart-deploy as needing to roll
-  with playbook changes)
-
-## Until then
-
-To eyeball RAMPART health, see the manual recipes in `/rampart-deploy`:
-
-```bash
-# Linux endpoints
-for ip in <linep_ips>; do
-  ssh -i ~/.ssh/id_rsa ubuntu@$ip "systemctl is-active rampart-human"
-done
-
-# Windows endpoints
-for ip in <winep_ips>; do
-  SSH_AUTH_SOCK="" sshpass -p '<admin_pass>' ssh \
-    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-    Administrator@castle.{hash}.{project}.os@$ip \
-    "powershell -Command (Get-ScheduledTask -TaskName RampartHuman).State"
-done
 ```
+sshpass -p '<forest_leader_admin_pass>' ssh \
+    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+    Administrator@castle.{hash}.{project}.os@<ip> \
+    'powershell -EncodedCommand <utf16-base64>'
+```
+
+Critical: the audit uses the **forest leader's** (`dc1`) cloud-init
+password for ALL Windows VMs in the deploy, not per-VM cloud-init
+passwords. Once endpoint Win VMs and follower DCs join the domain,
+their own cloud-init passwords stop authenticating against the now-
+promoted domain Administrator UPN — only dc1's password works.
+Initial implementation used per-VM passwords and got 12/23 SSH
+failures per deploy; corrected after first audit run.
+
+PowerShell payload uses `-EncodedCommand` (UTF-16 LE base64) to
+sidestep bash → cmd.exe → PowerShell quoting hell. Collects:
+
+- `(Get-ScheduledTask -TaskName RampartHuman).State` (expected
+  `Ready` or `Running`)
+- DCs only: `Get-Service NTDS` + `Get-Service ADWS` (both `Running`),
+  `(Get-ADDomain).DNSRoot` (non-empty)
+
+### Cross-deployment
+
+- OpenStack server list vs canonical `enterprise-config-prefixed.json`
+  → MISSING (canonical but absent on OpenStack) + ORPHAN (live on
+  OpenStack but not in config)
+- `experiments.json` per-deploy entry:
+  - exists (not registered → PHASE won't dredge logs)
+  - `start_date` populated (null → PHASE.py dredges ALL eno2 history;
+    triggered disk-fill 2026-05-12 against rampart-controls)
+  - `end_date` is null on active deploy (set → stale entry from a
+    prior teardown that didn't get cleared on re-register)
+  - `ips` field overlaps canonical VMs (no overlap → stale entry from
+    a prior deploy)
+  - `baseline_user_roles` populated and resolves (missing → PHASE
+    `feedback_engine.rampart_generator` raises `FileNotFoundError`
+    when feedback generation runs; RAMPART-only field per PHASE
+    4.2-rampart SKILL.md A6). Default canonical path:
+    `~/uva-cs-workflow/user-roles/user-roles.json`.
+- DNS zone in `run_dir/dns_zone.txt` exists in Designate
+
+## Output
+
+Terminal table — one line per VM with a 5-char status string:
+
+```
+. = pass   X = fail   - = N/A for this role
+```
+
+Per-row legend depends on role:
+- Linux endpoint with user: `P H S A R` (pyhuman / hour-gate / sigma /
+  activity / realm)
+- DC: `N A D` (NTDS / ADWS / domain-resolves)
+- linep1 shared (no user): only SSH probed
+
+Markdown report tabulates each deploy's VMs and lists cross-deployment
+issues. Written to `deployments/logs/audit_rampart_<ts>.md`.
+
+## Skipped checks (out of scope)
+
+The following were in the original TODO list but deferred for being
+either marginal-value or expensive to probe:
+
+- `Get-EventLog 'Directory Service'` (noisy; healthy DCs have lots of
+  benign errors)
+- `repadmin /replsummary` (only matters if NTDS already says it's not
+  running — caught by the NTDS check)
+- Moodle / Shibboleth reachability (no Moodle nodes in enterprise-med
+  topology; would only matter if the topology grows)
+- `logins.json` start_date tz-aware UTC sanity (the file is dead-code
+  in production per /rampart-deploy; only `emulate-logins.py` reads
+  it, and `_start_emulation` is unused)
+- Workflow availability intersection (`browse_iis browse_shibboleth
+  browse_web browse_youtube build_software download_files
+  google_search moodle spawn_shell`) — PHASE always emits valid
+  workflow sets, hasn't bit us yet
+
+Easy to add back if a future incident makes them load-bearing.
 
 ## Related
 
 - Deploy lifecycle: `/rampart-deploy`
-- DECOY audit (real implementation): `/decoy-audit`
-- GHOSTS audit (also stub): `/ghosts-audit`
+- DECOY audit: `/decoy-audit`
+- GHOSTS audit: `/ghosts-audit`

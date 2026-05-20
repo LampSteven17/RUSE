@@ -115,6 +115,10 @@ class BrowseWebWorkflow(SmolWorkflow):
         # content.site_categories (e.g. {"lightweight": 0.55, "medium": 0.3,
         # "heavy": 0.15}). When None, fall back to flat random over all tasks.
         self.site_weights = None
+        # url_pool: PHASE-emitted content.browse_url_pool (Phase 1). When set,
+        # task = "Visit {url} and read the content" — bypasses site_weights /
+        # task_weights / BROWSE_WEB_TASKS. None = legacy path.
+        self.url_pool = None
 
     def _get_agent(self):
         """Lazy-load the SmolAgents CodeAgent."""
@@ -152,14 +156,14 @@ class BrowseWebWorkflow(SmolWorkflow):
         if extra and isinstance(extra, dict):
             task = extra.get('task')
         if task is None:
-            # Tasks are (query, category) tuples since 2026-04-27. Three
-            # selection modes, in priority order:
-            #   1. site_weights (PHASE content.site_categories) — pick a
-            #      category, then random within that category's pool.
-            #   2. task_weights (legacy per-task weighting) — random.choices
-            #      over flat list.
-            #   3. fallback — flat random over all tasks.
-            if self.site_weights:
+            # Selection priority: PHASE url_pool (Phase 1) > site_weights >
+            # task_weights > flat random. Tasks are (query, category) tuples
+            # since 2026-04-27 — first three modes operate on those tuples.
+            if self.url_pool:
+                url = random.choice(self.url_pool)
+                task = f"Visit {url} and read the content. Spend a few minutes browsing the page."
+                selection_method = "phase_url_pool"
+            elif self.site_weights:
                 cats = list(self.site_weights.keys())
                 weights = list(self.site_weights.values())
                 chosen_cat = random.choices(cats, weights=weights, k=1)[0]

@@ -11,6 +11,51 @@ running pyhuman workflow emulation. Driven by `user-roles.json` (RAMPART
 analog of DECOY's `behavior.json`). Code in `deployment_engine/rampart/spinup.py`
 delegates VM provisioning to `~/uva-cs-workflow/`.
 
+## CLI scope flags
+
+```bash
+./deploy --rampart                              # controls + ALL feedback datasets (default)
+./deploy --rampart --controls                   # controls only
+./deploy --rampart --feedback                   # all feedback (no controls)
+./deploy --rampart --feedback --target sum25    # single dataset (no controls)
+./deploy --rampart --feedback --source /path    # explicit PHASE source dir
+./deploy --rampart --controls --target sum25    # controls + single feedback
+```
+
+`--feedback` is a boolean switch, NOT a value flag. Single-dataset
+selection is done via `--target NAME` or `--source /path`. Typing
+`./deploy --rampart --feedback axes-summer25` parses `axes-summer25` as
+a positional `config_name`, the filter is ignored, and the deploy runs
+ALL 7 feedback datasets (wrong, fail-loud caveat: the controls baseline
+is skipped when its run dir already exists).
+
+Dataset target aliases live in `core/feedback.py::DATASET_TARGETS`:
+`sum25` → `axes-summer25`, `spr25` → `axes-spring25`, `vt50g` →
+`vt-fall22-50gb`, `axall` → `axes-all`, etc. The full-name form
+(`axes-summer25`) also works.
+
+## Teardown CLI
+
+```bash
+./teardown <config_name>-<run_id>   # single deploy (positional, type auto-detected)
+./teardown --rampart                # ALL rampart deploys (filter mode)
+./teardown --rampart --feedback     # ALL rampart feedback deploys
+./teardown --all                    # ALL decoy + rampart + ghosts deploys
+```
+
+Positional `target` form is `<config_name>-<MMDDYYHHMMSS>` e.g.
+`rampart-feedback-stdctrls-cptc9-all-051426212115` (concat the run dir
+under `deployments/`). Type is auto-detected from the deploy state — do
+NOT also pass `--rampart`.
+
+**FOOTGUN — combining filter + positional silently runs the filter and
+ignores the positional.** `__main__.py::_cmd_teardown` checks
+`has_filter = args.decoy or args.rampart or args.ghosts or args.feedback`
+first; if true, calls `run_teardown_filtered` and the positional is
+dropped on the floor. So `./teardown --rampart <target>` tears down
+ALL 8 rampart deploys, not the one named target. Single-target form
+is always bare positional.
+
 | | |
 |---|---|
 | Inputs | `deployments/rampart-controls/config.yaml`, `~/uva-cs-workflow/cloud-configs/axes-cicd.json` (or `axes-cicd-feedback.json` for feedback flavor bump), `~/uva-cs-workflow/enterprise-configs/enterprise-med.json`, `~/uva-cs-workflow/user-roles/user-roles.json` (3-role baseline), `/mnt/AXES2U1/feedback/rampart-controls/{dataset}/{bare_node}/user-roles.json` (19 per-node feedback files) |
@@ -71,10 +116,28 @@ limit. Example: `r-bf351-dc1`, `r-bf351-winep1`, `r-bf351-linep3`.
       └── Windows: rampart.py::_deploy_windows_emulation → scheduled task
 ```
 
-Post-deploy: SSH config block installed via
-`enterprise_ssh_config.py`, PHASE registered with `--start-date $(today)`
-(scopes Zeek log dredging — without it PHASE processes ALL eno2 logs and
-fills disk).
+Post-deploy: SSH config block installed via the `generate_ssh_config()`
+helper imported from `core.enterprise_ssh_config` (was previously a
+shell-out to a stale `deployments/lib/` path; fixed 2026-05-11).
+`spinup.py` calls `register_phase` with two load-bearing kwargs:
+
+- `start_date=time.strftime("%Y-%m-%d")` — RAMPART has no `inventory.ini`
+  for `register_experiment.py` to scrape, so the date must be explicit.
+  Without it, `start_date` ends up null and `PHASE.py --rampart`
+  materializes ALL eno2 history into one DuckDB COPY, spilling /tmp
+  until disk fills. Hit 2026-05-12 against rampart-controls (start=null
+  → 7+ months of parquet across 223 date dirs).
+- `baseline_user_roles=str(Path(wdir)/config.enterprise_user_roles())`
+  — RAMPART-only field per PHASE 4.2-rampart SKILL.md A6. PHASE's
+  `feedback_engine.rampart_generator._baseline_path()` reads
+  `experiments.json[deploy_key]["baseline_user_roles"]` and resolves
+  it as a file path; raises `FileNotFoundError` if missing or unresolvable.
+  Default value points at the canonical pyhuman baseline
+  `~/uva-cs-workflow/user-roles/user-roles.json`. DECOY/GHOSTS don't
+  need this — their baselines live where PHASE already looks
+  (decoy: `/mnt/AXES2U1/feedback/decoy-controls/controls/behavior.json`;
+  ghosts: upstream cmu-sei/GHOSTS timelines). Hit 2026-05-12 against
+  all 8 rampart deploys (PHASE feedback generation aborted).
 
 ## Multi-deployment isolation
 
@@ -146,10 +209,23 @@ Wiring:
 
 - `rampart.py::_generate_emulation_inventory` reads verbatim from
   `login_profile`, writes `rampart_day_start_hour_min/_max` and
-  `rampart_activity_daily_min/max_hours` host vars
+  `rampart_activity_daily_min/max_hours` host vars. The two
+  `activity_daily_*_hours` arrays are emitted as Python list literals
+  (`[2,4,4,4,4,4,2]`, `[]` for empty) — Ansible's INI parser runs
+  `ast.literal_eval` on the value, and a quoted CSV like
+  `"2,4,4,4,4,4,2"` was getting coerced to a tuple, then rendered as
+  `[2, 4, ...]` and word-split by systemd, breaking pyhuman with
+  `int('[2')` ValueError. List-literal form round-trips through
+  literal_eval cleanly; the playbook converts back to CSV with
+  `| join(",")`.
 - `rampart.py::_deploy_windows_emulation` threads same 4 fields into
-  `run-emulation.ps1` for the Windows scheduled-task path
-- `install-rampart-emulation.yaml` ExecStart appends 4 flags to pyhuman
+  `run-emulation.ps1`. CSV values are wrapped in PowerShell single
+  quotes (`''2,4,4,4,4,4,2''` inside the outer `$l += '...'` collapses
+  to a literal `'...'` in the script) so `& human.py ...` doesn't
+  interpret the comma-list as a PowerShell array.
+- `install-rampart-emulation.yaml` ExecStart appends 4 flags to pyhuman;
+  uses `{{ var | default([]) | join(",") }}` for the two activity-daily
+  args.
 - `workflows.zip::human.py` adds 4 args, computes per-day active UTC hour
   set via `_select_active_hours_for_day` (mirrors
   `simulate-logins.py::simulate_terminal_day` randomization), re-rolls

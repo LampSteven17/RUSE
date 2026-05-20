@@ -158,6 +158,17 @@ class MCHPAgent(BaseEmulationLoop):
             wname = getattr(w, "name", "")
             if wname == "WhoisLookup" and hasattr(w, "domain_pool"):
                 w.domain_pool = fc.whois_domain_pool
+            # Phase 1: PHASE pools replace MCHP's file-loaded lists when shipped.
+            # MCHP consumes URLs/queries directly (no LLM task wrapping).
+            elif wname == "BrowseWeb" and fc.browse_url_pool and hasattr(w, "website_list"):
+                w.website_list = list(fc.browse_url_pool)
+            elif wname == "GoogleSearch" and fc.google_search_pool and hasattr(w, "search_list"):
+                w.search_list = list(fc.google_search_pool)
+            elif wname == "BrowseYouTube" and fc.youtube_video_pool and hasattr(w, "video_pool"):
+                # MCHP YouTube switches from search→click to direct
+                # /watch?v={id} navigation when the pool is set; watch +
+                # suggested-video clicks still run downstream.
+                w.video_pool = list(fc.youtube_video_pool)
 
         # Ablation-gated omissions get INFO-level logs; real gaps stay WARNING
         gated = fc.is_ablation_gated() if fc and hasattr(fc, "is_ablation_gated") else False

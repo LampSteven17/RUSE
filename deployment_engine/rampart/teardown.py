@@ -4,12 +4,18 @@ RAMPART teardown is direct OpenStack iteration (no Ansible playbook for
 deletion). Pre-step kills emulate.pid; mid-step deletes the per-deploy
 DNS zone. After VM deletion, finalize_teardown handles the shared
 epilogue (ssh / volumes / phase / rmtree / feedback-dir).
+
+Performance: every `openstack` CLI call costs ~17s (python startup +
+auth). Step 2 batches all 23 VM deletes into a single `--wait` call
+(was 23 × 17s ≈ 6 min serial), and step 3's zone delete runs in
+parallel with the VM-wait, since they're independent OpenStack ops.
 """
 
 from __future__ import annotations
 
 import os
 import signal
+import threading
 from pathlib import Path
 
 from ..core import output
@@ -40,49 +46,67 @@ def run_rampart_teardown(
     else:
         output.info("  No emulate.pid found -- skipping")
 
-    # Step 2: Delete VMs by prefix
+    # Identify VM cohort up front so the zone-delete thread can run while
+    # the batch VM delete --wait blocks.
     output.info("[2/3] Deleting VMs...")
     servers = os_client.server_list_with_ids(prefix=ent_vm_prefix)
     if servers:
         output.info(f"  Deleting {len(servers)} VMs (prefix {ent_vm_prefix})...")
         for s in servers:
-            os_client.server_delete(s["id"])
-            output.info(f"    Deleted {s['name']}")
+            output.dim(f"    queued {s['name']}")
     else:
         output.info("  No RAMPART VMs found")
 
-    # Step 3: DNS cleanup (scoped to this deployment's zone)
-    output.info("[3/3] Cleaning up DNS zone...")
-    zone_marker = run_dir / "dns_zone.txt"
-    zone_deleted = False
-    if zone_marker.exists():
-        zone_name = zone_marker.read_text().strip()
-        z = os_client.zone_find(zone_name)
-        if z:
-            os_client.zone_delete(z["id"])
-            output.info(f"  Deleted DNS zone: {zone_name}")
-            zone_deleted = True
-        else:
-            output.info(f"  Zone not found: {zone_name} (already deleted?)")
-            zone_deleted = True
-    else:
-        # Fallback for deployments created before zone isolation: match
-        # zones containing this deployment's hash. Extract the hash from
-        # the prefix (`r-{hash}-`) since make_ent_vm_prefix is the source
-        # of truth.
-        ent_hash = ent_vm_prefix[2:-1]  # strip 'r-' and trailing '-'
+    # Kick off zone delete on a side thread; it's an independent OpenStack
+    # API and runs concurrently with the VM-delete wait below.
+    zone_result: dict = {"deleted": False, "msg": ""}
+
+    def _delete_zone():
+        zone_marker = run_dir / "dns_zone.txt"
+        if zone_marker.exists():
+            zone_name = zone_marker.read_text().strip()
+            z = os_client.zone_find(zone_name)
+            if z:
+                os_client.zone_delete(z["id"])
+                zone_result.update(deleted=True, msg=f"Deleted DNS zone: {zone_name}")
+                return
+            zone_result.update(deleted=True, msg=f"Zone not found: {zone_name} (already deleted?)")
+            return
+        # Fallback for pre-zone-isolation deployments: match zones containing
+        # this deployment's hash. Extract from the `r-{hash}-` prefix.
+        ent_hash = ent_vm_prefix[2:-1]
         for z in os_client.zone_list():
             zname = z.get("name", "")
             if ent_hash in zname:
                 os_client.zone_delete(z["id"])
-                output.info(f"  Deleted DNS zone: {zname}")
-                zone_deleted = True
-    if not zone_deleted:
+                zone_result.update(deleted=True, msg=f"Deleted DNS zone: {zname}")
+                return
+
+    zone_thread = threading.Thread(target=_delete_zone, name="rampart-zone-delete")
+    zone_thread.start()
+
+    # Batch VM delete with --wait. One CLI invocation handles all servers
+    # and blocks until OpenStack reports each gone. finalize_teardown's
+    # poll_for_zero check below then completes on the first iteration.
+    if servers:
+        ok_delete = os_client.server_delete_many(
+            [s["id"] for s in servers], wait=True,
+        )
+        if ok_delete:
+            output.info(f"  Deleted {len(servers)} VMs")
+        else:
+            output.error("  WARNING: server_delete_many reported non-zero rc")
+
+    output.info("[3/3] Cleaning up DNS zone...")
+    zone_thread.join()
+    if zone_result["msg"]:
+        output.info(f"  {zone_result['msg']}")
+    if not zone_result["deleted"]:
         output.info("  No DNS zones found for this deployment")
 
     # Shared epilogue: ssh / volumes / phase / rmtree / feedback-dir.
-    # poll_for_zero=True because direct OpenStack delete is async — we
-    # need to wait for it to complete before declaring success.
+    # poll_for_zero=True is still cheap here — `--wait` already drained
+    # the cohort so wait_until_zero returns on its first iteration.
     ok = finalize_teardown(
         config_name, config_dir, run_id, run_dir,
         vm_prefix=ent_vm_prefix,

@@ -167,6 +167,16 @@ def main():
             "gaps (today's neighborhood case) were the reason this was added."
         ),
     )
+    parser.add_argument(
+        "--baseline-user-roles",
+        help=(
+            "Path to pyhuman baseline roles JSON (RAMPART only). PHASE's "
+            "feedback_engine reads experiments.json[name].baseline_user_roles "
+            "via rampart_generator._baseline_path() and raises FileNotFoundError "
+            "if the field is missing or the path doesn't resolve. RAMPART skill "
+            "spec A6."
+        ),
+    )
     args = parser.parse_args()
 
     snippet_path = Path(args.snippet)
@@ -216,6 +226,9 @@ def main():
     if args.run_id:
         entry["sup_logs_db"] = f"{name}-{args.run_id}.duckdb"
 
+    if args.baseline_user_roles:
+        entry["baseline_user_roles"] = args.baseline_user_roles
+
     # Atomic read-modify-write under a file lock. Without the lock, two
     # deploys running register_experiment.py concurrently could each
     # load their own stale view and write back — the later writer's
@@ -247,6 +260,8 @@ def main():
             existing["end_date"] = None
             if "sup_logs_db" in entry:
                 existing["sup_logs_db"] = entry["sup_logs_db"]
+            if "baseline_user_roles" in entry:
+                existing["baseline_user_roles"] = entry["baseline_user_roles"]
             data[name] = order_entry(existing)
             action = "Updated"
         else:

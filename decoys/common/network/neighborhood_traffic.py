@@ -52,12 +52,13 @@ class SUPTarget:
     rates: dict[str, int]
 
 
-def load_config(path: Path) -> list[SUPTarget]:
-    """Load sups.json. Returns [] if file is missing — the daemon then
-    sits idle, which is the expected state on control deploys that never
-    shipped a populated config."""
+def load_config(path: Path) -> tuple[list[SUPTarget], int | None]:
+    """Load sups.json. Returns (targets, seed). Targets is [] if file is
+    missing — the daemon then sits idle, which is the expected state on
+    control deploys that never shipped a populated config. Seed is the
+    top-level `seed` field (PHASE-derived) or None if absent."""
     if not path.exists():
-        return []
+        return [], None
     data = json.loads(path.read_text())
     targets = []
     for s in data.get("sups", []):
@@ -66,7 +67,12 @@ def load_config(path: Path) -> list[SUPTarget]:
         rates = {k: int(v) for k, v in (s.get("rates") or {}).items()
                  if isinstance(v, (int, float)) and v > 0 and k in PROBE_REGISTRY}
         targets.append(SUPTarget(name=s.get("name", "?"), ip=s["ip"], rates=rates))
-    return targets
+    seed = data.get("seed")
+    try:
+        seed = int(seed) if seed is not None else None
+    except (TypeError, ValueError):
+        seed = None
+    return targets, seed
 
 
 def any_active_rates(targets: list[SUPTarget]) -> bool:
@@ -199,7 +205,13 @@ def main() -> int:
     logger = _build_logger(Path(args.log))
 
     config_path = Path(args.config)
-    targets = load_config(config_path)
+    targets, seed = load_config(config_path)
+    # Seed RNG deterministically when PHASE shipped a seed. Daemon's random
+    # uses (probe count remainder, jitter sleep) become reproducible across
+    # replays of the same deploy.
+    if seed is not None:
+        random.seed(seed)
+        logger.info(json.dumps({"event": "seed_applied", "seed": seed}))
 
     if not targets:
         # Control-deploy mode OR config not yet delivered. Daemon stays

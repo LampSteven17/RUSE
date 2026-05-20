@@ -34,7 +34,7 @@ from typing import Optional, List
 # four window-contract fields; the difference is what content/behavior
 # fields each shape populates.
 MODE_FEEDBACK = "feedback"   # full PHASE-tuned schema (workflow_weights, site_categories, ...)
-MODE_CONTROLS = "controls"   # hardcoded floor (url_queries, fixed page_fetch, no LLM)
+MODE_CONTROLS = "controls"   # hardcoded floor (google_search_pool + browse_url_pool, fixed page_fetch, no LLM)
 
 
 @dataclass
@@ -43,6 +43,11 @@ class BehavioralConfig:
     # PHASE-emitted mode discriminator. Always "feedback" or "controls" post
     # 2026-05-08; load_behavioral_config raises FATAL on any other value.
     mode: str = MODE_FEEDBACK
+
+    # Per-target seed (PHASE-emitted _metadata.seed). When present, overrides
+    # the CLI --seed default so each (config, dataset) pair has a stable but
+    # distinct RNG. None means PHASE didn't ship a seed; CLI default applies.
+    seed: Optional[int] = None
 
     # Window contract — present in BOTH shapes.
     # UTC minute-of-day [start, end) half-open ranges. Feedback emits 5–15
@@ -61,20 +66,36 @@ class BehavioralConfig:
     # FEEDBACK-shape fields. Present only when mode == "feedback"; None
     # otherwise. Brain runners gate consumption on `mode`.
     workflow_weights: Optional[dict] = None     # {"BrowseWeb": 0.45, ...}
+    # Phase 2 — PHASE-emitted content.schedule: list of time blocks where
+    # each block has {hour_range: [a, b], workflow_weights: {...}}. When
+    # present, overrides the flat workflow_weights above. RUSE validates
+    # 0..23 hour coverage at reload time and aborts fail-loud on gaps.
+    schedule: Optional[List[dict]] = None
     behavior_modifiers: Optional[dict] = None   # {"page_dwell": {...}, ...}
     site_config: Optional[dict] = None          # content.site_categories flat dict
     prompt_augmentation: Optional[dict] = None  # {"prompt_content": "..."}
     timing_profile: Optional[dict] = None       # raw timing block (burst_percentiles, etc.)
     variance_injection: Optional[dict] = None   # timing.variance — cluster_size_sigma + idle_gap_sigma + hourly_std_targets
     diversity_injection: Optional[dict] = None   # background_services + workflow_rotation + topology_mimicry
-    download_url_pool: Optional[List[str]] = None  # content.download_url_pool — for DownloadFiles
+    # Phase 4: download_url_pool may be either list[str] (legacy flat pool)
+    # OR dict[str, list[str]] with keys {small, medium, large}. RUSE picks
+    # a bucket via download_size_mix when the dict shape is shipped.
+    download_url_pool: Optional[object] = None  # content.download_url_pool — for DownloadFiles
+    download_size_mix: Optional[dict] = None    # behavior.download.size_mix
+    download_outcome_mix: Optional[dict] = None  # behavior.download.outcome_mix
     whois_domain_pool: Optional[List[str]] = None  # content.whois_domain_pool — for WhoisLookup
+    # Phase 1 pools — PHASE ships per-target curated lists, RUSE wraps as tasks
+    # (BU/Smol) or uses directly (MCHP). Each is None when PHASE hasn't shipped
+    # the field yet; consumer workflows fall back to hard-coded task lists.
+    browse_url_pool: Optional[List[str]] = None    # content.browse_url_pool — URLs for browse_web
+    youtube_video_pool: Optional[List[str]] = None  # content.youtube_video_pool — video IDs for browse_youtube
+    google_search_pool: Optional[List[str]] = None  # content.google_search_pool — queries for web/google search
     ablation_gate: Optional[dict] = None        # informational; missing sections are deliberate when present
 
     # CONTROLS-shape fields. Present only when mode == "controls"; None
     # otherwise. The controls runner consumes these to drive a fixed
-    # no-LLM browse loop.
-    url_queries: Optional[List[str]] = None              # content.url_queries — fixed search terms
+    # no-LLM browse loop. Note: google_search_pool + browse_url_pool are
+    # shared with feedback mode — see fields above.
     page_fetch_interval_seconds: Optional[int] = None    # content.page_fetch_interval_seconds
     llm_calls_enabled: Optional[bool] = None             # content.llm_calls_enabled (always False in controls)
     tool_pool: Optional[List[str]] = None                # behavior.tool_pool — usually ["web_browse"]
@@ -197,6 +218,31 @@ def resolve_behavioral_config_dir(config_key: str, override_dir: Optional[str] =
     path = project_root / "deployed_sups" / config_key / "behavioral_configurations"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def peek_seed(config_dir: Path) -> Optional[int]:
+    """Read just _metadata.seed from behavior.json without full validation.
+
+    Used by BaseEmulationLoop.run() to override the CLI default seed BEFORE
+    random.seed() is called, so the full behavioral config reload happens
+    against a stable RNG state. Missing file / malformed JSON / absent seed
+    field all return None (caller falls back to CLI default).
+    """
+    path = config_dir / "behavior.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    seed = (data.get("_metadata") or {}).get("seed")
+    if seed is None:
+        return None
+    try:
+        return int(seed)
+    except (TypeError, ValueError):
+        return None
 
 
 def load_workflow_gates(config_dir: Path) -> dict:
@@ -332,8 +378,15 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         except (TypeError, ValueError):
             target_rate = None
 
+    raw_seed = metadata.get("seed")
+    try:
+        parsed_seed = int(raw_seed) if raw_seed is not None else None
+    except (TypeError, ValueError):
+        parsed_seed = None
+
     fc = BehavioralConfig(
         mode=mode,
+        seed=parsed_seed,
         active_minute_windows=active_minute_windows,
         target_conn_per_minute_during_active=target_rate,
         min_window_minutes=timing.get("min_window_minutes"),
@@ -353,17 +406,27 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         fc.timing_profile = timing or None
         fc.variance_injection = timing.get("variance")
         fc.workflow_weights = content.get("workflow_weights")
+        fc.schedule = content.get("schedule") or None
         fc.site_config = content.get("site_categories")
         fc.behavior_modifiers = behavior or None
         fc.diversity_injection = data.get("diversity")
         fc.prompt_augmentation = prompt
         fc.download_url_pool = download_url_pool
+        download_block = (behavior.get("download") or {})
+        fc.download_size_mix = download_block.get("size_mix") or None
+        fc.download_outcome_mix = download_block.get("outcome_mix") or None
         fc.whois_domain_pool = whois_domain_pool
+        fc.browse_url_pool = content.get("browse_url_pool") or None
+        fc.youtube_video_pool = content.get("youtube_video_pool") or None
+        fc.google_search_pool = content.get("google_search_pool") or None
         fc.ablation_gate = metadata.get("ablation_gate")
     else:
         # Controls shape — hardcoded floor. Single 60-min window is already
-        # parsed into active_minute_windows above.
-        fc.url_queries = content.get("url_queries") or None
+        # parsed into active_minute_windows above. Phase 1 consolidation
+        # (2026-05-20): url_queries dropped in favor of google_search_pool,
+        # and browse_url_pool now shipped on controls too.
+        fc.google_search_pool = content.get("google_search_pool") or None
+        fc.browse_url_pool = content.get("browse_url_pool") or None
         fc.page_fetch_interval_seconds = content.get("page_fetch_interval_seconds")
         fc.llm_calls_enabled = content.get("llm_calls_enabled")
         fc.tool_pool = behavior.get("tool_pool") or None
