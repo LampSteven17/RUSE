@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import random
 import socket
+import struct
 import time
 import uuid
 from urllib.parse import urlparse
@@ -76,21 +77,24 @@ FALLBACK_URLS = SMALL_URLS + MEDIUM_URLS + LARGE_URLS
 # logged as [WARNING] and falls back to "success".
 SUPPORTED_OUTCOMES = {"success", "http_404", "timeout", "reset"}
 
-# Hardcoded targets for the non-success outcomes. Chosen for reliable
-# Zeek signal:
-#   timeout: RFC 5737 TEST-NET-2 (198.51.100/24) — reserved for documentation,
-#            unroutable on the public internet → TCP SYN gets no response →
-#            connection times out → Zeek conn_state=S0.
-#   reset:   Cloudflare 1.1.1.1 on port 1 — major public service with a port
-#            that's almost certainly closed. SYN → RST back (or DROP, which
-#            degrades to S0, still not SF). Either way Zeek does NOT see SF.
-# These constants are intentionally Zeek-visible (NOT loopback) — the whole
-# point of the outcome mix is conn_state diversity in conn.log.
+# Hardcoded targets for the non-success outcomes. Chosen for reliable,
+# distinct Zeek conn_state signals:
+#   timeout: RFC 5737 TEST-NET-2 (198.51.100.1:80) — unroutable, no
+#            response → socket.timeout → Zeek conn_state=S0.
+#   reset:   Cloudflare 1.1.1.1:80 (HTTP). We complete the handshake,
+#            send a brief GET, then close() with SO_LINGER(l_onoff=1,
+#            l_linger=0) → kernel sends RST instead of FIN. Zeek sees
+#            originator-initiated reset after data: conn_state=RSTOSH
+#            (or RSTO, depending on which direction's FIN arrives first).
+#            Distinct from S0 and SF. Cloudflare's port-80 service shrugs
+#            off aborted GETs; this is a normal occurrence to them.
+# Both targets are intentionally Zeek-visible (NOT loopback) — the whole
+# point is conn_state diversity in conn.log.
 TIMEOUT_TARGET_IP = "198.51.100.1"
 TIMEOUT_TARGET_PORT = 80
 TIMEOUT_CONNECT_SECS = 5.0
 RESET_TARGET_HOST = "1.1.1.1"
-RESET_TARGET_PORT = 1
+RESET_TARGET_PORT = 80
 RESET_CONNECT_SECS = 5.0
 
 
@@ -109,6 +113,41 @@ def _tcp_attempt(host: str, port: int, timeout: float) -> tuple[str, int]:
         return "timeout", int((time.monotonic() - start) * 1000)
     except ConnectionRefusedError:
         return "refused", int((time.monotonic() - start) * 1000)
+    except OSError as e:
+        return f"oserror({e.errno})", int((time.monotonic() - start) * 1000)
+
+
+def _tcp_data_then_rst(host: str, port: int, timeout: float) -> tuple[str, int]:
+    """Connect, send a small HTTP-like preamble, then RST via SO_LINGER(0).
+
+    Produces a deterministic Zeek conn_state=RSTOSH/RSTO signature —
+    originator-initiated reset after a brief data exchange. Unlike the
+    closed-port approach this does not depend on the peer's firewall
+    behavior to produce the RST.
+
+    Returns (outcome_token, elapsed_ms). outcome_token ∈
+    {"rst_sent", "timeout(connect)", "oserror(N)"}.
+    """
+    start = time.monotonic()
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        try:
+            # SO_LINGER l_onoff=1, l_linger=0 → close() sends RST instead of FIN.
+            # Set BEFORE send so even if send raises mid-write we still RST on close.
+            s.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            # Brief HTTP/1.0 GET — gives Zeek something to label as data
+            # before the RST. Failures here are fine; we still close (RST).
+            try:
+                s.send(f"GET / HTTP/1.0\r\nHost: {host}\r\nUser-Agent: RUSE/1.0\r\n\r\n".encode())
+            except OSError:
+                pass
+        finally:
+            s.close()
+        return "rst_sent", int((time.monotonic() - start) * 1000)
+    except socket.timeout:
+        return "timeout(connect)", int((time.monotonic() - start) * 1000)
     except OSError as e:
         return f"oserror({e.errno})", int((time.monotonic() - start) * 1000)
 
@@ -197,10 +236,11 @@ def download_with_outcome(url, outcome="success", max_bytes=MAX_BYTES_PER_CALL):
                 f"{TIMEOUT_TARGET_PORT} result={result} elapsed={ms}ms "
                 f"(would have downloaded from {host})")
     if outcome == "reset":
-        # TCP SYN to 1.1.1.1:1 → typically RST → REJ in Zeek. May degrade
-        # to S0 if Cloudflare's firewall drops instead of rejecting; both
-        # are conn_state diversity (non-SF), which is the goal.
-        result, ms = _tcp_attempt(
+        # TCP connect to 1.1.1.1:80, send a brief GET, RST via SO_LINGER(0).
+        # Deterministically produces Zeek conn_state=RSTOSH/RSTO (originator-
+        # initiated reset after data) — distinct from S0 (timeout) and SF
+        # (success). Independent of peer firewall behavior.
+        result, ms = _tcp_data_then_rst(
             RESET_TARGET_HOST, RESET_TARGET_PORT, RESET_CONNECT_SECS
         )
         host = urlparse(url).netloc
