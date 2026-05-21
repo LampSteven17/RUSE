@@ -151,16 +151,24 @@ def _build_feedback_tasks(
     ]
 
 
-def show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
+def show_plan_and_confirm(
+    plan: list[dict], deploy_type: str, gpu_tier: str = "v100",
+) -> bool:
     """Render the combined plan + ask y/N. Returns True iff the user confirms.
 
     Fails loud (returns False) if any feedback task's manifest.target doesn't
     match deploy_type. Skips the prompt when the plan is a single controls
     task — there's nothing to confirm.
+
+    gpu_tier only applies to DECOY feedback tasks and is rendered as a
+    `tier:` line so the operator can confirm flavor + LLM model before
+    burning quota.
     """
     n = len(plan)
     output.banner(f"DEPLOY PLAN ({deploy_type}, {n} task{'s' if n != 1 else ''})")
     output.info("")
+
+    feedback_tier = gpu_tier if deploy_type == "decoy" else None
 
     any_mismatch = False
     for i, task in enumerate(plan, 1):
@@ -178,6 +186,7 @@ def show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
             err = validate_manifest_target(mf, deploy_type)
             for line in manifest_summary_lines(
                 task["behavior_source"], mf, indent="      ",
+                gpu_tier=feedback_tier,
             ):
                 output.info(line)
             if err:

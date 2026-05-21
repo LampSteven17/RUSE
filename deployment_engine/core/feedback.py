@@ -71,42 +71,106 @@ def _format_age(iso_ts: str) -> str:
     return f"({secs // 86400}d ago)"
 
 
+_BRAIN_NAMES = {"M": "MCHP", "B": "BrowserUse", "S": "SmolAgents"}
+
+
+def _vm_runtime_details(behavior: str) -> tuple[str, str]:
+    """Return (brain_name, llm_model) for a behavior key.
+
+    Brain: M → MCHP (no LLM), B → BrowserUse, S → SmolAgents.
+    LLM: R-infix → gemma4:e4b (RTX 2080 Ti edge), C-infix → gemma4:e2b
+    (CPU edge), no infix → gemma4:26b (V100), M-brain → '—' (no LLM).
+    """
+    prefix = behavior.split(".")[0]
+    brain = _BRAIN_NAMES.get(prefix[0], "?")
+    if prefix.startswith("M"):
+        return (brain, "—")
+    if "R" in prefix:
+        model = "gemma4:e4b"
+    elif "C" in prefix:
+        model = "gemma4:e2b"
+    else:
+        model = "gemma4:26b"
+    return (brain, model)
+
+
+def template_vm_table_lines(gpu_tier: str, indent: str = "    ") -> list[str]:
+    """Return aligned table rows describing the per-VM provisioning plan.
+
+    Reads FEEDBACK_TEMPLATES_BY_TIER[gpu_tier] and emits one row per VM
+    with columns: Behavior, Brain, Flavor, LLM model. Returns an empty
+    list if the tier is unknown.
+    """
+    spec = FEEDBACK_TEMPLATES_BY_TIER.get(gpu_tier)
+    if not spec:
+        return []
+    rows = []
+    for vm in spec["template"]:
+        brain, model = _vm_runtime_details(vm["behavior"])
+        rows.append((vm["behavior"], brain, vm["flavor"], model))
+    headers = ("Behavior", "Brain", "Flavor", "LLM model")
+    widths = [
+        max(len(headers[i]), max(len(row[i]) for row in rows))
+        for i in range(4)
+    ]
+    fmt = f"{{:<{widths[0]}}}  {{:<{widths[1]}}}  {{:<{widths[2]}}}  {{:<{widths[3]}}}"
+    sep = "  ".join("─" * w for w in widths)
+    lines = [
+        f"{indent}{fmt.format(*headers)}",
+        f"{indent}{sep}",
+    ]
+    for row in rows:
+        lines.append(f"{indent}{fmt.format(*row)}")
+    return lines
+
+
 def manifest_summary_lines(
     source: Path, manifest: dict | None, indent: str = "    ",
+    gpu_tier: str | None = None,
 ) -> list[str]:
-    """Return lines summarizing a manifest for user display.
+    """Return lines summarizing a manifest + per-VM plan for user display.
 
     Shape (indent applied to each line):
-      source:     /mnt/AXES2U1/feedback/decoy-controls/axes-summer24
-      dataset:    axes-summer24       preset: std-ctrls
-      model:      v7.1.2_double_bilstm_min_axes-summer24-ctrl
-      generated:  2026-04-23T16:15:19Z  (12m ago)
-      active:     ['service']          (other features ablation-gated)
-      sup_runs:   5 ok, 2 skipped
+      target env:  axes-summer24     preset: std-ctrls
+      feedback:    /mnt/AXES2U1/feedback/decoy-controls/axes-summer24
+                   generated 2026-04-23T16:15:19Z  (12m ago)
+      active:      ['service']
+                   (Zeek conn.log features PHASE is scoring this deploy on)
+
+      VMs to provision (5), tier=rtx:
+        Behavior   Brain       Flavor                       LLM model
+        ────────   ─────────   ─────────────────────────    ─────────
+        M2         MCHP        v1.14vcpu.28g                —
+        B2R.gemma  BrowserUse  rtx2080ti-1gpu.14vcpu.28g    gemma4:e4b
+        ...
     """
-    lines = [f"{indent}source:     {source}"]
     if not manifest:
-        lines.append(f"{indent}(no manifest.json — legacy / dev source)")
-        return lines
+        return [
+            f"{indent}feedback:    {source}",
+            f"{indent}(no manifest.json — legacy / dev source)",
+        ]
 
     dataset = manifest.get("training_dataset", "?")
     preset = manifest.get("version_preset", "?")
-    model = manifest.get("model_name", "?")
     generated = manifest.get("generated_at_utc", "")
     active = manifest.get("active_features_union", [])
-    sup_runs = manifest.get("sup_runs", [])
-    ok = sum(1 for r in sup_runs if r.get("status") == "ok")
-    skipped = sum(1 for r in sup_runs if r.get("status") == "skipped")
 
     age = _format_age(generated) if generated else ""
-    age_suffix = f"  {age}" if age else ""
-    active_suffix = "  (other features ablation-gated)" if not active else ""
+    gen_line = f"generated {generated}  {age}" if generated else "(no timestamp)"
 
-    lines.append(f"{indent}dataset:    {dataset}       preset: {preset}")
-    lines.append(f"{indent}model:      {model}")
-    lines.append(f"{indent}generated:  {generated}{age_suffix}")
-    lines.append(f"{indent}active:     {active}{active_suffix}")
-    lines.append(f"{indent}sup_runs:   {ok} ok, {skipped} skipped")
+    lines = [
+        f"{indent}target env:  {dataset}       preset: {preset}",
+        f"{indent}feedback:    {source}",
+        f"{indent}             {gen_line}",
+        f"{indent}active:      {active}",
+        f"{indent}             (Zeek conn.log features PHASE is scoring this deploy on)",
+    ]
+    if gpu_tier:
+        spec = FEEDBACK_TEMPLATES_BY_TIER.get(gpu_tier)
+        vm_count = len(spec["template"]) if spec else 0
+        lines.append("")
+        lines.append(f"{indent}VMs to provision ({vm_count}), tier={gpu_tier}:")
+        lines.extend(template_vm_table_lines(gpu_tier, indent=indent + "  "))
     return lines
 
 

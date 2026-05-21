@@ -277,11 +277,12 @@ def _cmd_deploy(argv: list[str]) -> int:
         output.error("Nothing to deploy. Use --controls and/or --feedback.")
         return 1
 
-    if not show_plan_and_confirm(plan, deploy_type):
+    gpu_tier = getattr(args, "gpu", "v100")
+    if not show_plan_and_confirm(plan, deploy_type, gpu_tier=gpu_tier):
         return 0
 
     return execute_plan(plan, deploy_type, args.config_name, DEPLOY_DIR,
-                        gpu_tier=getattr(args, "gpu", "v100"))
+                        gpu_tier=gpu_tier)
 
 
 
