@@ -283,11 +283,16 @@ class BaseEmulationLoop(ABC):
                   f"no prompt_augmentation.prompt_content"
                   f"{reason_suffix}")
         # W4: workflow_weights absent on a non-empty feedback config = partial
-        # PHASE output (content.workflow_weights missing). Agent falls back to
-        # uniform random — indistinguishable from baseline without this warning.
-        if not fc.workflow_weights:
+        # PHASE output. PHASE v2 (2026-05-08) moved weights into per-hour
+        # content.schedule[*].workflow_weights blocks; the legacy top-level
+        # content.workflow_weights is no longer emitted. Warn only when BOTH
+        # paths are absent — that's a truly stale / pre-v2 config. Per-hour
+        # OFF blocks ({}) are intentional night-idle and handled by the
+        # schedule OFF gate downstream, not flagged here.
+        if not fc.workflow_weights and not fc.schedule:
             print(f"{tag} W4 workflow_weights DISABLED — "
-                  f"no content.workflow_weights, using uniform random selection"
+                  f"no content.workflow_weights or content.schedule, "
+                  f"using uniform random selection"
                   f"{reason_suffix}")
         # W3 site_config: consumer wired 2026-04-27 (SmolAgents BrowseWebWorkflow
         # filters its task pool by category using content.site_categories
