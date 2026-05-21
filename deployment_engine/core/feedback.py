@@ -134,8 +134,6 @@ def manifest_summary_lines(
       target env:  axes-summer24     preset: std-ctrls
       feedback:    /mnt/AXES2U1/feedback/decoy-controls/axes-summer24
                    generated 2026-04-23T16:15:19Z  (12m ago)
-      active:      ['service']
-                   (Zeek conn.log features PHASE is scoring this deploy on)
 
       VMs to provision (5), tier=rtx:
         Behavior   Brain       Flavor                       LLM model
@@ -153,7 +151,6 @@ def manifest_summary_lines(
     dataset = manifest.get("training_dataset", "?")
     preset = manifest.get("version_preset", "?")
     generated = manifest.get("generated_at_utc", "")
-    active = manifest.get("active_features_union", [])
 
     age = _format_age(generated) if generated else ""
     gen_line = f"generated {generated}  {age}" if generated else "(no timestamp)"
@@ -162,8 +159,6 @@ def manifest_summary_lines(
         f"{indent}target env:  {dataset}       preset: {preset}",
         f"{indent}feedback:    {source}",
         f"{indent}             {gen_line}",
-        f"{indent}active:      {active}",
-        f"{indent}             (Zeek conn.log features PHASE is scoring this deploy on)",
     ]
     if gpu_tier:
         spec = FEEDBACK_TEMPLATES_BY_TIER.get(gpu_tier)
