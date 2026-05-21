@@ -129,7 +129,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run MCHP brain")
     parser.add_argument("--content", choices=["none", "llm"], default="none")
-    parser.add_argument("--model", choices=["llama", "gemma", "gemmac", "deepseek", "lfm", "ministral", "qwen"], default="llama")
+    parser.add_argument("--model", choices=["llama", "gemma", "gemmac", "gemmar", "deepseek", "lfm", "ministral", "qwen"], default="llama")
     parser.add_argument("--calibration", choices=["summer24", "fall24", "spring25"], default=None)
     parser.add_argument("--phase-timing", action="store_true", help="Legacy: use summer24 calibration")
     parser.add_argument("--behavior-config-dir", type=str, default=None,
