@@ -82,6 +82,11 @@ examples:
 
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory (single)")
     p.add_argument("--target", type=str, help="Dataset target, e.g. summer24, fall24, vt-50gb, cptc8 (single)")
+    p.add_argument("--gpu", type=str, choices=["v100", "rtx"], default="v100",
+                   help="GPU tier for feedback B2/S2 VMs (default: v100). "
+                        "rtx = rtx2080ti-1gpu w/ B2R.llama+S2R.llama (llama3.1:8b "
+                        "instead of gemma4:26b, fits 11GB VRAM). Use for unfixable "
+                        "feedback targets to free V100 capacity.")
     return p
 
 
@@ -268,7 +273,8 @@ def _cmd_deploy(argv: list[str]) -> int:
     if not show_plan_and_confirm(plan, deploy_type):
         return 0
 
-    return execute_plan(plan, deploy_type, args.config_name, DEPLOY_DIR)
+    return execute_plan(plan, deploy_type, args.config_name, DEPLOY_DIR,
+                        gpu_tier=getattr(args, "gpu", "v100"))
 
 
 

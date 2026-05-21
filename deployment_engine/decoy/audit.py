@@ -58,7 +58,13 @@ LOG_FRESHNESS_SECS = 86400  # 24 hours (was 4h pre window-mode)
 
 # Expected ollama model per behavior (mirrors INSTALL_SUP.sh resolution)
 def expected_model(behavior: str) -> str | None:
-    """Return the ollama tag a SUP behavior should have loaded, or None."""
+    """Return the ollama tag a SUP behavior should have loaded, or None.
+
+    Three gemma4 tiers based on behavior-key infix:
+      C-infix (B2C.gemma) → gemma4:e2b   (CPU edge 2B)
+      R-infix (B2R.gemma) → gemma4:e4b   (RTX edge 4B, 11 GB)
+      no infix (B2.gemma) → gemma4:26b   (V100 MoE)
+    """
     if behavior in ("C0", "M0"):
         return None
     if behavior.startswith("M"):
@@ -66,10 +72,12 @@ def expected_model(behavior: str) -> str | None:
     if behavior.endswith(".llama"):
         return "llama3.1:8b"
     if behavior.endswith(".gemma"):
-        # Detect CPU variant by middle char (B0C.gemma, S2C.gemma, etc.)
-        # Pattern: brain_letter + version_digit + 'C' + .gemma
+        # CPU variant: brain_letter + version_digit + 'C' + .gemma
         if re.match(r"^[BS]\d+C(\..*)?$", behavior):
             return "gemma4:e2b"
+        # RTX variant: brain_letter + version_digit + 'R' + .gemma
+        if re.match(r"^[BS]\d+R(\..*)?$", behavior):
+            return "gemma4:e4b"
         return "gemma4:26b"
     return None
 
@@ -458,7 +466,9 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     else:
         checks["model"] = f"WRONG ({actual})"
 
-    # 5. GPU model loaded (V100 should show >5GB VRAM if model is GPU-loaded).
+    # 5. GPU model loaded. Tier-aware VRAM "loaded" threshold:
+    #   V100 + gemma4:26b → ~14 GB used when loaded; 5000 MiB is the floor.
+    #   RTX  + gemma4:e4b → ~3-5 GB used when loaded; 2000 MiB floor.
     # Controls disables LLM → no GPU usage either.
     if is_controls:
         checks["gpu"] = "n/a (controls)"
@@ -467,9 +477,12 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     else:
         vram = int(probe.get("VRAM_MIB", "0") or "0")
         gpu_name = probe.get("GPU_NAME", "")
+        # R-tier: gemma4:e4b is much smaller, lower the loaded-VRAM floor.
+        is_rtx_tier = bool(re.match(r"^[BS]\d+R(\..*)?$", behavior))
+        loaded_threshold = 2000 if is_rtx_tier else 5000
         if "V100" not in gpu_name and "RTX" not in gpu_name:
             checks["gpu"] = f"FAIL (no GPU: {gpu_name})"
-        elif vram < 5000:
+        elif vram < loaded_threshold:
             checks["gpu"] = "IDLE"  # downgraded later if VM otherwise unhealthy
         else:
             checks["gpu"] = f"OK ({vram // 1024} GB)"

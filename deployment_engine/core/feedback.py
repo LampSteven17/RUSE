@@ -143,6 +143,46 @@ FEEDBACK_TEMPLATE = [
     {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g",        "count": 1},
 ]
 
+# RTX-tier 5-VM feedback template (added 2026-05-20). For targets where
+# we don't expect to "fix" the score anyway (unfixable failure-mode
+# representatives: human-everywhere, N-human-everywhere, anti-correlated,
+# topology-fingerprint datasets). RTX 2080 Ti has 11 GB VRAM — gemma4:26b
+# (~14 GB int4) doesn't fit, so R-tier SUPs use gemma4:e4b (edge 4B,
+# ~3 GB int4) instead. Same model family as V100 (gemma4:26b) and CPU
+# (gemma4:e2b) — three tiers of gemma4 keep results comparable.
+#
+# Feedback content (timing/pools/services) is portable across gemma4
+# variants — the .gemma feedback PHASE ships works as the source; only
+# the runtime model differs. R-tier behavior keys (B2R.gemma / S2R.gemma)
+# signal to the audit + install pipeline (via R-infix) that this VM uses
+# the smaller-VRAM gemma4 edge variant.
+FEEDBACK_TEMPLATE_RTX = [
+    {"behavior": "M2",        "flavor": "v1.14vcpu.28g",                 "count": 1},
+    {"behavior": "B2R.gemma", "flavor": "rtx2080ti-1gpu.14vcpu.28g",     "count": 1},
+    {"behavior": "S2R.gemma", "flavor": "rtx2080ti-1gpu.14vcpu.28g",     "count": 1},
+    {"behavior": "B2C.gemma", "flavor": "v1.14vcpu.28g",                 "count": 1},
+    {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g",                 "count": 1},
+]
+
+# Map gpu_tier name → template + flavor_capacity dict. Used by
+# generate_feedback_config to pick the right shape based on --gpu CLI flag.
+FEEDBACK_TEMPLATES_BY_TIER = {
+    "v100": {
+        "template": FEEDBACK_TEMPLATE,
+        "flavor_capacity": {
+            "v1.14vcpu.28g": 3,
+            "v100-1gpu.14vcpu.28g": 2,
+        },
+    },
+    "rtx": {
+        "template": FEEDBACK_TEMPLATE_RTX,
+        "flavor_capacity": {
+            "v1.14vcpu.28g": 3,
+            "rtx2080ti-1gpu.14vcpu.28g": 2,
+        },
+    },
+}
+
 # Maps PHASE dataset names → short abbreviations for deployment directory names.
 # Used by generate_feedback_config() to abbreviate "axes-summer24" → "sum24" etc.
 # Lookup: try exact match on full dataset name first, then substring (longest key first).
@@ -481,9 +521,23 @@ def generate_feedback_config(
     source_dir: Path,
     configs_spec: str,
     deploy_dir: Path,
+    gpu_tier: str = "v100",
 ) -> str:
-    """Generate a DECOY feedback deployment config.yaml. Returns deployment name."""
+    """Generate a DECOY feedback deployment config.yaml. Returns deployment name.
+
+    gpu_tier ∈ {"v100", "rtx"}. v100 (default) = current behavior using
+    B2.gemma/S2.gemma with gemma4:26b. rtx = B2R.llama/S2R.llama on
+    rtx2080ti-1gpu with llama3.1:8b — used for unfixable feedback targets
+    to free V100 capacity for the fixable ones.
+    """
     import yaml
+
+    if gpu_tier not in FEEDBACK_TEMPLATES_BY_TIER:
+        output.error(
+            f"ERROR: invalid gpu_tier={gpu_tier!r}; "
+            f"must be one of {sorted(FEEDBACK_TEMPLATES_BY_TIER)}"
+        )
+        raise SystemExit(1)
 
     if not _is_valid_feedback_source(source_dir, "decoy"):
         output.error(
@@ -506,7 +560,10 @@ def generate_feedback_config(
         scope_label = first.replace(".json", "").split("_")[0]
 
     preset_clean = preset_name.replace("-", "")
-    dep_name = f"decoy-feedback-{preset_clean}-{dataset_abbrev}-{scope_label}"
+    # When deploying on a non-default GPU tier, suffix the deployment name so
+    # v100 + rtx deploys of the same dataset can coexist without name collision.
+    tier_suffix = "" if gpu_tier == "v100" else f"-{gpu_tier}"
+    dep_name = f"decoy-feedback-{preset_clean}-{dataset_abbrev}-{scope_label}{tier_suffix}"
     dep_dir = deploy_dir / dep_name
     dep_dir.mkdir(parents=True, exist_ok=True)
 
@@ -516,15 +573,14 @@ def generate_feedback_config(
     else:
         behavior_configs = [f.strip() for f in configs_spec.split(",")]
 
+    tier_spec = FEEDBACK_TEMPLATES_BY_TIER[gpu_tier]
     config = {
         "deployment_name": dep_name,
         "behavior_source": str(source_dir),
         "behavior_configs": behavior_configs,
-        "flavor_capacity": {
-            "v1.14vcpu.28g": 3,
-            "v100-1gpu.14vcpu.28g": 2,
-        },
-        "deployments": FEEDBACK_TEMPLATE,
+        "gpu_tier": gpu_tier,
+        "flavor_capacity": tier_spec["flavor_capacity"],
+        "deployments": tier_spec["template"],
     }
 
     config_path = dep_dir / "config.yaml"

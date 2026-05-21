@@ -198,15 +198,19 @@ CONFIGS=(
     ["S2C.llama"]="smolagents:none:llama:summer24"
     ["S2C.gemma"]="smolagents:none:gemmac:summer24"
 
-    # RTX baselines (RTX 2080 Ti)
+    # RTX baselines (RTX 2080 Ti, 11 GB VRAM — gemma4 edge 4B variant)
+    # B0R/S0R.gemma re-keyed 2026-05-20: "gemma" alias→gemma4:26b doesn't
+    # fit 11GB; "gemmar" alias→gemma4:e4b is the correct R-tier mapping.
     ["B0R.llama"]="browseruse:none:llama:none"
-    ["B0R.gemma"]="browseruse:none:gemma:none"
+    ["B0R.gemma"]="browseruse:none:gemmar:none"
     ["S0R.llama"]="smolagents:none:llama:none"
-    ["S0R.gemma"]="smolagents:none:gemma:none"
+    ["S0R.gemma"]="smolagents:none:gemmar:none"
 
-    # RTX iteration 2 (RTX 2080 Ti)
+    # RTX iteration 2 (RTX 2080 Ti) — feedback deploys use B2R.gemma/S2R.gemma
     ["B2R.llama"]="browseruse:none:llama:none"
-    ["B2R.gemma"]="browseruse:none:gemma:none"
+    ["B2R.gemma"]="browseruse:none:gemmar:none"
+    ["S2R.llama"]="smolagents:none:llama:none"
+    ["S2R.gemma"]="smolagents:none:gemmar:none"
 
     # === Deprecated aliases ===
     # Old B1/S1 baseline keys -> B0/S0
@@ -273,6 +277,7 @@ MODEL_NAMES=(
     # GPU-optimized models
     ["llama"]="llama3.1:8b"
     ["gemma"]="gemma4:26b"        # V100 32GB sweet spot (MoE: 25.2B params, 3.8B active)
+    ["gemmar"]="gemma4:e4b"       # RTX 2080 Ti 11GB — gemma4 edge 4B variant (~3GB int4)
     ["gemmac"]="gemma4:e2b"       # CPU edge-optimized (2.3B effective params)
     # Legacy (exp-2 compat)
     ["deepseek"]="deepseek-r1:8b"
@@ -330,7 +335,7 @@ list_configs() {
     done
     echo ""
     echo "RTX Iteration 2 (RTX 2080 Ti):"
-    for key in B2R.llama B2R.gemma; do
+    for key in B2R.llama B2R.gemma S2R.llama S2R.gemma; do
         IFS=':' read -r brain content model calibration <<< "${CONFIGS[$key]}"
         printf "  %-16s brain=%-12s model=%-8s (RTX)\n" \
             "--$key" "$brain" "$model"
@@ -392,7 +397,7 @@ parse_args() {
                 ;;
 
             # Config key shortcuts - RTX iteration 2
-            --B2R.llama|--B2R.gemma)
+            --B2R.llama|--B2R.gemma|--S2R.llama|--S2R.gemma)
                 parse_config_key "${1#--}"
                 ;;
 

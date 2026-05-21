@@ -25,12 +25,19 @@ def run_decoy_spinup(
     deploy_dir: Path,
     behavior_source: str | None = None,
     configs_spec: str | None = None,
+    gpu_tier: str = "v100",
 ) -> int:
-    """Deploy DECOY SUP agents."""
+    """Deploy DECOY SUP agents.
+
+    gpu_tier ∈ {"v100", "rtx"}. v100 = default, B2.gemma + S2.gemma on
+    V100 with gemma4:26b. rtx = B2R.llama + S2R.llama on rtx2080ti-1gpu
+    with llama3.1:8b — for unfixable feedback targets.
+    """
     # If feedback args given but config is decoy-controls, generate feedback config
     if behavior_source and config_name == "decoy-controls":
         config_name = generate_feedback_config(
             Path(behavior_source), configs_spec or "all", deploy_dir,
+            gpu_tier=gpu_tier,
         )
 
     config_dir = deploy_dir / config_name
@@ -329,16 +336,29 @@ def _derive_behavior_paths(sup_behavior: str) -> tuple[str, str]:
     """Mirror distribute-behavior-configs.yaml regex.
 
     Returns (behavior_dir, baseline_config). E.g.
-      M1        -> ('M',       'M1')
-      M2        -> ('M',       'M1')
-      B0.gemma  -> ('B.gemma', 'B0.gemma')
-      B2C.gemma -> ('B.gemma', 'B0C.gemma')
-      S2.gemma  -> ('S.gemma', 'S0.gemma')
+      M1         -> ('M',       'M1')
+      M2         -> ('M',       'M1')
+      B0.gemma   -> ('B.gemma', 'B0.gemma')
+      B2C.gemma  -> ('B.gemma', 'B0C.gemma')
+      S2.gemma   -> ('S.gemma', 'S0.gemma')
+      B2R.gemma  -> ('B.gemma', 'B0.gemma')   # R-tier reuses .gemma baseline
+      S2R.gemma  -> ('S.gemma', 'S0.gemma')   # PHASE only ships .gemma; R borrows
     """
     m = re.match(r'^([A-Z])\d+[A-Z]*(.*)$', sup_behavior)
     behavior_dir = m.group(1) + m.group(2) if m else sup_behavior
     baseline_version = "1" if sup_behavior[:1] == "M" else "0"
     baseline_config = re.sub(r'^([A-Z])\d+', rf"\g<1>{baseline_version}", sup_behavior)
+    # R-tier (RTX) keys reuse the V100-tier .gemma baseline because PHASE
+    # only ships .gemma feedback content. Strip the R from baseline_config
+    # so e.g. B2R.gemma -> baseline B0.gemma (not B0R.gemma which doesn't
+    # exist on disk). behavior_dir is already correct since the regex's
+    # [A-Z]* greedily consumes the R between digit and suffix.
+    if "R" in baseline_config and baseline_config not in ("R",):
+        # Only strip a SINGLE-letter R that lives between the digit and the
+        # optional `.suffix` — not any R that happens to appear elsewhere.
+        baseline_config = re.sub(r'^([A-Z]\d+)R(\.[a-z]+)?$',
+                                 lambda mm: mm.group(1) + (mm.group(2) or ''),
+                                 baseline_config)
     return behavior_dir, baseline_config
 
 

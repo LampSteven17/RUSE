@@ -190,7 +190,7 @@ def show_plan_and_confirm(plan: list[dict], deploy_type: str) -> bool:
 
 def execute_plan(
     plan: list[dict], deploy_type: str, config_name: str | None,
-    deploy_dir: Path,
+    deploy_dir: Path, gpu_tier: str = "v100",
 ) -> int:
     """Run each task in the plan sequentially. Returns 0 iff all succeed.
 
@@ -226,10 +226,17 @@ def execute_plan(
             src = task["behavior_source"]
             spinup_source = str(src) if src else None
         try:
+            # gpu_tier only applies to decoy deploys + feedback tasks. Controls
+            # tasks use their own config.yaml-declared flavors and ignore the kwarg;
+            # rampart/ghosts spinups don't accept it. Pass conditionally.
+            spinup_kwargs = {}
+            if deploy_type == "decoy" and not task["is_controls"]:
+                spinup_kwargs["gpu_tier"] = gpu_tier
             rc = spinup(
                 base_config, deploy_dir,
                 spinup_source,
                 task["configs_spec"],
+                **spinup_kwargs,
             )
         except SystemExit as e:
             # Per-type spinups call sys.exit() on validation failure. Convert

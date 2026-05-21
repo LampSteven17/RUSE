@@ -149,9 +149,12 @@ def config_key_to_behavior_dir(config_key: str) -> str:
     Map a SUP config key to its PHASE behavior directory name.
 
     M1-M4 -> 'M', B0-B4.llama -> 'B.llama', S0-S4.gemma -> 'S.gemma', etc.
+    C-infix (CPU variants: B2C.gemma) and R-infix (RTX variants:
+    B2R.gemma) collapse to the base behavior_dir — PHASE only ships
+    one .gemma source per family, and tier variants reuse it.
     Controls (C0, M0) return the key unchanged.
     """
-    m = re.match(r'^([A-Z])\d+(?:\.(\w+))?$', config_key)
+    m = re.match(r'^([A-Z])\d+[A-Z]*(?:\.(\w+))?$', config_key)
     if not m:
         return config_key
     return f"{m.group(1)}.{m.group(2)}" if m.group(2) else m.group(1)

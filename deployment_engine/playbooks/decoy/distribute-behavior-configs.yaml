@@ -39,6 +39,14 @@
       set_fact:
         baseline_config: "{{ sup_behavior | regex_replace('^([A-Z])\\d+', '\\g<1>VVVV') | replace('VVVV', baseline_version) }}"
 
+    # R-tier (RTX) keys reuse the V100-tier .gemma baseline because PHASE
+    # only ships .gemma feedback content. Strip the R from baseline_config
+    # so e.g. B2R.gemma -> baseline B0.gemma (not B0R.gemma which doesn't
+    # exist on disk). Mirrors _derive_behavior_paths in spinup.py.
+    - name: Strip R from baseline_config for R-tier (RTX) keys
+      set_fact:
+        baseline_config: "{{ baseline_config | regex_replace('^([A-Z]\\d+)R(\\.[a-z]+)?$', '\\g<1>\\g<2>') }}"
+
     # ── Clear mode ───────────────────────────────────────────────────
     - name: Clear behavior configs
       when: clear_configs | bool

@@ -15,6 +15,7 @@ MODELS = {
     # GPU-optimized models
     "llama": "llama3.1:8b",
     "gemma": "gemma4:26b",        # V100 32GB sweet spot (MoE: 25.2B params, 3.8B active)
+    "gemmar": "gemma4:e4b",       # RTX 2080 Ti 11GB — gemma4 edge 4B variant (~3GB int4)
     "gemmac": "gemma4:e2b",       # CPU edge-optimized (2.3B effective params)
     "deepseek": "deepseek-r1:8b",
     # CPU-friendly models
