@@ -104,7 +104,13 @@ def _build_feedback_tasks(
     target: str | None,
     source: str | None,
 ) -> list[dict] | None:
-    """Resolve feedback sources into tasks. Returns None on resolution failure."""
+    """Resolve feedback sources into tasks. Returns None on resolution failure.
+
+    `target` may be a single dataset name OR a comma-separated list
+    (e.g. "axes-summer24,axes-year,vt-fall22-50gb") — each is resolved
+    independently and added to the plan. Useful for batching a subset
+    of feedback datasets onto a specific GPU tier in one invocation.
+    """
     sources: list[dict] = []
     if single_selector:
         if source:
@@ -114,14 +120,18 @@ def _build_feedback_tasks(
                 return None
             sources = [{"path": src_path, "dataset": src_path.name, "preset": "?"}]
         elif target:
-            src_path = find_feedback_by_target(target, deploy_type=deploy_type)
-            if not src_path:
-                output.error(
-                    f"ERROR: No feedback source for target '{target}' "
-                    f"under /mnt/AXES2U1/feedback/{deploy_type}-controls/"
-                )
-                return None
-            sources = [{"path": src_path, "dataset": src_path.name, "preset": "?"}]
+            # Comma-separated list → multi-target batch. Resolve each
+            # independently; fail loud if any one is unknown.
+            targets = [t.strip() for t in target.split(",") if t.strip()]
+            for tgt in targets:
+                src_path = find_feedback_by_target(tgt, deploy_type=deploy_type)
+                if not src_path:
+                    output.error(
+                        f"ERROR: No feedback source for target '{tgt}' "
+                        f"under /mnt/AXES2U1/feedback/{deploy_type}-controls/"
+                    )
+                    return None
+                sources.append({"path": src_path, "dataset": src_path.name, "preset": "?"})
     else:
         sources = find_all_feedback_sources(deploy_type)
         if not sources:

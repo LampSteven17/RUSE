@@ -63,6 +63,8 @@ examples:
   ./deploy --decoy --controls               baseline controls only
   ./deploy --decoy --feedback               ALL feedback datasets (no controls)
   ./deploy --decoy --feedback --target sum24  single dataset (no controls)
+  ./deploy --decoy --feedback --target sum24,axyear,vt50g --gpu rtx
+                                            multi-dataset batch on RTX tier
   ./deploy --decoy --controls --feedback    controls + ALL feedback (explicit)
   ./deploy --decoy --controls --target sum24  controls + single feedback
   ./deploy --ghosts                         controls + ALL GHOSTS feedback
@@ -81,7 +83,10 @@ examples:
     p.add_argument("--feedback", action="store_true", help="Deploy PHASE feedback variants")
 
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory (single)")
-    p.add_argument("--target", type=str, help="Dataset target, e.g. summer24, fall24, vt-50gb, cptc8 (single)")
+    p.add_argument("--target", type=str,
+                   help="Dataset target(s). Single (--target sum24) OR comma-"
+                        "separated list (--target sum24,axyear,vt50g) for a "
+                        "multi-dataset batch on one GPU tier.")
     p.add_argument("--gpu", type=str, choices=["v100", "rtx"], default="v100",
                    help="GPU tier for feedback B2/S2 VMs (default: v100). "
                         "rtx = rtx2080ti-1gpu w/ B2R.llama+S2R.llama (llama3.1:8b "
