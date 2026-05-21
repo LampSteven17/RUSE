@@ -164,6 +164,18 @@ FEEDBACK_TEMPLATE_RTX = [
     {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g",                 "count": 1},
 ]
 
+# RTX A-pool variant — same B2R/S2R behavior keys (identical gemma4:e4b
+# runtime + behavior.json plumbing) but targets the separate
+# rtx2080ti-A-* OpenStack flavor (PCI alias 2080ti-rtx-a:1). Lets us
+# spread RTX deploys across both physical card pools when one is full.
+FEEDBACK_TEMPLATE_RTX_A = [
+    {"behavior": "M2",        "flavor": "v1.14vcpu.28g",                 "count": 1},
+    {"behavior": "B2R.gemma", "flavor": "rtx2080ti-A-1gpu.14vcpu.28g",   "count": 1},
+    {"behavior": "S2R.gemma", "flavor": "rtx2080ti-A-1gpu.14vcpu.28g",   "count": 1},
+    {"behavior": "B2C.gemma", "flavor": "v1.14vcpu.28g",                 "count": 1},
+    {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g",                 "count": 1},
+]
+
 # Map gpu_tier name → template + flavor_capacity dict. Used by
 # generate_feedback_config to pick the right shape based on --gpu CLI flag.
 FEEDBACK_TEMPLATES_BY_TIER = {
@@ -179,6 +191,13 @@ FEEDBACK_TEMPLATES_BY_TIER = {
         "flavor_capacity": {
             "v1.14vcpu.28g": 3,
             "rtx2080ti-1gpu.14vcpu.28g": 2,
+        },
+    },
+    "rtx-a": {
+        "template": FEEDBACK_TEMPLATE_RTX_A,
+        "flavor_capacity": {
+            "v1.14vcpu.28g": 3,
+            "rtx2080ti-A-1gpu.14vcpu.28g": 2,
         },
     },
 }
@@ -525,10 +544,11 @@ def generate_feedback_config(
 ) -> str:
     """Generate a DECOY feedback deployment config.yaml. Returns deployment name.
 
-    gpu_tier ∈ {"v100", "rtx"}. v100 (default) = current behavior using
-    B2.gemma/S2.gemma with gemma4:26b. rtx = B2R.llama/S2R.llama on
-    rtx2080ti-1gpu with llama3.1:8b — used for unfixable feedback targets
-    to free V100 capacity for the fixable ones.
+    gpu_tier ∈ {"v100", "rtx", "rtx-a"}. v100 (default) = B2.gemma/S2.gemma
+    on V100 with gemma4:26b. rtx / rtx-a = B2R.gemma/S2R.gemma on RTX 2080 Ti
+    (gemma4:e4b, 11 GB VRAM); the two RTX tiers target distinct physical card
+    pools (PCI alias rtx2080ti:1 vs 2080ti-rtx-a:1) so deploys can spread
+    across both when one pool is exhausted.
     """
     import yaml
 

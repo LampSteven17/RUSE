@@ -29,9 +29,9 @@ def run_decoy_spinup(
 ) -> int:
     """Deploy DECOY SUP agents.
 
-    gpu_tier ∈ {"v100", "rtx"}. v100 = default, B2.gemma + S2.gemma on
-    V100 with gemma4:26b. rtx = B2R.llama + S2R.llama on rtx2080ti-1gpu
-    with llama3.1:8b — for unfixable feedback targets.
+    gpu_tier ∈ {"v100", "rtx", "rtx-a"}. v100 = default (gemma4:26b).
+    rtx / rtx-a = B2R.gemma + S2R.gemma on RTX 2080 Ti (gemma4:e4b);
+    the two RTX tiers map to distinct physical card pools.
     """
     # If feedback args given but config is decoy-controls, generate feedback config
     if behavior_source and config_name == "decoy-controls":

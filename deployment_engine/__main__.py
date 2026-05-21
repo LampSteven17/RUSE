@@ -87,11 +87,13 @@ examples:
                    help="Dataset target(s). Single (--target sum24) OR comma-"
                         "separated list (--target sum24,axyear,vt50g) for a "
                         "multi-dataset batch on one GPU tier.")
-    p.add_argument("--gpu", type=str, choices=["v100", "rtx"], default="v100",
+    p.add_argument("--gpu", type=str, choices=["v100", "rtx", "rtx-a"], default="v100",
                    help="GPU tier for feedback B2/S2 VMs (default: v100). "
-                        "rtx = rtx2080ti-1gpu w/ B2R.llama+S2R.llama (llama3.1:8b "
-                        "instead of gemma4:26b, fits 11GB VRAM). Use for unfixable "
-                        "feedback targets to free V100 capacity.")
+                        "rtx = rtx2080ti-1gpu (PCI alias rtx2080ti:1) w/ "
+                        "B2R.gemma+S2R.gemma (gemma4:e4b, fits 11GB VRAM). "
+                        "rtx-a = rtx2080ti-A-1gpu (PCI alias 2080ti-rtx-a:1) "
+                        "— same SUPs, separate physical card pool; use when "
+                        "the rtx pool is exhausted.")
     return p
 
 
