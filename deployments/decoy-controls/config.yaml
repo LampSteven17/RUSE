@@ -7,10 +7,20 @@
 #   M1        - MCHP baseline (no timing, no LLM)
 #   B0.gemma  - BrowserUse baseline on V100 (gemma4:26b MoE)
 #   S0.gemma  - SmolAgents baseline on V100 (gemma4:26b MoE)
+#   B0R.gemma - BrowserUse baseline on RTX 2080 Ti (gemma4:e4b edge)
+#   S0R.gemma - SmolAgents baseline on RTX 2080 Ti (gemma4:e4b edge)
 #   B0C.gemma - BrowserUse baseline on CPU (gemma4:e2b edge)
 #   S0C.gemma - SmolAgents baseline on CPU (gemma4:e2b edge)
 #
-# Total VMs: 7 (5 non-GPU, 2 V100)
+# Total VMs: 9 (5 non-GPU, 2 V100, 2 RTX 2080 Ti)
+#
+# R-tier baseline note: B0R/S0R reuse the V100 .gemma baseline behavior.json
+# (B.gemma/B0.gemma, S.gemma/S0.gemma) via the R-strip in
+# spinup._derive_behavior_paths — same mechanism as B2R/S2R feedback. Only the
+# runtime model (gemma4:e4b) and OpenStack flavor differ. They baseline the
+# RTX feedback tiers (--gpu rtx and --gpu rtx-a both run gemma4:e4b); the
+# rtx2080ti-1gpu pool is used here (swap to rtx2080ti-A-1gpu if that pool is
+# exhausted at deploy time).
 
 deployment_name: decoy-controls
 
@@ -24,6 +34,7 @@ behavior_source: /mnt/AXES2U1/feedback/decoy-controls/controls
 flavor_capacity:
   v1.14vcpu.28g: 5
   v100-1gpu.14vcpu.28g: 2
+  rtx2080ti-1gpu.14vcpu.28g: 2
 
 deployments:
   # === Controls (3) - non-GPU ===
@@ -43,6 +54,14 @@ deployments:
     count: 1
   - behavior: S0.gemma
     flavor: v100-1gpu.14vcpu.28g
+    count: 1
+
+  # === RTX 2080 Ti baselines (2) — gemma4:e4b (matches feedback --gpu rtx tier) ===
+  - behavior: B0R.gemma
+    flavor: rtx2080ti-1gpu.14vcpu.28g
+    count: 1
+  - behavior: S0R.gemma
+    flavor: rtx2080ti-1gpu.14vcpu.28g
     count: 1
 
   # === CPU baselines (2) — gemma4:e2b ===
