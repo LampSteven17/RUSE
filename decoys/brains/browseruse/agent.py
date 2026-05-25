@@ -68,6 +68,30 @@ _BU_ACTION_MAP = {
 }
 
 
+def _bu_loads(response_content: str):
+    """Lenient JSON load of a browser_use response.
+
+    gemma4 frequently wraps its JSON in markdown separators (`---\\n{...}`) or
+    ```json fences, which strict json.loads rejects — confirmed 2026-05-25 on a
+    live SUP where 100% of a session's responses carried a `---\\n` prefix and
+    every step was dropped. Fall back to the first balanced {...} substring.
+    """
+    if not response_content:
+        return None
+    try:
+        return json.loads(response_content)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    i = response_content.find("{")
+    j = response_content.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        return json.loads(response_content[i:j + 1])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 # Drift detection. _parse_bu_action returns None for BOTH "not an action
 # response" and "action name absent from _BU_ACTION_MAP". The latter means
 # browser-use renamed its vocabulary and step logging has gone silent — which
@@ -87,10 +111,7 @@ def _bu_unmapped_action(response_content: str) -> Optional[str]:
     """
     if not response_content:
         return None
-    try:
-        data = json.loads(response_content)
-    except (json.JSONDecodeError, TypeError):
-        return None
+    data = _bu_loads(response_content)
     actions = data.get("action") if isinstance(data, dict) else None
     if not actions or not isinstance(actions, list) or not isinstance(actions[0], dict):
         return None
@@ -110,8 +131,10 @@ def _parse_bu_action(response_content: str):
     """
     if not response_content:
         return None
+    data = _bu_loads(response_content)
+    if not isinstance(data, dict):
+        return None
     try:
-        data = json.loads(response_content)
         actions = data.get("action", [])
         if not actions or not isinstance(actions, list):
             return None
@@ -130,7 +153,7 @@ def _parse_bu_action(response_content: str):
         else:
             msg = str(params)[:100]
         return step_name, category, msg
-    except (json.JSONDecodeError, KeyError, IndexError, StopIteration):
+    except (KeyError, IndexError, StopIteration):
         return None
 
 
