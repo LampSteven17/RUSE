@@ -39,7 +39,13 @@ if TYPE_CHECKING:
 _SMOL_ACTION_PATTERNS: List[Tuple[re.Pattern, str, str]] = [
     # Tool calls → search
     (re.compile(r"(?:web_search|duckduckgo_search|DuckDuckGoSearchTool)\s*\(", re.IGNORECASE), "search", "browser"),
-    # URL navigation
+    # Page-visit tool → navigate. BrowseWeb gained VisitWebpageTool on
+    # 2026-04-27; the model invokes it as visit_webpage(url=...). Confirmed
+    # 2026-05-25 emitting ~4.2K times on a live S2 VM while logging zero
+    # navigate steps because this pattern was missing. Must precede the
+    # print→scroll fallback so a page visit isn't mislabeled as a scroll.
+    (re.compile(r"\bvisit_webpage\s*\(", re.IGNORECASE), "navigate", "browser"),
+    # Raw URL navigation
     (re.compile(r"""(?:requests\.get|urllib\.request|open|fetch)\s*\(\s*['"]https?://""", re.IGNORECASE), "navigate", "browser"),
     # Print / output → scroll (reading results)
     (re.compile(r"\bprint\s*\(", re.IGNORECASE), "scroll", "browser"),
@@ -65,6 +71,31 @@ def _parse_smol_action(response_content: str) -> Optional[Tuple[str, str, str]]:
             msg = response_content[start:end].strip()[:100]
             return step_name, category, msg
     return None
+
+
+# Drift detection (mirror of the browser-use side in brains/browseruse/agent.py).
+# A smolagents "code turn" that matches none of _SMOL_ACTION_PATTERNS — yet
+# isn't a plain final_answer() completion — is a candidate for tool-vocabulary
+# drift: smolagents renamed its tools and step logging is going silent. The
+# print()->scroll fallback resets the streak on every normal tool turn, so a
+# sustained streak is a strong signal. We print one [WARNING] at threshold for
+# ./audit's Warn column.
+_SMOL_DRIFT_THRESHOLD = 25
+_smol_drift_state = {"streak": 0, "warned": False}
+_SMOL_CODE_SHAPE = re.compile(r"```(?:py|python)|(?<!\w)Code:\s", re.IGNORECASE)
+_SMOL_FINAL_ANSWER = re.compile(r"\bfinal_answer\s*\(", re.IGNORECASE)
+
+
+def _smol_shape_unmatched(response_content: str) -> bool:
+    """True when the response is a smolagents code turn (known shape) that
+    matched no action pattern. Pure final_answer() completions are excluded."""
+    if not response_content:
+        return False
+    if not _SMOL_CODE_SHAPE.search(response_content):
+        return False
+    if _SMOL_FINAL_ANSWER.search(response_content):
+        return False
+    return _parse_smol_action(response_content) is None
 
 
 # =============================================================================
@@ -176,6 +207,19 @@ class LiteLLMLoggingCallback(LiteLLMCustomLogger):
                 step_name, category, msg = parsed
                 self.logger.step_start(step_name, category=category, message=msg)
                 self.logger.step_success(step_name)
+                _smol_drift_state["streak"] = 0
+            elif _smol_shape_unmatched(output):
+                _smol_drift_state["streak"] += 1
+                if (not _smol_drift_state["warned"]
+                        and _smol_drift_state["streak"] >= _SMOL_DRIFT_THRESHOLD):
+                    _smol_drift_state["warned"] = True
+                    m = (f"[WARNING] [parser-drift] {_smol_drift_state['streak']} "
+                         f"consecutive smolagents code turns matched no action in "
+                         f"_SMOL_ACTION_PATTERNS — step logging may be dropping tool "
+                         f"calls. smolagents likely changed its tool-call vocabulary; "
+                         f"update _SMOL_ACTION_PATTERNS in common/logging/llm_callbacks.py.")
+                    print(m, flush=True)
+                    self.logger.warning(m, details={"streak": _smol_drift_state["streak"]})
 
     def _extract_tokens(self, response_obj: Any, kwargs: Dict) -> Dict[str, Optional[int]]:
         """Extract token usage from response, handling multiple formats."""

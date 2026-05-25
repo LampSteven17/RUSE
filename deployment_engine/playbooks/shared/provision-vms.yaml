@@ -217,7 +217,7 @@
         content: |
           ############# SUP VMs - {{ deployment_name }} #############
 
-          Host r-*
+          Host {{ vm_prefix }}*
               User ubuntu
               PreferredAuthentications publickey
               IdentityFile ~/.ssh/id_ed25519

@@ -30,8 +30,25 @@ LLM_TIMEOUT = 300
 
 # Mapping from browser_use action types to unified step names.
 # browser_use LLM responses contain JSON with an "action" list where each
-# element is a dict like {"go_to_url": {"url": "..."}} or {"click_element": {"index": 5}}.
+# element is a dict like {"navigate": {"url": "..."}} or {"click": {"index": 5}}.
+#
+# browser-use renamed its action vocabulary in the 0.12.x line. The current
+# names below were empirically confirmed against deployed SUP logs on
+# 2026-05-25 (browser-use==0.12.7, pinned in INSTALL_SUP.sh). The pre-0.12
+# names are retained as aliases so the parser keeps working if the pin moves
+# backward; unused keys are harmless no-ops. If browser-use renames again,
+# the drift-detection WARNING below (see logged_chat) fires so it isn't silent.
 _BU_ACTION_MAP = {
+    # --- browser-use 0.12.x ---
+    "navigate": ("navigate", "browser"),
+    "click": ("click", "browser"),
+    "input": ("type_text", "browser"),
+    "scroll": ("scroll", "browser"),
+    "search_page": ("search", "browser"),
+    "extract": ("scroll", "browser"),          # reading page content
+    "find_elements": ("scroll", "browser"),     # scanning the DOM
+    "wait": ("wait", "browser"),
+    # --- legacy (pre-0.12) aliases ---
     "go_to_url": ("navigate", "browser"),
     "open_tab": ("navigate", "browser"),
     "switch_tab": ("navigate", "browser"),
@@ -47,9 +64,43 @@ _BU_ACTION_MAP = {
     "extract_page_content": ("scroll", "browser"),
     "save_file": ("save_document", "browser"),
     "upload_file": ("download_file", "browser"),
-    "wait": ("wait", "browser"),
     # "done" is intentionally omitted — it signals workflow completion, not a step
 }
+
+
+# Drift detection. _parse_bu_action returns None for BOTH "not an action
+# response" and "action name absent from _BU_ACTION_MAP". The latter means
+# browser-use renamed its vocabulary and step logging has gone silent — which
+# is exactly what bit us on the 0.12.x upgrade (~99% of steps dropped, no
+# error). We count consecutive UNMAPPED action payloads and print one
+# [WARNING] at the threshold so ./audit's Warn column surfaces it.
+_BU_DRIFT_THRESHOLD = 10
+_bu_drift_state = {"streak": 0, "warned": False}
+
+
+def _bu_unmapped_action(response_content: str) -> Optional[str]:
+    """Return the first action name when the response is a browser_use action
+    payload whose action name is NOT in _BU_ACTION_MAP, else None.
+
+    Distinguishes genuine vocabulary drift from ordinary non-action responses
+    (planning turns, malformed JSON, the terminal "done" action).
+    """
+    if not response_content:
+        return None
+    try:
+        data = json.loads(response_content)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    actions = data.get("action") if isinstance(data, dict) else None
+    if not actions or not isinstance(actions, list) or not isinstance(actions[0], dict):
+        return None
+    try:
+        name = next(iter(actions[0]))
+    except StopIteration:
+        return None
+    if name == "done" or name in _BU_ACTION_MAP:
+        return None
+    return name
 
 
 def _parse_bu_action(response_content: str):
@@ -201,6 +252,25 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
                         step_name, category, msg = parsed
                         logger.step_start(step_name, category=category, message=msg)
                         logger.step_success(step_name)
+                        _bu_drift_state["streak"] = 0
+                    else:
+                        unmapped = _bu_unmapped_action(output)
+                        if unmapped:
+                            _bu_drift_state["streak"] += 1
+                            if (not _bu_drift_state["warned"]
+                                    and _bu_drift_state["streak"] >= _BU_DRIFT_THRESHOLD):
+                                _bu_drift_state["warned"] = True
+                                msg = (
+                                    f"[WARNING] [parser-drift] browser-use action "
+                                    f"'{unmapped}' and {_bu_drift_state['streak']} "
+                                    f"consecutive others are absent from _BU_ACTION_MAP "
+                                    f"— browser action steps are NOT being logged. "
+                                    f"browser-use likely renamed its action vocabulary; "
+                                    f"update _BU_ACTION_MAP in brains/browseruse/agent.py."
+                                )
+                                print(msg, flush=True)
+                                logger.warning(msg, details={"unmapped_action": unmapped,
+                                                             "streak": _bu_drift_state["streak"]})
 
                 return response
             except Exception as e:

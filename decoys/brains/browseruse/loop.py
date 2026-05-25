@@ -115,12 +115,12 @@ class BrowserUseLoop(BaseEmulationLoop):
             else:
                 result, success = action_result, True
             if self.logger:
-                self.logger.workflow_end(workflow.description, success=success)
+                self.logger.workflow_end(workflow.name, success=success, result=result)
             return success
         except Exception as e:
             print(f"Workflow error: {e}")
             if self.logger:
-                self.logger.workflow_end(workflow.description, success=False, error=str(e))
+                self.logger.workflow_end(workflow.name, success=False, error=str(e))
                 self.logger.error(f"Workflow '{workflow.description}' failed", exception=e)
             return False
 

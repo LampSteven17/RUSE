@@ -744,10 +744,16 @@ install_python_deps() {
             fi
             ;;
         smolagents)
-            pip install smolagents litellm torch transformers datasets numpy pandas requests duckduckgo-search ddgs
+            # smolagents pinned: the step-action log parser (_SMOL_ACTION_PATTERNS
+            # in common/logging/llm_callbacks.py) keys on this version's tool-call
+            # vocabulary. Bumping unpinned silently breaks step logging.
+            pip install 'smolagents==1.25.0' litellm torch transformers datasets numpy pandas requests duckduckgo-search ddgs
             ;;
         browseruse)
-            pip install uv browser-use langchain-ollama playwright
+            # browser-use pinned: _BU_ACTION_MAP in brains/browseruse/agent.py keys
+            # on this version's action names (renamed across the 0.12.x line).
+            # Bumping unpinned silently breaks step logging — confirmed 2026-05-25.
+            pip install uv 'browser-use==0.12.7' langchain-ollama playwright
             playwright install chromium
             playwright install-deps chromium
             ;;

@@ -139,11 +139,11 @@ class MCHPAgent(BaseEmulationLoop):
         try:
             workflow.action(self.extra, logger=self.logger)
             if self.logger:
-                self.logger.workflow_end(workflow.description, success=True)
+                self.logger.workflow_end(workflow.name, success=True)
             return True
         except Exception as e:
             if self.logger:
-                self.logger.workflow_end(workflow.description, success=False, error=str(e))
+                self.logger.workflow_end(workflow.name, success=False, error=str(e))
             return False
 
     def _apply_brain_specific_config(self, fc) -> None:

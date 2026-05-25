@@ -597,7 +597,13 @@ class BaseEmulationLoop(ABC):
 
                 # Select workflow
                 workflow = self._select_workflow()
-                workflow_name = workflow.description
+                # The `workflow` log field is the canonical workflow name
+                # (matches content.workflow_weights keys — see
+                # behavioral_config.build_workflow_weights, which keys on
+                # workflow.name). The human-readable task/description goes in
+                # params so logs stay joinable to PHASE-emitted weights.
+                workflow_name = workflow.name
+                workflow_desc = workflow.description
 
                 if self.logger:
                     workflow_options = [w.name for w in self.workflows]
@@ -605,7 +611,7 @@ class BaseEmulationLoop(ABC):
                         choice="workflow_selection",
                         options=workflow_options,
                         selected=workflow.name,
-                        context=workflow_name,
+                        context=workflow_desc,
                         method=(
                             "schedule_block" if self._schedule_by_hour
                             else "behavior_weighted" if self._workflow_weights
@@ -619,6 +625,7 @@ class BaseEmulationLoop(ABC):
                     params = {
                         "agent_type": self._agent_type_label(),
                         "workflow_class": workflow.__class__.__name__,
+                        "description": workflow_desc,
                         "phase_timing": self._phase_timing is not None,
                     }
                     if hasattr(workflow, 'category'):
