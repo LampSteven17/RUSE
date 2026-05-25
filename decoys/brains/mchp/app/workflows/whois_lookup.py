@@ -43,7 +43,14 @@ class WhoisLookupWorkflow(BaseWorkflow):
         success = result.startswith("%") or "domain" in result.lower()
         if logger:
             if success:
-                logger.step_success("whois_lookup")
+                resp = " | ".join(
+                    ln.strip() for ln in result.splitlines()
+                    if ln.strip() and not ln.strip().startswith("%")
+                )[:200]
+                logger.step_success("whois_lookup",
+                                    message=resp or "(referral received)",
+                                    details={"domain": domain})
             else:
-                logger.step_error("whois_lookup", result[:80])
+                logger.step_error("whois_lookup", result[:80],
+                                  details={"domain": domain})
         return result

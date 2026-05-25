@@ -33,6 +33,23 @@ class DownloadFiles(BaseWorkflow):
 
     """ PRIVATE """
 
+    @staticmethod
+    def _file_sizes(directory):
+        """Snapshot {filename: size} for the (flat) Downloads dir. scandir is
+        a single batched stat, so it stays fast even as Downloads grows."""
+        sizes = {}
+        try:
+            with os.scandir(directory) as it:
+                for e in it:
+                    if e.is_file():
+                        try:
+                            sizes[e.name] = e.stat().st_size
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+        return sizes
+
     def _download_files(self, logger=None):
         random_function_selector = [self._download_xkcd, self._download_wikipedia, self._download_nist]
         directory = os.path.join(os.path.expanduser("~"), "Downloads")
@@ -41,10 +58,17 @@ class DownloadFiles(BaseWorkflow):
         source_name = download_func.__name__.replace('_download_', '')
         if logger:
             logger.step_start("download_file", category="browser", message=f"Downloading from {source_name}")
+        before = self._file_sizes(directory)
         try:
             download_func(directory)
+            # Bytes written = new or grown files vs the pre-download snapshot.
+            after = self._file_sizes(directory)
+            n_bytes = sum(sz for name, sz in after.items()
+                          if before.get(name) != sz)
             if logger:
-                logger.step_success("download_file")
+                logger.step_success("download_file",
+                                    message=f"{source_name}: {n_bytes} bytes",
+                                    details={"source": source_name, "bytes": n_bytes})
         except Exception as e:
             if logger:
                 logger.step_error("download_file", str(e), exception=e)

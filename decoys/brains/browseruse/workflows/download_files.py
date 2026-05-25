@@ -25,7 +25,7 @@ from brains.browseruse.workflows.base import BUWorkflow
 from common.config.model_config import get_model
 from common.network.downloader import (
     FALLBACK_URLS, download_file, download_with_outcome,
-    select_pool_subset, pick_outcome,
+    select_pool_subset, pick_outcome, parse_download_summary,
 )
 
 if TYPE_CHECKING:
@@ -131,10 +131,16 @@ class DownloadFilesWorkflow(BUWorkflow):
         if logger:
             logger.step_start("download_file", category="browser",
                               message=f"download {url[:60]}")
+            info = parse_download_summary(result)
+            details = {"url": url, "outcome": outcome,
+                       "bytes": info["bytes"],
+                       "content_type": info["content_type"],
+                       "elapsed_ms": info["elapsed_ms"]}
             if success:
-                logger.step_success("download_file")
+                logger.step_success("download_file", message=result[:200],
+                                    details=details, duration_ms=info["elapsed_ms"])
             else:
-                logger.step_error("download_file", result[:80])
+                logger.step_error("download_file", result[:120], details=details)
         return result, success
 
     def cleanup(self):

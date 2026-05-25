@@ -21,6 +21,7 @@ Future PHASE knob (not consumed today, documented for reference):
 from __future__ import annotations
 
 import random
+import re
 import socket
 import struct
 import time
@@ -299,3 +300,34 @@ def download_file(url: str, max_bytes: int = MAX_BYTES_PER_CALL,
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
     return f"downloaded {host} -> {received} bytes ({content_type}) in {elapsed_ms}ms"
+
+
+_DL_SUMMARY_RE = re.compile(
+    r"downloaded\s+(?P<host>\S+)\s+->\s+(?P<bytes>\d+)\s+bytes\s+"
+    r"\((?P<ctype>[^)]*)\)\s+in\s+(?P<ms>\d+)ms"
+)
+
+
+def parse_download_summary(summary: str) -> dict:
+    """Extract structured fields from a download_file()/download_with_outcome()
+    summary string for logging.
+
+    Returns {host, bytes, content_type, elapsed_ms} — values are None when the
+    summary isn't a successful fetch (error / timeout / reset strings); for
+    those, elapsed_ms is still recovered from an `elapsed=<ms>ms` token if
+    present.
+    """
+    out = {"host": None, "bytes": None, "content_type": None, "elapsed_ms": None}
+    if not summary:
+        return out
+    m = _DL_SUMMARY_RE.search(summary)
+    if m:
+        out["host"] = m.group("host")
+        out["bytes"] = int(m.group("bytes"))
+        out["content_type"] = m.group("ctype")
+        out["elapsed_ms"] = int(m.group("ms"))
+        return out
+    m2 = re.search(r"elapsed=(\d+)ms", summary)
+    if m2:
+        out["elapsed_ms"] = int(m2.group(1))
+    return out
