@@ -10,7 +10,7 @@ from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool, VisitWebpa
 
 from brains.smolagents.workflows.base import SmolWorkflow
 from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
-from common.logging.llm_callbacks import setup_litellm_callbacks
+from common.logging.llm_callbacks import setup_litellm_callbacks, make_smol_step_callback
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -115,7 +115,7 @@ class WebSearchWorkflow(SmolWorkflow):
         # WEB_SEARCH_TASKS.
         self.query_pool = None
 
-    def _get_agent(self):
+    def _get_agent(self, logger: Optional["AgentLogger"] = None):
         """Lazy-load the SmolAgents CodeAgent."""
         if self._agent is None:
             model_id = f"ollama/{self.model_name}"
@@ -131,11 +131,15 @@ class WebSearchWorkflow(SmolWorkflow):
             if self.prompts is not None:
                 instructions = self.prompts.build_system_prompt()
 
+            # step_callbacks fire per ActionStep with the real executed code +
+            # error + timing — the authoritative source for step logging.
+            step_callbacks = [make_smol_step_callback(logger)] if logger else None
             self._agent = CodeAgent(
                 tools=[DuckDuckGoSearchTool(), VisitWebpageTool()],
                 model=llm,
                 instructions=instructions,
                 max_steps=self.max_steps,
+                step_callbacks=step_callbacks,
             )
         return self._agent
 
@@ -180,7 +184,7 @@ class WebSearchWorkflow(SmolWorkflow):
         # Steps are logged at the action level by the LLM response parser
         # in LiteLLMLoggingCallback (search, navigate, type_text, etc.)
         try:
-            agent = self._get_agent()
+            agent = self._get_agent(logger)
             result = agent.run(task)
             print(f"Search completed: {str(result)[:200]}...")
             # Heuristic: non-empty result = success

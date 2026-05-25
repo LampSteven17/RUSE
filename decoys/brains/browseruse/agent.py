@@ -68,93 +68,89 @@ _BU_ACTION_MAP = {
 }
 
 
-def _bu_loads(response_content: str):
-    """Lenient JSON load of a browser_use response.
-
-    gemma4 frequently wraps its JSON in markdown separators (`---\\n{...}`) or
-    ```json fences, which strict json.loads rejects — confirmed 2026-05-25 on a
-    live SUP where 100% of a session's responses carried a `---\\n` prefix and
-    every step was dropped. Fall back to the first balanced {...} substring.
-    """
-    if not response_content:
-        return None
-    try:
-        return json.loads(response_content)
-    except (json.JSONDecodeError, TypeError):
-        pass
-    i = response_content.find("{")
-    j = response_content.rfind("}")
-    if i < 0 or j <= i:
-        return None
-    try:
-        return json.loads(response_content[i:j + 1])
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
-# Drift detection. _parse_bu_action returns None for BOTH "not an action
-# response" and "action name absent from _BU_ACTION_MAP". The latter means
-# browser-use renamed its vocabulary and step logging has gone silent — which
-# is exactly what bit us on the 0.12.x upgrade (~99% of steps dropped, no
-# error). We count consecutive UNMAPPED action payloads and print one
-# [WARNING] at the threshold so ./audit's Warn column surfaces it.
+# Drift detection. When an action name recorded by browser_use is absent from
+# _BU_ACTION_MAP, browser-use has renamed its vocabulary and step logging has
+# gone silent for that action — exactly what bit us on the 0.12.x upgrade
+# (~99% of steps dropped, no error). We count consecutive UNMAPPED actions and
+# print one [WARNING] at the threshold so ./audit's Warn column surfaces it.
 _BU_DRIFT_THRESHOLD = 10
 _bu_drift_state = {"streak": 0, "warned": False}
 
 
-def _bu_unmapped_action(response_content: str) -> Optional[str]:
-    """Return the first action name when the response is a browser_use action
-    payload whose action name is NOT in _BU_ACTION_MAP, else None.
+def _bu_note_drift(logger, name: str) -> None:
+    """Record an unmapped browser_use action; emit one [WARNING] at threshold."""
+    _bu_drift_state["streak"] += 1
+    if (logger is not None and not _bu_drift_state["warned"]
+            and _bu_drift_state["streak"] >= _BU_DRIFT_THRESHOLD):
+        _bu_drift_state["warned"] = True
+        msg = (f"[WARNING] [parser-drift] browser-use action '{name}' and "
+               f"{_bu_drift_state['streak']} consecutive others are absent from "
+               f"_BU_ACTION_MAP — browser action steps are NOT being logged. "
+               f"browser-use likely renamed its action vocabulary; update "
+               f"_BU_ACTION_MAP in brains/browseruse/agent.py.")
+        print(msg, flush=True)
+        logger.warning(msg, details={"unmapped_action": name,
+                                     "streak": _bu_drift_state["streak"]})
 
-    Distinguishes genuine vocabulary drift from ordinary non-action responses
-    (planning turns, malformed JSON, the terminal "done" action).
+
+def _log_bu_steps(logger, history) -> None:
+    """Emit step events from a browser_use AgentHistoryList (the agent.run()
+    return value).
+
+    This is the authoritative source: each AgentHistory carries the actions
+    browser_use actually parsed AND their ActionResults (so we get real
+    success/error), plus per-step timing. Walking the structured history avoids
+    re-parsing raw LLM text — which the model wraps in `---\\n{...}` separators
+    that strict json.loads rejects (the 2026-05-25 step-drop). Captures every
+    action in a step, not just the first.
     """
-    if not response_content:
-        return None
-    data = _bu_loads(response_content)
-    actions = data.get("action") if isinstance(data, dict) else None
-    if not actions or not isinstance(actions, list) or not isinstance(actions[0], dict):
-        return None
-    try:
-        name = next(iter(actions[0]))
-    except StopIteration:
-        return None
-    if name == "done" or name in _BU_ACTION_MAP:
-        return None
-    return name
-
-
-def _parse_bu_action(response_content: str):
-    """Parse browser_use LLM response to detect the action type.
-
-    Returns (step_name, category, message) or None if no action detected.
-    """
-    if not response_content:
-        return None
-    data = _bu_loads(response_content)
-    if not isinstance(data, dict):
-        return None
-    try:
-        actions = data.get("action", [])
-        if not actions or not isinstance(actions, list):
-            return None
-        action = actions[0]
-        if not isinstance(action, dict):
-            return None
-        action_type = next(iter(action))
-        mapped = _BU_ACTION_MAP.get(action_type)
-        if mapped is None:
-            return None
-        step_name, category = mapped
-        # Build a short message from the action params
-        params = action[action_type]
-        if isinstance(params, dict):
-            msg = params.get("url") or params.get("text") or params.get("query") or str(params)[:100]
-        else:
-            msg = str(params)[:100]
-        return step_name, category, msg
-    except (KeyError, IndexError, StopIteration):
-        return None
+    if logger is None:
+        return
+    steps = getattr(history, "history", None)
+    if not steps:
+        return
+    for h in steps:
+        model_output = getattr(h, "model_output", None)
+        if model_output is None:
+            continue
+        actions = getattr(model_output, "action", None) or []
+        results = getattr(h, "result", None) or []
+        # Per-step duration; only attribute it when the step has a single
+        # action so multi-action steps don't each claim the full step time.
+        dur_ms = None
+        meta = getattr(h, "metadata", None)
+        if meta is not None and len(actions) == 1:
+            try:
+                dur_ms = int(meta.duration_seconds * 1000)
+            except (TypeError, ValueError, AttributeError):
+                dur_ms = None
+        for idx, action in enumerate(actions):
+            try:
+                dumped = action.model_dump(exclude_none=True)
+            except Exception:
+                continue
+            name = next((k for k in dumped if k != "interacted_element"), None)
+            if not name or name == "done":
+                continue
+            mapped = _BU_ACTION_MAP.get(name)
+            if mapped is None:
+                _bu_note_drift(logger, name)
+                continue
+            _bu_drift_state["streak"] = 0
+            step_name, category = mapped
+            params = dumped.get(name) or {}
+            if isinstance(params, dict):
+                msg = params.get("url") or params.get("text") or params.get("query") or str(params)
+            else:
+                msg = str(params)
+            logger.step_start(step_name, category=category, message=str(msg)[:200])
+            res = results[idx] if idx < len(results) else None
+            err = getattr(res, "error", None) if res is not None else None
+            if err:
+                logger.step_error(step_name, message=str(err)[:200],
+                                  category=category, duration_ms=dur_ms)
+            else:
+                logger.step_success(step_name, category=category, duration_ms=dur_ms)
 
 
 def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None, timeout: int = LLM_TIMEOUT):
@@ -268,33 +264,11 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
                     tokens=tokens
                 )
 
-                # Parse the LLM response for browser actions and log as steps
-                if output:
-                    parsed = _parse_bu_action(output)
-                    if parsed:
-                        step_name, category, msg = parsed
-                        logger.step_start(step_name, category=category, message=msg)
-                        logger.step_success(step_name)
-                        _bu_drift_state["streak"] = 0
-                    else:
-                        unmapped = _bu_unmapped_action(output)
-                        if unmapped:
-                            _bu_drift_state["streak"] += 1
-                            if (not _bu_drift_state["warned"]
-                                    and _bu_drift_state["streak"] >= _BU_DRIFT_THRESHOLD):
-                                _bu_drift_state["warned"] = True
-                                msg = (
-                                    f"[WARNING] [parser-drift] browser-use action "
-                                    f"'{unmapped}' and {_bu_drift_state['streak']} "
-                                    f"consecutive others are absent from _BU_ACTION_MAP "
-                                    f"— browser action steps are NOT being logged. "
-                                    f"browser-use likely renamed its action vocabulary; "
-                                    f"update _BU_ACTION_MAP in brains/browseruse/agent.py."
-                                )
-                                print(msg, flush=True)
-                                logger.warning(msg, details={"unmapped_action": unmapped,
-                                                             "streak": _bu_drift_state["streak"]})
-
+                # NOTE: per-action step events are emitted from the structured
+                # AgentHistoryList after agent.run() returns (see _log_bu_steps),
+                # not parsed from this raw LLM text — that gives real
+                # success/error outcomes and avoids the markdown-wrapped-JSON
+                # fragility. This wrapper only records the LLM call itself.
                 return response
             except Exception as e:
                 logger.llm_error(error=str(e), action=f"llm_call_{model}", fatal=True)
@@ -410,6 +384,7 @@ class BrowserUseAgent:
             success = bool(result and result.is_done())
             log("Task completed successfully!" if success else "Task finished but agent did not complete goal")
 
+            _log_bu_steps(self.logger, result)
             if self.logger:
                 self.logger.workflow_end(workflow_name, success=success,
                                         result=str(result)[:500] if result else None)

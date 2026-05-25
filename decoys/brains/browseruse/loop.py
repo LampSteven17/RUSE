@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
 
 from brains.browseruse.prompts import BUPrompts
+from brains.browseruse.agent import _log_bu_steps
 
 # Default timing parameters (matching MCHP defaults)
 DEFAULT_CLUSTER_SIZE = 5
@@ -114,6 +115,12 @@ class BrowserUseLoop(BaseEmulationLoop):
                 result, success = action_result
             else:
                 result, success = action_result, True
+            # Browser-Agent workflows return a browser_use AgentHistoryList;
+            # emit per-action step events with real outcomes from it. The
+            # dedicated whois/download workflows return other types and log
+            # their own steps, so duck-type on the history API.
+            if hasattr(result, "history") and hasattr(result, "model_actions"):
+                _log_bu_steps(self.logger, result)
             if self.logger:
                 self.logger.workflow_end(workflow.name, success=success, result=result)
             return success

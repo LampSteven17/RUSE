@@ -624,7 +624,6 @@ class BaseEmulationLoop(ABC):
                 if self.logger:
                     params = {
                         "agent_type": self._agent_type_label(),
-                        "workflow_class": workflow.__class__.__name__,
                         "description": workflow_desc,
                         "phase_timing": self._phase_timing is not None,
                     }

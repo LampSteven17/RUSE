@@ -74,28 +74,75 @@ def _parse_smol_action(response_content: str) -> Optional[Tuple[str, str, str]]:
 
 
 # Drift detection (mirror of the browser-use side in brains/browseruse/agent.py).
-# A smolagents "code turn" that matches none of _SMOL_ACTION_PATTERNS — yet
-# isn't a plain final_answer() completion — is a candidate for tool-vocabulary
-# drift: smolagents renamed its tools and step logging is going silent. The
-# print()->scroll fallback resets the streak on every normal tool turn, so a
-# sustained streak is a strong signal. We print one [WARNING] at threshold for
-# ./audit's Warn column.
+# A smolagents code turn whose executed code (ActionStep.code_action) matches
+# none of _SMOL_ACTION_PATTERNS — yet isn't a plain final_answer() completion —
+# is a candidate for tool-vocabulary drift: smolagents renamed its tools and
+# step logging is going silent. The print()->scroll fallback resets the streak
+# on every normal tool turn, so a sustained streak is a strong signal. We print
+# one [WARNING] at threshold for ./audit's Warn column.
 _SMOL_DRIFT_THRESHOLD = 25
 _smol_drift_state = {"streak": 0, "warned": False}
-_SMOL_CODE_SHAPE = re.compile(r"```(?:py|python)|(?<!\w)Code:\s", re.IGNORECASE)
 _SMOL_FINAL_ANSWER = re.compile(r"\bfinal_answer\s*\(", re.IGNORECASE)
 
 
-def _smol_shape_unmatched(response_content: str) -> bool:
-    """True when the response is a smolagents code turn (known shape) that
-    matched no action pattern. Pure final_answer() completions are excluded."""
-    if not response_content:
+def _smol_code_unmatched(code_action: str) -> bool:
+    """True when executed code matched no action pattern and isn't a plain
+    final_answer() completion — a candidate for tool-vocabulary drift."""
+    if not code_action:
         return False
-    if not _SMOL_CODE_SHAPE.search(response_content):
+    if _SMOL_FINAL_ANSWER.search(code_action):
         return False
-    if _SMOL_FINAL_ANSWER.search(response_content):
-        return False
-    return _parse_smol_action(response_content) is None
+    return _parse_smol_action(code_action) is None
+
+
+def make_smol_step_callback(logger: "AgentLogger"):
+    """Build a smolagents CodeAgent step_callback that emits step events from
+    each ActionStep.
+
+    Authoritative source: ActionStep carries the actual executed code
+    (`code_action`), the real step outcome (`error`), and timing — so step
+    success/error reflect what happened, not what the model said it would do.
+    smolagents invokes callbacks as callback(memory_step, agent=self), so we
+    accept **kwargs.
+    """
+    def _callback(memory_step, **_kwargs):
+        if logger is None:
+            return
+        code = getattr(memory_step, "code_action", None)
+        if not code:
+            return
+        err = getattr(memory_step, "error", None)
+        dur_ms = None
+        timing = getattr(memory_step, "timing", None)
+        if timing is not None:
+            try:
+                d = timing.duration
+                dur_ms = int(d * 1000) if d is not None else None
+            except (TypeError, ValueError, AttributeError):
+                dur_ms = None
+        parsed = _parse_smol_action(code)
+        if parsed:
+            step_name, category, msg = parsed
+            logger.step_start(step_name, category=category, message=msg)
+            if err is not None:
+                logger.step_error(step_name, message=str(err)[:200],
+                                  category=category, duration_ms=dur_ms)
+            else:
+                logger.step_success(step_name, category=category, duration_ms=dur_ms)
+            _smol_drift_state["streak"] = 0
+        elif _smol_code_unmatched(code):
+            _smol_drift_state["streak"] += 1
+            if (not _smol_drift_state["warned"]
+                    and _smol_drift_state["streak"] >= _SMOL_DRIFT_THRESHOLD):
+                _smol_drift_state["warned"] = True
+                m = (f"[WARNING] [parser-drift] {_smol_drift_state['streak']} "
+                     f"consecutive smolagents code turns matched no action in "
+                     f"_SMOL_ACTION_PATTERNS — step logging may be dropping tool "
+                     f"calls. smolagents likely changed its tool-call vocabulary; "
+                     f"update _SMOL_ACTION_PATTERNS in common/logging/llm_callbacks.py.")
+                print(m, flush=True)
+                logger.warning(m, details={"streak": _smol_drift_state["streak"]})
+    return _callback
 
 
 # =============================================================================
@@ -200,26 +247,9 @@ class LiteLLMLoggingCallback(LiteLLMCustomLogger):
             tokens=tokens if any(v is not None for v in tokens.values()) else None
         )
 
-        # Parse the LLM response for SmolAgents actions and log as steps
-        if output:
-            parsed = _parse_smol_action(output)
-            if parsed:
-                step_name, category, msg = parsed
-                self.logger.step_start(step_name, category=category, message=msg)
-                self.logger.step_success(step_name)
-                _smol_drift_state["streak"] = 0
-            elif _smol_shape_unmatched(output):
-                _smol_drift_state["streak"] += 1
-                if (not _smol_drift_state["warned"]
-                        and _smol_drift_state["streak"] >= _SMOL_DRIFT_THRESHOLD):
-                    _smol_drift_state["warned"] = True
-                    m = (f"[WARNING] [parser-drift] {_smol_drift_state['streak']} "
-                         f"consecutive smolagents code turns matched no action in "
-                         f"_SMOL_ACTION_PATTERNS — step logging may be dropping tool "
-                         f"calls. smolagents likely changed its tool-call vocabulary; "
-                         f"update _SMOL_ACTION_PATTERNS in common/logging/llm_callbacks.py.")
-                    print(m, flush=True)
-                    self.logger.warning(m, details={"streak": _smol_drift_state["streak"]})
+        # NOTE: per-action step events come from the CodeAgent step_callback
+        # (make_smol_step_callback), which sees the actual executed code +
+        # real error + timing. This LiteLLM hook only records the LLM call.
 
     def _extract_tokens(self, response_obj: Any, kwargs: Dict) -> Dict[str, Optional[int]]:
         """Extract token usage from response, handling multiple formats."""
