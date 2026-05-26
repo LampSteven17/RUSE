@@ -13,6 +13,7 @@ Future PHASE knob (not consumed today, see common.network.whois):
 from __future__ import annotations
 
 import random
+import time
 
 from ..utility.base_workflow import BaseWorkflow
 from common.network.whois import FALLBACK_DOMAINS, whois_lookup
@@ -39,7 +40,9 @@ class WhoisLookupWorkflow(BaseWorkflow):
         if logger:
             logger.step_start("whois_lookup", category="browser",
                               message=f"WHOIS for {domain}")
+        t0 = time.monotonic()
         result = whois_lookup(domain)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         success = result.startswith("%") or "domain" in result.lower()
         if logger:
             if success:
@@ -49,8 +52,8 @@ class WhoisLookupWorkflow(BaseWorkflow):
                 )[:200]
                 logger.step_success("whois_lookup",
                                     message=resp or "(referral received)",
-                                    details={"domain": domain})
+                                    details={"domain": domain}, duration_ms=elapsed_ms)
             else:
                 logger.step_error("whois_lookup", result[:80],
-                                  details={"domain": domain})
+                                  details={"domain": domain}, duration_ms=elapsed_ms)
         return result

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import random
 import re
+import time
 from typing import Optional, TYPE_CHECKING
 
 import requests
@@ -113,7 +114,9 @@ class WhoisLookupWorkflow(BUWorkflow):
                 context="LLM-picked domain for WHOIS lookup (BU)",
                 method="llm_picker",
             )
+        t0 = time.monotonic()
         result = whois_lookup(domain)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         success = result.startswith("%") or "domain" in result.lower()
         if logger:
             logger.step_start("whois_lookup", category="browser",
@@ -125,10 +128,10 @@ class WhoisLookupWorkflow(BUWorkflow):
                 )[:200]
                 logger.step_success("whois_lookup",
                                     message=resp or "(referral received)",
-                                    details={"domain": domain})
+                                    details={"domain": domain}, duration_ms=elapsed_ms)
             else:
                 logger.step_error("whois_lookup", result[:80],
-                                  details={"domain": domain})
+                                  details={"domain": domain}, duration_ms=elapsed_ms)
         return result, success
 
     def cleanup(self):
