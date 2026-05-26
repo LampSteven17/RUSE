@@ -56,12 +56,12 @@ Probe collects:
 | SSH | reachable | probe rc |
 | Svc | systemd active AND (uptime ≥ 600s OR NRestarts ≤ 10) | `SVC` + `NRESTARTS` + `SVC_UPTIME_S` |
 | Proc | brain process running | `PROC_COUNT >= 1` |
-| Model | Ollama loaded matches `expected_model(behavior)` | `OLLAMA_MODEL` |
-| GPU | V100 VRAM ≥ 5 GB | `VRAM_MIB` |
+| Model | Ollama loaded matches `expected_model(behavior)` (V100 → gemma4:26b, R-infix → gemma4:e4b, C-infix → gemma4:e2b, M-brain → no check) | `OLLAMA_MODEL` |
+| GPU | tier-aware VRAM "loaded" floor — V100 ≥ 5000 MiB (gemma4:26b ~14 GB loaded), R-tier ≥ 2000 MiB (gemma4:e4b ~3-5 GB int4, ~10 GB with KV cache). Tier detected via behavior-key regex `^[BS]\d+R(\..*)?$`. | `VRAM_MIB` |
 | Logs | latest jsonl < `LOG_FRESHNESS_SECS` (4h default) | `LOG_MTIME` |
 | Cron | M-brains have 2 maintenance entries (daily restart + weekly reboot) | `CRON_COUNT` |
 | Fdbk | exactly one `behavior.json` in `behavioral_configurations/` | `BC_FILES + BC_HAS_BEHAVIOR` |
-| Warn | 0 `[WARNING]`s; ablation-gated `[INFO]`s reported separately | `WARN_COUNT + INFO_COUNT` |
+| Warn | 0 `[WARNING]`s; ablation-gated `[INFO]`s reported separately. W4 (workflow_weights DISABLED) only fires when BOTH legacy `content.workflow_weights` AND v2 `content.schedule` are absent (commit `4156cbe`, 2026-05-21) — empty `{}` weights inside a schedule block are intentional OFF-night sentinels, not bugs. Also catches `[parser-drift]` WARNINGs (2026-05-25) — the BU/Smol step-action parser stopped recognizing the framework's action vocabulary (version bump), step logging has gone silent, and `_BU_ACTION_MAP`/`_SMOL_ACTION_PATTERNS` need updating. | `WARN_COUNT + INFO_COUNT` |
 | Win | window-mode contract — see below | `WIN_STATE` |
 | BG | median D4-only bg-conn/min during ON-windows ≥ 30% of target (floor check — brain workflow conns NOT counted) | `WIN_VOL_MEDIAN` vs `WIN_TARGET` |
 | Seed | session_id from latest `session_*.jsonl` filename matches `Random(_metadata.seed).getrandbits(32):08x` — catches Phase 0c install-path bypass bugs | `PHASE_SEED` + `EXPECTED_SID` + `ACTUAL_SID` |
@@ -186,16 +186,31 @@ The `_row_status()` helper emits a 11-char compact status string
 
 ```python
 expected_model("B0.gemma")  → "gemma4:26b"
+expected_model("B2R.gemma") → "gemma4:e4b"   # RTX 2080 Ti (both --gpu rtx and --gpu rtx-a)
 expected_model("B0C.gemma") → "gemma4:e2b"   # CPU variant
 expected_model("M1")        → None            # MCHP no LLM
-expected_service("B0.gemma") → "b0_gemma.service"  # dot → underscore
-needs_gpu("B0.gemma")       → True            # GPU-tier flavor
+expected_service("B0.gemma") → "b0_gemma.service"   # dot → underscore
+expected_service("B2R.gemma") → "b2r_gemma.service" # R-tier same shape
+needs_gpu("B0.gemma")       → True            # V100 flavor
+needs_gpu("B2R.gemma")      → True            # RTX 2080 Ti flavor
 needs_mchp_cron("M1")       → True            # M-brains only
 ```
 
 These mirror the resolution in `INSTALL_SUP.sh::MODEL_NAMES`. Drift here
 will cause every audit to misreport — keep the two in sync when adding
-new behaviors.
+new behaviors. R-infix and C-infix behaviors share the same `.gemma`
+behavior_dir as their non-infix V100 sibling (per
+`config_key_to_behavior_dir` regex `^([A-Z])\d+[A-Z]*(?:\.(\w+))?$`),
+so PHASE feedback at `{behavior_dir}/{baseline_config}/behavior.json`
+is shared across all three tiers — only `expected_model` differs.
+
+The audit does NOT distinguish the two RTX pools (non-A `rtx2080ti:1`
+vs A `2080ti-rtx-a:1`). From the audit's POV both are R-tier with
+identical expected model + VRAM thresholds; the pool a VM actually
+landed on is the deploy_name suffix (`-rtx` vs `-rtx-a`) and the
+OpenStack flavor in the inventory metadata, neither of which the
+per-VM probe currently inspects. If a VM somehow ends up on the wrong
+flavor, the audit won't catch it.
 
 ## Constants
 

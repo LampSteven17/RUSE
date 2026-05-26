@@ -72,7 +72,11 @@ def _locked_read_write(path: Path):
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         os.close(lock_fd)
 
-# Canonical field order for experiment entries
+# Canonical field order for experiment entries.
+# dataset / scope / gpu_tier are descriptive metadata derived from the
+# deployment_name + config.yaml's gpu_tier; they let PHASE filter by
+# attribute without substring-parsing the name string. No logic hangs off
+# them — each deploy is its own independent entry.
 FIELD_ORDER = [
     "ips",
     "output_file",
@@ -81,6 +85,8 @@ FIELD_ORDER = [
     "start_date",
     "end_date",
     "output_type",
+    "dataset",
+    "gpu_tier",
     "description",
     "sup_logs_db",
 ]
@@ -177,6 +183,16 @@ def main():
             "spec A6."
         ),
     )
+    parser.add_argument(
+        "--gpu-tier",
+        default=None,
+        help=(
+            "Override gpu_tier suffix detection. When config.yaml has a "
+            "gpu_tier: field (decoy feedback), pass it here so lineage_key "
+            "is correctly stripped even for tiers this script doesn't yet "
+            "know about. Leave unset for rampart/ghosts/controls."
+        ),
+    )
     args = parser.parse_args()
 
     snippet_path = Path(args.snippet)
@@ -212,6 +228,12 @@ def main():
     name = args.name
     name_upper = name.upper()
 
+    # Descriptive metadata derived from deployment_name + optional
+    # gpu_tier hint from config.yaml. PHASE uses these for attribute
+    # filtering (e.g. "all sum25 deploys", "all rtx-a deploys").
+    from deploy_metadata import derive_metadata
+    meta = derive_metadata(name, gpu_tier_hint=args.gpu_tier)
+
     entry = {
         "ips": ips,
         "output_file": f"bigdisk/TRAINING_DATA/IPs/AXES_{name_upper}.json",
@@ -220,6 +242,8 @@ def main():
         "start_date": start_date,
         "end_date": None,
         "output_type": "inference",
+        "dataset": meta["dataset"],
+        "gpu_tier": meta["gpu_tier"],
     }
 
     # Set sup_logs_db if run_id provided
@@ -255,6 +279,8 @@ def main():
                 "interface",
                 "start_date",
                 "output_type",
+                "dataset",
+                "gpu_tier",
             ):
                 existing[key] = entry[key]
             existing["end_date"] = None

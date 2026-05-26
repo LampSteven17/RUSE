@@ -108,8 +108,15 @@ def close_phase_experiment(config_name: str) -> None:
         # Yesterday, not today: teardown-day Zeek captures are partial. Using
         # the day before gives PHASE a clean last-full-day boundary for log
         # dredging.
+        #
+        # Clamp to start_date though — a same-day deploy-then-teardown (failed
+        # deploy, immediate retry) would otherwise produce end_date < start_date.
+        # Observed on 2026-05-20: 2025-all and axyear-all both ended up with
+        # start=05-20, end=05-19 from this exact path. ISO date strings sort
+        # lexicographically, so max() does what you'd expect.
         yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-        entry["end_date"] = yesterday
+        start = entry.get("start_date") or yesterday
+        entry["end_date"] = max(yesterday, start)
 
         try:
             tmp = tempfile.NamedTemporaryFile(

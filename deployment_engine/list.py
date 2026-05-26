@@ -69,12 +69,15 @@ def run_list(deploy_dir: Path) -> int:
 
             vm_summary = _get_vm_summary(run_dir, config)
             expected = _get_expected_count(run_dir, config)
-            live = _count_live_vms(name, rid, config, os_client)
-            active_col = f"{live}/{expected}" if expected > 0 else "?"
+            active, bad_statuses, nbhd_status = _count_live_vms(
+                name, rid, config, os_client,
+            )
+            active_col = f"{active}/{expected}" if expected > 0 else "?"
+            status_col = _format_status_col(bad_statuses, nbhd_status, expected, active)
             date_col = _format_run_date(rid)
             target = f"{name}-{rid}"
 
-            groups[group].append([target, vm_summary, active_col, date_col])
+            groups[group].append([target, vm_summary, active_col, status_col, date_col])
 
     total = sum(len(rows) for rows in groups.values())
     if total == 0:
@@ -90,7 +93,7 @@ def run_list(deploy_dir: Path) -> int:
     }
 
     # Compute global column widths across all groups for alignment
-    headers = ["Target", "VMs", "Active", "Date"]
+    headers = ["Target", "VMs", "Active", "Status", "Date"]
     all_rows = [row for rows in groups.values() for row in rows]
     col_widths = [len(h) for h in headers]
     for row in all_rows:
@@ -151,9 +154,54 @@ def _get_expected_count(run_dir: Path, config: DeploymentConfig) -> int:
 
 def _count_live_vms(
     name: str, rid: str, config: DeploymentConfig, os_client: OpenStack,
-) -> int:
-    """Count VMs currently on OpenStack for this deployment."""
-    return os_client.count_vms_with_prefix(_prefix_for(config, _make_dep_id(name, rid)))
+) -> tuple[int, dict[str, int], str | None]:
+    """Inspect OpenStack VMs for this deployment.
+
+    Returns:
+        active: count of ACTIVE primary VMs (SUP/RAMPART/GHOSTS, EXCLUDES the
+            DECOY neighborhood sidecar).
+        bad_statuses: {status: count} for any primary VM not in ACTIVE state
+            (ERROR, SHUTOFF, BUILD, etc.) — these show as a visible problem.
+        nbhd_status: status string of the DECOY neighborhood sidecar if one
+            exists, else None. Reported separately because it's not part of
+            the SUP expected count.
+    """
+    prefix = _prefix_for(config, _make_dep_id(name, rid))
+    is_decoy = not config.is_rampart() and not config.is_ghosts()
+    active = 0
+    bad: dict[str, int] = {}
+    nbhd_status: str | None = None
+    for vm_name, status in os_client.server_status_map().items():
+        if not vm_name.startswith(prefix):
+            continue
+        if is_decoy and vm_name.endswith("-neighborhood-0"):
+            nbhd_status = status
+            continue
+        if status == "ACTIVE":
+            active += 1
+        else:
+            bad[status] = bad.get(status, 0) + 1
+    return active, bad, nbhd_status
+
+
+def _format_status_col(
+    bad_statuses: dict[str, int],
+    nbhd_status: str | None,
+    expected: int,
+    active: int,
+) -> str:
+    """Compact status annotation: errored VMs, sidecar presence, missing VMs."""
+    parts: list[str] = []
+    for status in sorted(bad_statuses):
+        parts.append(f"{bad_statuses[status]} {status}")
+    accounted = active + sum(bad_statuses.values())
+    if expected > 0 and accounted < expected:
+        parts.append(f"{expected - accounted} missing")
+    if nbhd_status is not None:
+        parts.append("+nbhd" if nbhd_status == "ACTIVE" else f"+nbhd:{nbhd_status}")
+    if not parts:
+        return "OK"
+    return ", ".join(parts)
 
 
 def _prefix_for(config: DeploymentConfig, dep_id: str) -> str:

@@ -95,6 +95,7 @@ def register_phase(
     extra_ips: list[str] | None = None,
     start_date: str | None = None,
     baseline_user_roles: str | None = None,
+    gpu_tier: str | None = None,
 ) -> bool:
     """Register in PHASE experiments.json via the canonical script.
 
@@ -112,6 +113,10 @@ def register_phase(
     materializes ALL eno2 history — disk-fill incident observed
     2026-05-12 against rampart-controls (no inventory.ini → null
     start_date → DuckDB spilled 7+ months of traffic to /tmp).
+
+    gpu_tier (decoy feedback only) is forwarded to register_experiment.py
+    as a hint so lineage_key is correctly stripped even for newly-added
+    tier suffixes the lineage helper doesn't yet recognize.
     """
     if not snippet_path.exists():
         output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
@@ -138,6 +143,8 @@ def register_phase(
         cmd.extend(["--start-date", start_date])
     if baseline_user_roles:
         cmd.extend(["--baseline-user-roles", baseline_user_roles])
+    if gpu_tier:
+        cmd.extend(["--gpu-tier", gpu_tier])
     for pair in extra_ips or []:
         cmd.extend(["--extra-ip", pair])
 

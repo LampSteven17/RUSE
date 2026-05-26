@@ -1,6 +1,6 @@
 ---
 name: decoy-deploy
-description: DECOY SUP deployment — running ./deploy --decoy [scope flags], 5-phase spinup, behavior.json plumbing, audit semantics, hot-patch path. Inputs deployments/decoy-controls/config.yaml + /mnt/AXES2U1/feedback/decoy-controls/{controls,dataset}/. Outputs deployments/decoy-{controls,feedback-...}/runs/{run_id}/. Does NOT cover RAMPART AD enterprise (see /rampart-deploy) or GHOSTS NPC clients (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
+description: DECOY SUP deployment — running ./deploy --decoy [scope flags], 5-phase spinup, behavior.json plumbing, audit semantics, hot-patch path. Three GPU tiers via --gpu {v100,rtx,rtx-a} (V100 → gemma4:26b, RTX 2080 Ti non-A pool → gemma4:e4b on B2R/S2R, RTX 2080 Ti A-pool → same model, separate physical cards). Inputs deployments/decoy-controls/config.yaml + /mnt/AXES2U1/feedback/decoy-controls/{controls,dataset}/. Outputs deployments/decoy-{controls,feedback-...}/runs/{run_id}/. Does NOT cover RAMPART AD enterprise (see /rampart-deploy) or GHOSTS NPC clients (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
 type: skill
 ---
 
@@ -17,12 +17,12 @@ is in CLAUDE.md.
 | Outputs | `deployments/decoy-{controls,feedback-{preset}-{dataset}-{scope}}/runs/{run_id}/` (inventory.ini, ssh_config_snippet.txt, deployment_type), per-VM `/opt/ruse/deployed_sups/{key}/` |
 | Manifest | `manifest.json` in PHASE source; loaded via `core/feedback.py::load_manifest`, validated against deploy type via `validate_manifest_target` |
 | Upstream | PHASE feedback engine (`feedback_engine.baseline` writes `controls/`; `feedback_engine.decoy_generator` writes `{dataset}/`) |
-| Downstream | PHASE Zeek pipeline (`PHASE.py --decoy`), reads `experiments.json` for active deploys |
+| Downstream | PHASE Zeek pipeline (`PHASE.py --decoy`), reads `experiments.json` for active deploys (carries `dataset`/`scope`/`gpu_tier` descriptive fields since 2026-05-22; see CLAUDE.md "experiments.json schema") |
 | Narrow exceptions | C0 (no install — bare Ubuntu, only provisioned + SSH-tested); M0 (upstream MITRE pyhuman, crash-loops on Linux by design — `os.startfile()` Windows-only) |
 
 ## Topology
 
-`decoy-controls/config.yaml` provisions 7 VMs (gemma-only, V100 + CPU pairs):
+`decoy-controls/config.yaml` provisions 9 VMs (gemma-only; V100 + RTX + CPU pairs):
 
 ```
 d-{dep_id}-C0-0          Bare Ubuntu control (no software)
@@ -30,19 +30,57 @@ d-{dep_id}-M0-0          Upstream MITRE pyhuman (read-only control)
 d-{dep_id}-M1-0          MCHP baseline (no timing, no LLM)
 d-{dep_id}-B0-gemma-0    BrowserUse + gemma4:26b on V100
 d-{dep_id}-S0-gemma-0    SmolAgents  + gemma4:26b on V100
+d-{dep_id}-B0R-gemma-0   BrowserUse + gemma4:e4b on RTX 2080 Ti (flavor rtx2080ti-1gpu.14vcpu.28g)
+d-{dep_id}-S0R-gemma-0   SmolAgents  + gemma4:e4b on RTX 2080 Ti (flavor rtx2080ti-1gpu.14vcpu.28g)
 d-{dep_id}-B0C-gemma-0   BrowserUse + gemma4:e2b on CPU
 d-{dep_id}-S0C-gemma-0   SmolAgents  + gemma4:e2b on CPU
 ```
 
-Feedback template (5 VMs per `./deploy --decoy --feedback`):
+B0R/S0R baseline the RTX feedback tiers; they reuse the V100 `.gemma`
+baseline behavior.json (R stripped in `_derive_behavior_paths`, so
+`B0R.gemma → B.gemma/B0.gemma`), only runtime model (gemma4:e4b) + flavor
+differ. Added 2026-05-25; uses the `rtx` (non-A) pool.
 
+Feedback template (5 VMs per `./deploy --decoy --feedback`). Shape varies
+by `--gpu` tier:
+
+**V100 tier** (default, `--gpu v100`):
 ```
 d-{dep_id}-M2-0          MCHP + PHASE timing
-d-{dep_id}-B2-gemma-0    BrowserUse + gemma + PHASE on V100
-d-{dep_id}-S2-gemma-0    SmolAgents  + gemma + PHASE on V100
-d-{dep_id}-B2C-gemma-0   BrowserUse + gemma + PHASE on CPU
-d-{dep_id}-S2C-gemma-0   SmolAgents  + gemma + PHASE on CPU
+d-{dep_id}-B2-gemma-0    BrowserUse + gemma4:26b on V100  (flavor v100-1gpu.14vcpu.28g)
+d-{dep_id}-S2-gemma-0    SmolAgents  + gemma4:26b on V100  (flavor v100-1gpu.14vcpu.28g)
+d-{dep_id}-B2C-gemma-0   BrowserUse + gemma4:e2b on CPU
+d-{dep_id}-S2C-gemma-0   SmolAgents  + gemma4:e2b on CPU
 ```
+
+**RTX tier** (`--gpu rtx`, dep_name suffix `-rtx`):
+```
+d-{dep_id}-M2-0           MCHP + PHASE timing
+d-{dep_id}-B2R.gemma-0    BrowserUse + gemma4:e4b on RTX 2080 Ti  (flavor rtx2080ti-1gpu.14vcpu.28g, PCI alias rtx2080ti:1)
+d-{dep_id}-S2R.gemma-0    SmolAgents  + gemma4:e4b on RTX 2080 Ti  (flavor rtx2080ti-1gpu.14vcpu.28g, PCI alias rtx2080ti:1)
+d-{dep_id}-B2C-gemma-0    BrowserUse + gemma4:e2b on CPU
+d-{dep_id}-S2C-gemma-0    SmolAgents  + gemma4:e2b on CPU
+```
+
+**RTX A-pool tier** (`--gpu rtx-a`, dep_name suffix `-rtx-a`):
+```
+d-{dep_id}-M2-0           MCHP + PHASE timing
+d-{dep_id}-B2R.gemma-0    BrowserUse + gemma4:e4b on RTX 2080 Ti  (flavor rtx2080ti-A-1gpu.14vcpu.28g, PCI alias 2080ti-rtx-a:1)
+d-{dep_id}-S2R.gemma-0    SmolAgents  + gemma4:e4b on RTX 2080 Ti  (flavor rtx2080ti-A-1gpu.14vcpu.28g, PCI alias 2080ti-rtx-a:1)
+d-{dep_id}-B2C-gemma-0    BrowserUse + gemma4:e2b on CPU
+d-{dep_id}-S2C-gemma-0    SmolAgents  + gemma4:e2b on CPU
+```
+
+RTX and RTX-A use identical B2R.gemma / S2R.gemma behavior keys and the
+same gemma4:e4b runtime model. Only the OpenStack flavor differs — they
+map to two distinct physical card pools (separate PCI aliases). The
+`-rtx` vs `-rtx-a` deployment-name suffix lets the OpenStack provision
+calls land on either pool without VM-name collision, so you can fan
+across pools when one is exhausted. Each tier deploy is its own
+independent experiments.json entry — no automatic linkage. If you want
+to swap sum25 from V100 to RTX-A, run `./teardown` on the V100
+deployment first, then deploy the RTX-A one; both stay registered
+independently for as long as their VMs exist.
 
 Plus `d-{dep_id}-neighborhood-0` sidecar (feedback only, when any
 `topology_mimicry` rate is non-zero).
@@ -52,13 +90,25 @@ Plus `d-{dep_id}-neighborhood-0` sidecar (feedback only, when any
 ## CLI scope flags
 
 ```bash
-./deploy --decoy                           # controls + ALL feedback datasets (default)
-./deploy --decoy --controls                # controls only
-./deploy --decoy --feedback                # all feedback (no controls)
-./deploy --decoy --feedback --target sum24 # single dataset
-./deploy --decoy --feedback --source /path # explicit PHASE source
-./deploy --decoy --controls --target sum24 # controls + single feedback
+./deploy --decoy                                       # controls + ALL feedback datasets (default)
+./deploy --decoy --controls                            # controls only
+./deploy --decoy --feedback                            # all feedback (no controls)
+./deploy --decoy --feedback --target sum24             # single dataset
+./deploy --decoy --feedback --target sum24,axyear,vt50g # comma-separated batch on one tier
+./deploy --decoy --feedback --source /path             # explicit PHASE source
+./deploy --decoy --controls --target sum24             # controls + single feedback
+./deploy --decoy --feedback --gpu rtx --target sum24   # RTX 2080 Ti (PCI alias rtx2080ti:1)
+./deploy --decoy --feedback --gpu rtx-a --target axall # RTX 2080 Ti A-pool (PCI alias 2080ti-rtx-a:1)
 ```
+
+GPU tier selection via `--gpu {v100,rtx,rtx-a}` (default v100). RTX
+tiers swap B2.gemma/S2.gemma → B2R.gemma/S2R.gemma and the V100 flavor
+→ RTX 2080 Ti flavor; M2 + B2C.gemma + S2C.gemma stay identical across
+tiers. The two RTX tiers target distinct physical card pools — when
+one pool is exhausted (`No valid host was found` on B2R/S2R provision),
+switch to the other. PHASE feedback is portable across gemma4 variants
+so the same `.gemma/` source ships behavior.json for V100, RTX, and
+RTX-A deploys with no re-roll.
 
 Granular per-config-file flags (`--timing`, `--workflow`, `--modifiers`,
 `--sites`, `--prompts`, `--activity`, `--diversity`, `--variance`,
@@ -83,6 +133,12 @@ Dataset target aliases (`core/feedback.py::DATASET_TARGETS`): `sum24` →
 0. `_validate_behavior_source` — walk every non-C0/M0 SUP's expected
    `{behavior_dir}/{baseline_config}/behavior.json`, abort with
    missing-path list before any VM work
+0.5. `_teardown_matching_prior_runs` — for each `runs/{old_rid}/` whose
+   saved `config.yaml` has SAME `gpu_tier` AND SAME `deployments[]` list as
+   the new config, openstack-delete its VMs (`wait_until_zero`) and
+   `safe_rmtree` the prior run_dir. Makes `./deploy` idempotent against
+   the same logical deploy; orphan accumulation across reruns goes
+   away. Mismatching prior runs are left intact (operator can ./teardown).
 1. Provision VMs (`provision-vms.yaml`) — abort if < 90% reach ACTIVE
 2. SSH connectivity test (Python `concurrent.futures`, 20 workers) —
    abort if < 90% reachable
@@ -110,6 +166,8 @@ Dataset target aliases (`core/feedback.py::DATASET_TARGETS`): `sum24` →
 - `M1` → `m1.service`
 - `B0.gemma` → `b0_gemma.service`
 - `S2C.gemma` → `s2c_gemma.service`
+- `B2R.gemma` → `b2r_gemma.service`  (RTX, both pools)
+- `S2R.gemma` → `s2r_gemma.service`  (RTX, both pools)
 
 Per-behavior service, NOT generic `mchp` / `bu` / `smol`. Logs redirect
 to `/opt/ruse/deployed_sups/{key}/logs/systemd.log` and
@@ -257,14 +315,39 @@ The `controls/` slot is excluded from feedback dataset auto-discovery via
 
 | Alias | Ollama tag | Tier | Notes |
 |---|---|---|---|
-| `gemma` | `gemma4:26b` | V100 32GB | MoE 25.2B/3.8B active, fits 89% VRAM, ~10 tok/s |
-| `gemmac` | `gemma4:e2b` | CPU only | Edge-optimized 2.3B, ~7 tok/s on Smol; BU on CPU times out on big prompts |
+| `gemma` | `gemma4:26b` | V100 32GB | MoE 25.2B/3.8B active, fits 89% VRAM, ~10 tok/s. Used by B2.gemma / S2.gemma (V100 feedback) and B0.gemma / S0.gemma (V100 controls). |
+| `gemmar` | `gemma4:e4b` | RTX 2080 Ti 11GB | Edge 4B variant (~3 GB int4 weights, ~10 GB loaded with KV cache). Used by B2R.gemma / S2R.gemma on both `--gpu rtx` and `--gpu rtx-a` deploys. Same model across both pools — only the underlying flavor / PCI alias differs. |
+| `gemmac` | `gemma4:e2b` | CPU only | Edge-optimized 2.3B, ~7 tok/s on Smol; BU on CPU times out on big prompts. Used by B2C.gemma / S2C.gemma + B0C.gemma / S0C.gemma. |
 | `llama` | `llama3.1:8b` | (legacy) | Kept for back-compat, not in any deploy template |
 
-Aliases must agree across three call sites:
+Three gemma4 tiers (V100 / RTX / CPU) keep results structurally
+comparable — same family, different VRAM-fit variants. PHASE-shipped
+`.gemma/` feedback is portable across all three.
+
+**Brain framework versions are PINNED** (`INSTALL_SUP.sh`):
+`browser-use==0.12.7`, `smolagents==1.25.0`. The step-action log parser is
+keyed to each version's action/tool vocabulary —
+`_BU_ACTION_MAP` (`brains/browseruse/agent.py`) and `_SMOL_ACTION_PATTERNS`
+(`common/logging/llm_callbacks.py`). These libs rename actions between
+versions (browser-use's pre-0.12 `go_to_url`/`click_element` → 0.12
+`navigate`/`click`), so an unpinned bump silently zeroes out per-step
+logging (confirmed 2026-05-25: ~99% of BU steps dropped). When bumping a
+pin, re-derive the maps from a live VM's emitted action names and update
+both in lockstep. A `[parser-drift]` `[WARNING]` (caught by `./audit`'s
+Warn column) fires if N consecutive responses parse but map to nothing.
+
+Aliases must agree across **four** call sites:
 `INSTALL_SUP.sh::MODEL_NAMES`, `decoys/common/config/model_config.py::MODELS`,
-runner argparse `choices=[...]` in `run_browseruse.py` /
-`run_smolagents.py` / `run_mchp.py`.
+runner argparse `choices=[...]` in **all three** of `run_browseruse.py`,
+`run_smolagents.py`, `run_mchp.py`. Adding a new alias and missing any
+runner argparse silently crashes the SUP at startup — INSTALL_SUP.sh
+generates `run_agent.sh` with `--model={alias}`, the runner rejects it
+with `argument --model: invalid choice`, the service crash-loops, and
+NRestarts blows past the install-time 30s grace before
+distribute-behavior-configs.yaml's service-active assertion catches
+it (observed when `gemmar` was added to MODEL_NAMES + model_config.py
+but missed in the runners — commit `f2ad12a` is the fix; original miss
+was in `755fc0c`).
 
 `get_num_ctx()` in `model_config.py` detects nvidia-smi at runtime: GPU
 → `num_ctx=32768`, CPU → `num_ctx=16384`. Override via `SUP_NUM_CTX`.

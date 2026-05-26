@@ -22,6 +22,7 @@ class DeploymentConfig:
     enterprise: dict | None = None
     emulate: dict | None = None
     ghosts: dict | None = None
+    gpu_tier: str | None = None  # "v100" | "rtx" | "rtx-a" — decoy feedback only
 
     @classmethod
     def load(cls, config_path: Path) -> DeploymentConfig:
@@ -39,6 +40,7 @@ class DeploymentConfig:
             enterprise=raw.get("enterprise"),
             emulate=raw.get("emulate"),
             ghosts=raw.get("ghosts"),
+            gpu_tier=raw.get("gpu_tier"),
         )
 
     def vm_count(self) -> int:

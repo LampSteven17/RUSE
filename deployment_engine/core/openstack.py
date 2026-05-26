@@ -13,7 +13,7 @@ class OpenStack:
 
     def __init__(self, rc_file: Path | None = None):
         self.rc_file = rc_file or Path.home() / "vxn3kr-bot-rc"
-        self._server_cache: list[str] | None = None
+        self._server_cache: dict[str, str] | None = None
 
     def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
         """Run an openstack CLI command with sourced credentials."""
@@ -25,24 +25,35 @@ class OpenStack:
             check=check,
         )
 
+    def _refresh_servers(self) -> None:
+        """Populate the server cache with {name: status} from one CLI call."""
+        result = self._run("server", "list", "-f", "value", "-c", "Name", "-c", "Status", check=False)
+        cache: dict[str, str] = {}
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                parts = line.strip().split(None, 1)
+                if len(parts) >= 2:
+                    cache[parts[0]] = parts[1]
+        self._server_cache = cache
+
     def server_list(self, refresh: bool = False) -> list[str]:
         """Return list of server names. Cached after first call."""
         if self._server_cache is None or refresh:
-            result = self._run("server", "list", "-f", "value", "-c", "Name", check=False)
-            if result.returncode == 0:
-                self._server_cache = [
-                    line.strip() for line in result.stdout.splitlines() if line.strip()
-                ]
-            else:
-                self._server_cache = []
-        return self._server_cache
+            self._refresh_servers()
+        return list(self._server_cache.keys())
+
+    def server_status_map(self, refresh: bool = False) -> dict[str, str]:
+        """Return {name: status} for every server. Cached after first call."""
+        if self._server_cache is None or refresh:
+            self._refresh_servers()
+        return dict(self._server_cache)
 
     def has_vms_with_prefix(self, prefix: str) -> bool:
         """Check if any VMs exist with the given name prefix."""
         return any(name.startswith(prefix) for name in self.server_list())
 
     def count_vms_with_prefix(self, prefix: str) -> int:
-        """Count VMs matching a name prefix."""
+        """Count VMs matching a name prefix (any status)."""
         return sum(1 for name in self.server_list() if name.startswith(prefix))
 
     def server_list_with_ids(self, prefix: str | None = None) -> list[dict]:

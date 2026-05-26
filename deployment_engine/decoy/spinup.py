@@ -97,6 +97,19 @@ def run_decoy_spinup(
 
     runner = AnsibleRunner(deploy_dir / "logs")
 
+    # Phase 0: idempotent same-deploy refresh.
+    # If a prior run under this same config_name has matching gpu_tier +
+    # deployments[] template (= same logical deploy), teardown its VMs and
+    # drop its run_dir before we provision the new ones. Without this,
+    # ./deploy on an existing config silently piles new VMs alongside old
+    # ones (each new run_id makes a different OpenStack name, so there's
+    # no collision — just orphan accumulation).
+    #
+    # Different gpu_tier or different deployments[] under the same name
+    # = operator hand-edited config.yaml = NOT a match, leave alone and
+    # proceed (caller can fix it up explicitly with ./teardown).
+    _teardown_matching_prior_runs(config_dir, run_dir, config)
+
     # Phase 1: Provision
     output.info("")
     output.info(f"--- Provisioning {vm_count} VMs ---")
@@ -263,6 +276,7 @@ def run_decoy_spinup(
     phase_ok = register_phase(
         snippet_path, config_name, run_id,
         extra_ips=neighborhood_extra_ips(run_dir),
+        gpu_tier=config.gpu_tier,
     )
     if not phase_ok:
         output.error("")
@@ -418,6 +432,87 @@ def _make_run_dep_id(deployment_name: str, run_id: str) -> str:
 def _copy_file(src: Path, dst: Path) -> None:
     import shutil
     shutil.copy2(src, dst)
+
+
+def _teardown_matching_prior_runs(
+    config_dir: Path, new_run_dir: Path, new_config: DeploymentConfig,
+) -> None:
+    """Teardown VMs from any prior run of this config_name whose
+    gpu_tier + deployments[] match the new config.
+
+    Three checks per prior run (all must match to count as "same deploy"):
+      1. prior run_dir/config.yaml exists (= the run got past Phase 0)
+      2. prior config.gpu_tier == new config.gpu_tier
+      3. prior config.deployments == new config.deployments
+
+    On match: openstack server delete for every VM under the prior run's
+    prefix, then safe_rmtree the prior run_dir. The experiments.json entry
+    is left alone — register_phase's upsert will refresh end_date=None
+    + IPs at the end of this same spinup.
+
+    On mismatch (gpu_tier or deployments[] changed): leave the prior run
+    fully intact. Operator clearly meant something different by reusing
+    the name; they can clean it up with explicit ./teardown.
+    """
+    runs_dir = config_dir / "runs"
+    if not runs_dir.is_dir():
+        return
+
+    prior_run_dirs = [
+        d for d in runs_dir.iterdir()
+        if d.is_dir() and d != new_run_dir and (d / "config.yaml").exists()
+    ]
+    if not prior_run_dirs:
+        return
+
+    from ..core.teardown_steps import safe_rmtree, wait_until_zero
+
+    to_teardown: list[tuple[Path, str]] = []  # (prior_run_dir, vm_prefix)
+    for prior in prior_run_dirs:
+        try:
+            prior_cfg = DeploymentConfig.load(prior / "config.yaml")
+        except Exception as e:
+            output.dim(f"  skipping prior run {prior.name}: can't parse config.yaml ({e})")
+            continue
+        if prior_cfg.gpu_tier != new_config.gpu_tier:
+            output.dim(
+                f"  prior run {prior.name} has gpu_tier={prior_cfg.gpu_tier} "
+                f"(new is {new_config.gpu_tier}) — leaving alone"
+            )
+            continue
+        if prior_cfg.deployments != new_config.deployments:
+            output.dim(
+                f"  prior run {prior.name} has different deployments[] — leaving alone"
+            )
+            continue
+        prior_dep_id = _make_run_dep_id(new_config.deployment_name, prior.name)
+        prior_prefix = make_vm_prefix(prior_dep_id)
+        to_teardown.append((prior, prior_prefix))
+
+    if not to_teardown:
+        return
+
+    output.info("")
+    output.info(f"--- Refreshing {len(to_teardown)} matching prior run(s) ---")
+    os_client = OpenStack()
+    for prior_dir, prior_prefix in to_teardown:
+        servers = os_client.server_list_with_ids(prefix=prior_prefix)
+        if servers:
+            output.info(f"  Deleting {len(servers)} VM(s) under {prior_prefix}*")
+            os_client.server_delete_many(
+                [s["id"] for s in servers], wait=True,
+            )
+            remaining = wait_until_zero(os_client, prior_prefix)
+            if remaining:
+                output.error(
+                    f"  ERROR: {remaining} VM(s) under {prior_prefix}* still alive after teardown wait. "
+                    f"Aborting before provisioning new VMs (avoid mixing old + new state)."
+                )
+                raise SystemExit(1)
+        else:
+            output.dim(f"  no live VMs under {prior_prefix}* — just dropping run_dir")
+        safe_rmtree(prior_dir)
+        output.dim(f"  dropped prior run_dir {prior_dir.name}")
 
 
 def _parse_inventory(inventory_path: Path) -> list[dict]:
