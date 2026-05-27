@@ -30,8 +30,8 @@ d-{dep_id}-M0-0          Upstream MITRE pyhuman (read-only control)
 d-{dep_id}-M1-0          MCHP baseline (no timing, no LLM)
 d-{dep_id}-B0-gemma-0    BrowserUse + gemma4:26b on V100
 d-{dep_id}-S0-gemma-0    SmolAgents  + gemma4:26b on V100
-d-{dep_id}-B0R-gemma-0   BrowserUse + gemma4:e4b on RTX 2080 Ti (flavor rtx2080ti-1gpu.14vcpu.28g)
-d-{dep_id}-S0R-gemma-0   SmolAgents  + gemma4:e4b on RTX 2080 Ti (flavor rtx2080ti-1gpu.14vcpu.28g)
+d-{dep_id}-B0R-gemma-0   BrowserUse + gemma4:e4b on RTX 2080 Ti (flavor rtx2080ti-A-1gpu.14vcpu.28g)
+d-{dep_id}-S0R-gemma-0   SmolAgents  + gemma4:e4b on RTX 2080 Ti (flavor rtx2080ti-A-1gpu.14vcpu.28g)
 d-{dep_id}-B0C-gemma-0   BrowserUse + gemma4:e2b on CPU
 d-{dep_id}-S0C-gemma-0   SmolAgents  + gemma4:e2b on CPU
 ```
@@ -39,7 +39,9 @@ d-{dep_id}-S0C-gemma-0   SmolAgents  + gemma4:e2b on CPU
 B0R/S0R baseline the RTX feedback tiers; they reuse the V100 `.gemma`
 baseline behavior.json (R stripped in `_derive_behavior_paths`, so
 `B0R.gemma → B.gemma/B0.gemma`), only runtime model (gemma4:e4b) + flavor
-differ. Added 2026-05-25; uses the `rtx` (non-A) pool.
+differ. Added 2026-05-25; placed on the **rtx-a** pool (`rtx2080ti-A-1gpu`)
+2026-05-26 because the non-A `rtx` pool was full with sum25+vt1g feedback —
+the axyear rtx-a feedback deploy was dropped to make room (net-zero on rtx-a).
 
 Feedback template (5 VMs per `./deploy --decoy --feedback`). Shape varies
 by `--gpu` tier:
