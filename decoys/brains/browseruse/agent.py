@@ -32,30 +32,51 @@ LLM_TIMEOUT = 300
 # browser_use LLM responses contain JSON with an "action" list where each
 # element is a dict like {"navigate": {"url": "..."}} or {"click": {"index": 5}}.
 #
-# browser-use renamed its action vocabulary in the 0.12.x line. The current
-# names below were empirically confirmed against deployed SUP logs on
-# 2026-05-25 (browser-use==0.12.7, pinned in INSTALL_SUP.sh). The pre-0.12
-# names are retained as aliases so the parser keeps working if the pin moves
-# backward; unused keys are harmless no-ops. If browser-use renames again,
-# the drift-detection WARNING below (see logged_chat) fires so it isn't silent.
+# This must cover browser-use 0.12.7's FULL action registry (Tools.registry,
+# 24 actions). The 0.12.x section below is the complete set as of 2026-05-27 —
+# enumerated directly from the registry after the drift-detection WARNING
+# caught an unmapped `read_file` on a deployed SUP (the original map was
+# derived from one VM's observed actions and missed ~half). The pre-0.12 names
+# are retained as aliases for pin-rollback safety. If browser-use adds/renames
+# actions again, the drift WARNING (see logged_chat) fires so it isn't silent.
 _BU_ACTION_MAP = {
-    # --- browser-use 0.12.x ---
+    # --- browser-use 0.12.7 registry (full) ---
+    # navigation / tabs
     "navigate": ("navigate", "browser"),
+    "go_back": ("navigate", "browser"),
+    "switch": ("navigate", "browser"),            # switch tab
+    "close": ("navigate", "browser"),             # close tab
+    # interaction
     "click": ("click", "browser"),
+    "select_dropdown": ("click", "browser"),
+    "dropdown_options": ("click", "browser"),
     "input": ("type_text", "browser"),
+    "send_keys": ("type_text", "browser"),
+    # page read / observe
     "scroll": ("scroll", "browser"),
+    "extract": ("scroll", "browser"),             # read page content
+    "find_elements": ("scroll", "browser"),       # scan the DOM
+    "find_text": ("scroll", "browser"),           # scan page for text
+    "screenshot": ("scroll", "browser"),          # observe page
+    "evaluate": ("scroll", "browser"),            # JS eval against the page
+    # search
+    "search": ("search", "browser"),
     "search_page": ("search", "browser"),
-    "extract": ("scroll", "browser"),          # reading page content
-    "find_elements": ("scroll", "browser"),     # scanning the DOM
+    # file ops
+    "read_file": ("download_file", "browser"),
+    "upload_file": ("download_file", "browser"),
+    "write_file": ("save_document", "browser"),
+    "save_as_pdf": ("save_document", "browser"),
+    "replace_file": ("edit_content", "browser"),
+    # misc
     "wait": ("wait", "browser"),
-    # --- legacy (pre-0.12) aliases ---
+    # "done" intentionally omitted — workflow completion, not a step
+    # --- pre-0.12 aliases (not in 0.12.7 registry; kept for pin-rollback) ---
     "go_to_url": ("navigate", "browser"),
     "open_tab": ("navigate", "browser"),
     "switch_tab": ("navigate", "browser"),
-    "go_back": ("navigate", "browser"),
     "click_element": ("click", "browser"),
     "input_text": ("type_text", "browser"),
-    "send_keys": ("type_text", "browser"),
     "scroll_down": ("scroll", "browser"),
     "scroll_up": ("scroll", "browser"),
     "scroll_to_text": ("scroll", "browser"),
@@ -63,8 +84,6 @@ _BU_ACTION_MAP = {
     "extract_content": ("scroll", "browser"),
     "extract_page_content": ("scroll", "browser"),
     "save_file": ("save_document", "browser"),
-    "upload_file": ("download_file", "browser"),
-    # "done" is intentionally omitted — it signals workflow completion, not a step
 }
 
 
