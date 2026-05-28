@@ -414,6 +414,123 @@ Loader (`load_behavioral_config`) → consumers:
 | `_metadata.seed` | `seed` | `sup/__main__.py` peeks before `random.seed()`; overrides CLI `--seed`. Also propagated into `neighborhood-sups.json` top-level `seed` field for sidecar RNG anchor. `AgentLogger.session_id` derives from this via separate `Random()` instance (no global RNG consumption) |
 | `prompt_content` | `prompt_augmentation.prompt_content` | G1: BU + Smol prompt prepend |
 
+## Logging output (jsonl)
+
+Each SUP writes events to
+`/opt/ruse/deployed_sups/{key}/logs/session_{YYYY-MM-DD_HH-MM-SS}_{session_id}.jsonl`
+(+ a `latest.jsonl` symlink). Envelope on every line: `timestamp` (naive
+**local** ISO; runtime hour-gating uses UTC separately — see CLAUDE.md UTC
+contract), `session_id` (8 hex, seed-derived → deterministic across replays),
+`agent_type` (config key), `event_type`, optional `workflow`, `details`.
+None values omitted.
+
+**16 event types**: `session_{start,success,fail,end}`,
+`workflow_{start,end}`, `step_{start,success,error}`,
+`llm_{request,response,error}`, `decision`, `timing_delay`, `warning`, `info`.
+PHASE-side consumers and the DuckDB collection (`/mnt/AXES2U1/SUP_LOGS/
+sup-logs-<exp>.duckdb`) read these directly.
+
+### Canonical `workflow` field (2026-05-25)
+
+The `workflow` top-level field carries `workflow.name` — the harmonized
+cross-brain identifier (`BrowseWeb`, `BrowseYouTube`, `WebSearch`,
+`WhoisLookup`, `DownloadFiles`, `DocumentEditor`, `SpreadsheetEditor`,
+`ExecuteCommand`, `ListFiles`, `MicrosoftPaint`). These match exactly the
+keys `feedback_engine.decoy_generator` emits in `content.workflow_weights`,
+so log events join to weights directly. Human task text moved to
+`params.description`; `workflow_class` was REMOVED (zero PHASE consumers
+used it). Workflow names DIVERGE from Python class names in MCHP
+(`google_search.py` class `GoogleSearch` → name `WebSearch`;
+`browse_web.py` class `WebBrowse` → name `BrowseWeb`) — the `.name` is the
+deliberately harmonized join key; class names stay legacy.
+
+### Real per-step outcomes + durations (2026-05-25)
+
+`step_success`/`step_error` and `duration_ms` reflect actual execution from
+authoritative sources per brain:
+
+| Brain | Step source | Timing |
+|---|---|---|
+| **BrowserUse** | walks `AgentHistoryList` returned by `agent.run()` (`_log_bu_steps` in `brains/browseruse/agent.py`); pairs `model_output.action` with `ActionResult.error` per step | **batched at workflow-end** |
+| **SmolAgents** | `CodeAgent(step_callbacks=[make_smol_step_callback(logger)])` over each `ActionStep` (`code_action`/`error`/`timing` in `common/logging/llm_callbacks.py`) | streamed per step |
+| **MCHP** | hand-instrumented `logger.step_start/success/error` in each workflow file | streamed |
+
+⚠️ **BU batching caveat for inter-step timing**: BU `step_start` timestamps
+cluster at workflow-end (since the history is walked once after
+`agent.run()` returns), so they're NOT meaningful for inter-step gap
+analysis (`feedback_engine/knob_investigation/inter_step_timing.py`). Use
+`llm_request`/`llm_response` timestamps (still streamed via the chat
+wrapper) for BU inter-step timing. Smol and MCHP stream normally.
+
+### Action / step vocabulary (version-coupled — see `project_brain_lib_pin_parser_coupling` memory)
+
+- **`_BU_ACTION_MAP`** (`brains/browseruse/agent.py`) maps the **full
+  browser-use 0.12.7 `Tools.registry`** (24 actions: navigate, click, input,
+  scroll, search, search_page, extract, find_elements, find_text,
+  screenshot, evaluate, dropdown_options, select_dropdown, read_file,
+  write_file, replace_file, save_as_pdf, upload_file, go_back, switch,
+  close, send_keys, wait; `done` intentionally skipped). **Derive from the
+  registry** (`python -c "from browser_use.tools.service import Tools;
+  print(sorted(Tools().registry.registry.actions))"`), NOT sampled logs —
+  sampling missed half on 2026-05-25 (drift guard caught `read_file`).
+- **`_SMOL_ACTION_PATTERNS`** (`common/logging/llm_callbacks.py`) is
+  bounded by what we register: `web_search`/`duckduckgo`/
+  `DuckDuckGoSearchTool` → search, `visit_webpage` → navigate,
+  `requests.get`/`urllib`/`fetch` → navigate, `print` → scroll;
+  `final_answer` skipped. Complete by construction.
+- **MCHP**: step names hardcoded in workflow files (`open_application`,
+  `edit_content`, `save_document`, `download_file`, `whois_lookup`, etc.).
+  No version-coupled vocabulary.
+
+### Parser-drift guard
+
+Both BU (`_log_bu_steps` → `_bu_note_drift`) and Smol
+(`_smol_code_unmatched`) count consecutive unmapped action names / unmatched
+code turns. At threshold (BU=10, Smol=25) they print one
+`[WARNING] [parser-drift] ...` to stdout → systemd.log → caught by
+`./audit`'s Warn column. Validated 2026-05-27: caught `read_file` (an
+action the original observed-sample map missed). Pinned versions
+(`browser-use==0.12.7`, `smolagents==1.25.0`) are in `INSTALL_SUP.sh` so a
+silent bump can't break the maps unnoticed.
+
+### DownloadFiles / WhoisLookup detail fields (2026-05-26 / -27)
+
+The dedicated workflows now carry rich detail in step_success/_error
+(previously discarded on success):
+
+- **`download_file`** details: `{url, outcome, host, bytes, content_type,
+  elapsed_ms}` + real `duration_ms`. MCHP variant:
+  `{source, bytes}` from a `~/Downloads` scandir-delta snapshot
+  (no common downloader for MCHP).
+- **`whois_lookup`**: `message` = trimmed IANA referral
+  (non-`%`-comment lines joined: refer / domain / organisation),
+  `details = {domain}`, real `duration_ms` (the TCP/43 call time).
+
+### Schedule-idle ≠ stuck
+
+Outside `behavior.json` `active_minute_windows`, the SUP emits an `info`
+event and sleeps without firing a workflow:
+- Feedback: `[window] outside windows — sleeping Nmin until next start`
+- Controls: `[controls] outside windows — sleeping 5.0min`
+
+A SUP with `workflows=0` AND these info lines AND `svc=active` (recent
+file mtime) is correctly idle per schedule — NOT hung. Different datasets
+have different windows, so simultaneous on-window/off-window splits across
+the fleet are normal (2026-05-27 redeploy audit: 35 on-window logging,
+27 off-window idle, all healthy).
+
+### DuckDB collection
+
+Periodic SSH-collection from `/opt/ruse/deployed_sups/.../logs/*.jsonl`
+into `/mnt/AXES2U1/SUP_LOGS/sup-logs-<experiment>.duckdb` `events` table.
+First-class extracted columns (queryable without JSON path): `timestamp,
+session_id, agent_type, event_type, workflow, duration_ms, success,
+error_message, model, action, category, step_name, status,
+{input,output,total}_tokens, llm_output`. The newer `details` payload
+fields (`bytes`, `content_type`, `outcome`, `host`, `domain`, `description`)
+live inside the `details` JSON column → query via JSON path, e.g.
+`details->>'bytes'`.
+
 ## Topology mimicry (neighborhood sidecar)
 
 Feedback-only. 1 small VM per deploy (`d-{dep_id}-neighborhood-0`,

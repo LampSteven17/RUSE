@@ -247,3 +247,7 @@ ssh d-controls050826193122-B0-gemma-0 \
 - RAMPART audit: `/rampart-audit`
 - GHOSTS audit: `/ghosts-audit`
 - behavior.json schema + window-mode contract: `/decoy-deploy`
+- jsonl log schema (canonical workflow names, real step outcomes/durations,
+  BU history-walk vs Smol step_callback, download/whois detail fields,
+  parser-drift guard, schedule-idle interpretation): `/decoy-deploy`
+  → "Logging output (jsonl)" section
