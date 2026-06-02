@@ -120,6 +120,9 @@ def _teardown_parser() -> argparse.ArgumentParser:
     p.add_argument("--ghosts", "--ghost", action="store_true", dest="ghosts",
                    help="Filter: GHOSTS NPC deployments (--ghost alias)")
     p.add_argument("--feedback", action="store_true", help="Filter: only feedback-enabled deployments")
+    p.add_argument("--failed", action="store_true",
+                   help="Filter: only runs stamped failed (deploy_status.json). "
+                        "Composes with type/--feedback filters; alone, spans all types")
     return p
 
 
@@ -294,13 +297,19 @@ def _cmd_teardown(argv: list[str]) -> int:
         from .teardown import run_teardown_all
         return run_teardown_all(DEPLOY_DIR)
 
-    has_filter = args.decoy or args.rampart or args.ghosts or args.feedback
+    has_filter = args.decoy or args.rampart or args.ghosts or args.feedback or args.failed
     if has_filter:
         from .teardown import run_teardown_filtered
+        # --failed with no explicit type spans all types (otherwise the
+        # type filter would match nothing). With a type flag it narrows.
+        types = {"decoy": args.decoy, "rampart": args.rampart, "ghosts": args.ghosts}
+        if args.failed and not (args.decoy or args.rampart or args.ghosts):
+            types = {"decoy": True, "rampart": True, "ghosts": True}
         return run_teardown_filtered(
             DEPLOY_DIR,
-            types={"decoy": args.decoy, "rampart": args.rampart, "ghosts": args.ghosts},
+            types=types,
             feedback_only=args.feedback,
+            failed_only=args.failed,
         )
 
     if not args.target:

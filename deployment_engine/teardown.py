@@ -57,6 +57,7 @@ def run_teardown_filtered(
     deploy_dir: Path,
     types: dict[str, bool],
     feedback_only: bool,
+    failed_only: bool = False,
 ) -> int:
     """Teardown all active deployments matching the given filters.
 
@@ -65,7 +66,14 @@ def run_teardown_filtered(
     matches nothing (caller should prevent that).
 
     feedback_only: only target deployments named *-feedback-* (vs controls).
+
+    failed_only: only target runs stamped FAILED in deploy_status.json
+    (see core/run_status.py). Runs with no stamp (UNKNOWN) or an OK stamp
+    are left alone — a missing stamp is never treated as failure, so this
+    won't delete an in-flight or pre-instrumentation run.
     """
+    from .core.run_status import read_run_status, FAILED
+
     matches: list[tuple[str, str, Path]] = []  # (config_name, run_id, config_dir)
 
     for config_dir in sorted(deploy_dir.iterdir()):
@@ -108,13 +116,17 @@ def run_teardown_filtered(
         for run_dir in sorted(runs_dir.iterdir()):
             if not run_dir.is_dir():
                 continue
+            if failed_only and read_run_status(run_dir) != FAILED:
+                continue
             matches.append((config_dir.name, run_dir.name, config_dir))
 
     if not matches:
-        output.info("No deployments match the filter.")
+        scope = "failed deployments" if failed_only else "deployments"
+        output.info(f"No {scope} match the filter.")
         return 0
 
-    output.banner(f"FILTERED TEARDOWN — {len(matches)} deployments")
+    label = "FAILED-ONLY TEARDOWN" if failed_only else "FILTERED TEARDOWN"
+    output.banner(f"{label} — {len(matches)} deployments")
     for cn, rid, _ in matches:
         output.info(f"  {cn}/{rid}")
     output.info("")

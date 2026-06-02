@@ -17,6 +17,7 @@ from ..core.config import DeploymentConfig
 from ..core.ssh_config import install_ssh_config
 from ..core.vm_naming import make_ent_vm_prefix
 from ..core.deploy_steps import register_phase
+from ..core import run_status
 
 
 def run_rampart_spinup(
@@ -55,6 +56,11 @@ def run_rampart_spinup(
     run_id = time.strftime("%m%d%y%H%M%S")
     run_dir = config_dir / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stamp FAILED up front; flipped to OK only at the final return below.
+    # Any early return / exception / kill leaves this run marked failed,
+    # which is what `./teardown --failed` targets. See core/run_status.py.
+    run_status.write_run_status(run_dir, run_status.FAILED, "in_progress")
 
     ent_log = run_dir / "enterprise.log"
 
@@ -241,6 +247,7 @@ def run_rampart_spinup(
     else:
         output.error("  WARNING: ssh_config_snippet.txt missing — skipping PHASE registration")
 
+    run_status.write_run_status(run_dir, run_status.OK, "deploy complete")
     output.info("")
     output.info(f"DONE: RAMPART deployment {deployment}/{run_id}")
     output.info(f"  {endpoint_count} endpoints running autonomous emulation")
