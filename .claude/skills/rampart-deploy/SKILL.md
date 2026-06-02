@@ -1,6 +1,6 @@
 ---
 name: rampart-deploy
-description: RAMPART enterprise deployment — running ./deploy --rampart [feedback], 5-step orchestrator with AD forest + Windows/Linux pyhuman emulation, multi-deploy isolation, hour-gating wiring. Inputs deployments/rampart-controls/config.yaml + ~/uva-cs-workflow/ + /mnt/AXES2U1/feedback/rampart-controls/{dataset}/{node}/user-roles.json. Outputs deployments/rampart-{controls,feedback-...}/runs/{run_id}/. Does NOT cover DECOY SUPs (see /decoy-deploy) or GHOSTS NPCs (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
+description: RAMPART enterprise deployment — running ./deploy --rampart [feedback], 5-step orchestrator with AD forest + Windows/Linux pyhuman emulation, multi-deploy isolation, hour-gating wiring. Inputs deployments/rampart-controls/config.yaml + ~/uva-cs-workflow/ + /mnt/AXES2U1/feedback/rampart-controls/{preset}_v{version}/{dataset}/{node}/user-roles.json (feedback namespaced 2026-06, needs --preset). Outputs deployments/rampart-{controls,feedback-...}/runs/{run_id}/. Does NOT cover DECOY SUPs (see /decoy-deploy) or GHOSTS NPCs (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
 type: skill
 ---
 
@@ -14,13 +14,22 @@ delegates VM provisioning to `~/uva-cs-workflow/`.
 ## CLI scope flags
 
 ```bash
-./deploy --rampart                              # controls + ALL feedback datasets (default)
-./deploy --rampart --controls                   # controls only
-./deploy --rampart --feedback                   # all feedback (no controls)
-./deploy --rampart --feedback --target sum25    # single dataset (no controls)
-./deploy --rampart --feedback --source /path    # explicit PHASE source dir
-./deploy --rampart --controls --target sum25    # controls + single feedback
+# --preset {preset}_v{version} REQUIRED whenever feedback is in scope (2026-06).
+./deploy --rampart --preset std-ctrls_v7.1.2                   # controls + ALL feedback (default)
+./deploy --rampart --controls                                 # controls only (no --preset)
+./deploy --rampart --feedback --preset std-ctrls_v7.1.2       # all feedback (no controls)
+./deploy --rampart --feedback --preset std-ctrls_v7.1.2 --target sum25   # single dataset
+./deploy --rampart --feedback --source /path                  # explicit source (path encodes ns; no --preset)
+./deploy --rampart --controls --preset std-ctrls_v7.1.2 --target sum25   # controls + single feedback
 ```
+
+`--preset NS` (2026-06): feedback lives under
+`/mnt/AXES2U1/feedback/rampart-controls/{preset}_v{version}/{dataset}/`. REQUIRED
+for any feedback deploy; missing/not-found aborts fail-loud. Skip for
+`--controls`-only / `--source`. The full ns (version incl.) is stamped into the
+deploy NAME → distinct lineages/versions coexist. Spinup lineage-asserts the
+per-node `_phase_metadata.model_preset`/`model_version` == the deployed ns. See
+CLAUDE.md "Feedback namespace".
 
 `--feedback` is a boolean switch, NOT a value flag. Single-dataset
 selection is done via `--target NAME` or `--source /path`. Typing
@@ -40,8 +49,12 @@ Dataset target aliases live in `core/feedback.py::DATASET_TARGETS`:
 ./teardown <config_name>-<run_id>   # single deploy (positional, type auto-detected)
 ./teardown --rampart                # ALL rampart deploys (filter mode)
 ./teardown --rampart --feedback     # ALL rampart feedback deploys
+./teardown --failed --rampart       # only runs stamped failed (see /teardown)
 ./teardown --all                    # ALL decoy + rampart + ghosts deploys
 ```
+
+Full teardown reference (forms, `--failed` stamping contract, footgun,
+zone-quota note) lives in the `/teardown` skill.
 
 Positional `target` form is `<config_name>-<MMDDYYHHMMSS>` e.g.
 `rampart-feedback-stdctrls-cptc9-all-051426212115` (concat the run dir
@@ -50,16 +63,16 @@ NOT also pass `--rampart`.
 
 **FOOTGUN — combining filter + positional silently runs the filter and
 ignores the positional.** `__main__.py::_cmd_teardown` checks
-`has_filter = args.decoy or args.rampart or args.ghosts or args.feedback`
-first; if true, calls `run_teardown_filtered` and the positional is
+`has_filter = args.decoy or args.rampart or args.ghosts or args.feedback
+or args.failed` first; if true, calls `run_teardown_filtered` and the positional is
 dropped on the floor. So `./teardown --rampart <target>` tears down
 ALL 8 rampart deploys, not the one named target. Single-target form
 is always bare positional.
 
 | | |
 |---|---|
-| Inputs | `deployments/rampart-controls/config.yaml`, `~/uva-cs-workflow/cloud-configs/axes-cicd.json` (or `axes-cicd-feedback.json` for feedback flavor bump), `~/uva-cs-workflow/enterprise-configs/enterprise-med.json`, `~/uva-cs-workflow/user-roles/user-roles.json` (3-role baseline), `/mnt/AXES2U1/feedback/rampart-controls/{dataset}/{bare_node}/user-roles.json` (19 per-node feedback files) |
-| Outputs | `deployments/rampart-{controls,feedback-...}/runs/{run_id}/` (cloud-config-prefixed.json, dns_zone.txt, deploy-output.json, post-deploy-output.json, enterprise-config-feedback.json, user-roles-feedback.json, logins.json, ssh_config_snippet.txt) |
+| Inputs | `deployments/rampart-controls/config.yaml`, `~/uva-cs-workflow/cloud-configs/axes-cicd.json` (or `axes-cicd-feedback.json` for feedback flavor bump), `~/uva-cs-workflow/enterprise-configs/enterprise-med.json`, `~/uva-cs-workflow/user-roles/user-roles.json` (3-role baseline), `/mnt/AXES2U1/feedback/rampart-controls/{preset}_v{version}/{dataset}/{bare_node}/user-roles.json` (19 per-node feedback files; namespaced 2026-06 — feedback needs `--preset`, see CLAUDE.md "Feedback namespace") |
+| Outputs | `deployments/rampart-{controls,feedback-...}/runs/{run_id}/` (cloud-config-prefixed.json, dns_zone.txt, deploy-output.json, post-deploy-output.json, enterprise-config-feedback.json, user-roles-feedback.json, logins.json, ssh_config_snippet.txt, deploy_status.json) |
 | Manifest | PHASE source `manifest.json`; same loader as DECOY |
 | Upstream | PHASE feedback engine writes target-native per-node `user-roles.json` directly (no translation layer) |
 | Downstream | PHASE Zeek pipeline (`PHASE.py --rampart`) scoped to `start_date` from `experiments.json` |
@@ -288,7 +301,7 @@ Skipped nodes get NO file emitted — RAMPART falls through to the
 baseline-trio fallback (no special handling needed).
 
 ```
-/mnt/AXES2U1/feedback/rampart-controls/{dataset}/
+/mnt/AXES2U1/feedback/rampart-controls/{preset}_v{version}/{dataset}/   # namespaced 2026-06 (--preset)
   linep2/user-roles.json    linep3/user-roles.json    ...    linep10/user-roles.json
   winep1/user-roles.json    winep2/user-roles.json    ...    winep10/user-roles.json
   (up to 19 files; dc1/dc2/dc3/linep1 absent — user: null in enterprise-med.json)

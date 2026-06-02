@@ -10,6 +10,13 @@ import random
 import time
 from datetime import datetime, timezone
 
+try:
+    # OS-level outbound-connection sampler for representative per-minute volume.
+    # Guarded so a telemetry-module failure can never break the SUP at import.
+    from common.network.conn_sampler import OutboundConnSampler
+except Exception:
+    OutboundConnSampler = None
+
 
 # Common domains for background DNS lookups (CDN, OS updates, services)
 BACKGROUND_DOMAINS = [
@@ -84,6 +91,13 @@ class BackgroundServiceGenerator:
         # Stamp at minute granularity to detect rollover.
         now = datetime.now(timezone.utc)
         self._last_minute_stamp = (now.hour, now.minute)
+        # OS-level outbound-connection sampler. Emits a network_sample jsonl
+        # event each minute roll with real conn volume (workflow/step counts are
+        # NOT a traffic proxy). Defensive: None on any failure.
+        try:
+            self._conn_sampler = OutboundConnSampler() if OutboundConnSampler else None
+        except Exception:
+            self._conn_sampler = None
 
     def _reset_hourly(self):
         """Reset hourly counters if hour changed (UTC). Also rolls the
@@ -94,7 +108,17 @@ class BackgroundServiceGenerator:
         cur_minute = (now.hour, now.minute)
         if cur_minute != self._last_minute_stamp:
             # Roll: emit count for the just-elapsed minute so audit can
-            # scrape median conn/min during ON-windows.
+            # scrape median conn/min during ON-windows. Also take an OS-level
+            # outbound sample — real traffic volume; `conns` below is only the
+            # D4 background-service floor (it ignores brain workflow conns).
+            net = None
+            if self._conn_sampler is not None:
+                try:
+                    net = self._conn_sampler.sample()
+                except Exception:
+                    net = None
+            ao = net.get("active_opens") if net else None
+            dh = net.get("distinct_hosts") if net else None
             in_win = "1" if self._in_window else "0"
             tgt = (f"{self._volume_target:.0f}"
                    if self._volume_target else "-")
@@ -102,8 +126,18 @@ class BackgroundServiceGenerator:
                   f"minute={self._last_minute_stamp[0]:02d}:"
                   f"{self._last_minute_stamp[1]:02d} "
                   f"conns={self._minute_conn_count} "
-                  f"in_window={in_win} target={tgt}",
+                  f"in_window={in_win} target={tgt} "
+                  f"active_opens={ao if ao is not None else '-'} "
+                  f"hosts={dh if dh is not None else '-'}",
                   flush=True)
+            if self._logger is not None and net is not None:
+                try:
+                    self._logger.network_sample(
+                        active_opens=ao, distinct_hosts=dh,
+                        window_s=net.get("window_s"),
+                        d4_synthetic=self._minute_conn_count)
+                except Exception:
+                    pass
             self._minute_conn_count = 0
             self._last_minute_stamp = cur_minute
         if now.hour != self._last_hour:
@@ -133,10 +167,14 @@ class BackgroundServiceGenerator:
         Probabilistically generate background traffic.
         Call between workflow tasks. Returns number of background actions taken.
         """
+        # Minute-roll bookkeeping + OS-level network sample must run for EVERY
+        # SUP — even when D4 background services are disabled (controls / empty
+        # config) — so network_sample telemetry is emitted fleet-wide. Must
+        # precede the _enabled short-circuit below.
+        self._reset_hourly()
         if not self._enabled:
             return 0
 
-        self._reset_hourly()
         hour = datetime.now(timezone.utc).hour
         actions = 0
 

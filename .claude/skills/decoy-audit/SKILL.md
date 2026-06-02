@@ -101,6 +101,14 @@ same SUP. Thresholds are deliberately loose because workflows dominate
 the actual emitted traffic; this column only flags "D4 isn't running
 at all." If `Win=OK` but `BG=FAIL`, the SUP is almost certainly fine.
 
+**Future column (not wired):** the `network_sample` jsonl event (2026-06-01,
+`active_opens`/`distinct_hosts` from `OutboundConnSampler`) and the new
+`active_opens=`/`hosts=` fields on the `[bg-counter]` line carry the REAL
+total-outbound rate (workflow + D4), unlike `WIN_VOL_MEDIAN` which is D4-only.
+A future Vol column should prefer `active_opens` for an actual-traffic check
+rather than the D4 floor. Not implemented yet — `WIN_VOL_MEDIAN` still reads
+the `conns=` field.
+
 ## Neighborhood sidecar probe (post 2026-05-11)
 
 Each feedback deploy has one neighborhood VM (`d-{dep_id}-neighborhood-0`)

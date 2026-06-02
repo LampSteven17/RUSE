@@ -87,6 +87,7 @@ FIELD_ORDER = [
     "output_type",
     "dataset",
     "gpu_tier",
+    "preset",
     "description",
     "sup_logs_db",
 ]
@@ -244,6 +245,7 @@ def main():
         "output_type": "inference",
         "dataset": meta["dataset"],
         "gpu_tier": meta["gpu_tier"],
+        "preset": meta.get("preset"),
     }
 
     # Set sup_logs_db if run_id provided
@@ -281,6 +283,7 @@ def main():
                 "output_type",
                 "dataset",
                 "gpu_tier",
+                "preset",
             ):
                 existing[key] = entry[key]
             existing["end_date"] = None

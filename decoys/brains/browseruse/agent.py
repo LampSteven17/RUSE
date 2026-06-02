@@ -289,6 +289,17 @@ def create_logged_chat_ollama(model: str, logger: Optional["AgentLogger"] = None
                 # success/error outcomes and avoids the markdown-wrapped-JSON
                 # fragility. This wrapper only records the LLM call itself.
                 return response
+            except asyncio.CancelledError:
+                # CPU-slow LLM calls get cancelled (browser_use step timeout /
+                # shutdown) BEFORE returning. CancelledError subclasses
+                # BaseException, so the `except Exception` below misses it and the
+                # call vanishes silently (llm_request logged, no response, no
+                # error — the req>>resp gap on CPU SUPs). Log it, then re-raise:
+                # cancellation must always propagate.
+                duration_ms = int((time.time() - start_time) * 1000)
+                logger.llm_error(error=f"cancelled/timeout after {duration_ms}ms",
+                                 action=f"llm_call_{model}", fatal=False)
+                raise
             except Exception as e:
                 logger.llm_error(error=str(e), action=f"llm_call_{model}", fatal=True)
                 raise

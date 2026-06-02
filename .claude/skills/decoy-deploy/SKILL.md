@@ -1,6 +1,6 @@
 ---
 name: decoy-deploy
-description: DECOY SUP deployment — running ./deploy --decoy [scope flags], 5-phase spinup, behavior.json plumbing, audit semantics, hot-patch path. Three GPU tiers via --gpu {v100,rtx,rtx-a} (V100 → gemma4:26b, RTX 2080 Ti non-A pool → gemma4:e4b on B2R/S2R, RTX 2080 Ti A-pool → same model, separate physical cards). Inputs deployments/decoy-controls/config.yaml + /mnt/AXES2U1/feedback/decoy-controls/{controls,dataset}/. Outputs deployments/decoy-{controls,feedback-...}/runs/{run_id}/. Does NOT cover RAMPART AD enterprise (see /rampart-deploy) or GHOSTS NPC clients (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
+description: DECOY SUP deployment — running ./deploy --decoy [scope flags], 5-phase spinup, behavior.json plumbing, audit semantics, hot-patch path. Three GPU tiers via --gpu {v100,rtx,rtx-a} (V100 → gemma4:26b, RTX 2080 Ti non-A pool → gemma4:e4b on B2R/S2R, RTX 2080 Ti A-pool → same model, separate physical cards). Inputs deployments/decoy-controls/config.yaml + /mnt/AXES2U1/feedback/decoy-controls/{controls (un-namespaced), {preset}_v{version}/{dataset} (feedback, needs --preset)}/. Outputs deployments/decoy-{controls,feedback-...}/runs/{run_id}/. Does NOT cover RAMPART AD enterprise (see /rampart-deploy) or GHOSTS NPC clients (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
 type: skill
 ---
 
@@ -13,11 +13,11 @@ is in CLAUDE.md.
 
 | | |
 |---|---|
-| Inputs | `deployments/decoy-controls/config.yaml`, `/mnt/AXES2U1/feedback/decoy-controls/controls/{behavior}/{sup}/behavior.json` (baseline), `/mnt/AXES2U1/feedback/decoy-controls/{dataset}/{behavior}/{sup}/behavior.json` (feedback), `INSTALL_SUP.sh` + `decoys/` cloned from github at install time |
-| Outputs | `deployments/decoy-{controls,feedback-{preset}-{dataset}-{scope}}/runs/{run_id}/` (inventory.ini, ssh_config_snippet.txt, deployment_type), per-VM `/opt/ruse/deployed_sups/{key}/` |
+| Inputs | `deployments/decoy-controls/config.yaml`, `/mnt/AXES2U1/feedback/decoy-controls/controls/{behavior}/{sup}/behavior.json` (baseline, **un-namespaced**), `/mnt/AXES2U1/feedback/decoy-controls/{preset}_v{version}/{dataset}/{behavior}/{sup}/behavior.json` (feedback, namespaced 2026-06 — needs `--preset`), `INSTALL_SUP.sh` + `decoys/` cloned from github at install time |
+| Outputs | `deployments/decoy-{controls,feedback-{preset}-{dataset}-{scope}}/runs/{run_id}/` (inventory.ini, ssh_config_snippet.txt, deployment_type), per-VM `/opt/ruse/deployed_sups/{key}/`. `{preset}` = sanitized full-ns token incl. version (`stdctrlsv712`), so different lineages/versions don't collide |
 | Manifest | `manifest.json` in PHASE source; loaded via `core/feedback.py::load_manifest`, validated against deploy type via `validate_manifest_target` |
 | Upstream | PHASE feedback engine (`feedback_engine.baseline` writes `controls/`; `feedback_engine.decoy_generator` writes `{dataset}/`) |
-| Downstream | PHASE Zeek pipeline (`PHASE.py --decoy`), reads `experiments.json` for active deploys (carries `dataset`/`scope`/`gpu_tier` descriptive fields since 2026-05-22; see CLAUDE.md "experiments.json schema") |
+| Downstream | PHASE Zeek pipeline (`PHASE.py --decoy`), reads `experiments.json` for active deploys (carries `dataset`/`scope`/`gpu_tier` descriptive fields since 2026-05-22, + `preset` sanitized-namespace token since 2026-06; see CLAUDE.md "experiments.json schema") |
 | Narrow exceptions | C0 (no install — bare Ubuntu, only provisioned + SSH-tested); M0 (upstream MITRE pyhuman, crash-loops on Linux by design — `os.startfile()` Windows-only) |
 
 ## Topology
@@ -92,16 +92,33 @@ Plus `d-{dep_id}-neighborhood-0` sidecar (feedback only, when any
 ## CLI scope flags
 
 ```bash
-./deploy --decoy                                       # controls + ALL feedback datasets (default)
-./deploy --decoy --controls                            # controls only
-./deploy --decoy --feedback                            # all feedback (no controls)
-./deploy --decoy --feedback --target sum24             # single dataset
-./deploy --decoy --feedback --target sum24,axyear,vt50g # comma-separated batch on one tier
-./deploy --decoy --feedback --source /path             # explicit PHASE source
-./deploy --decoy --controls --target sum24             # controls + single feedback
-./deploy --decoy --feedback --gpu rtx --target sum24   # RTX 2080 Ti (PCI alias rtx2080ti:1)
-./deploy --decoy --feedback --gpu rtx-a --target axall # RTX 2080 Ti A-pool (PCI alias 2080ti-rtx-a:1)
+# --preset {preset}_v{version} REQUIRED whenever feedback is in scope (2026-06).
+./deploy --decoy --preset std-ctrls_v7.1.2                          # controls + ALL feedback in that ns
+./deploy --decoy --controls                                        # controls only (no --preset needed)
+./deploy --decoy --feedback --preset std-ctrls_v7.1.2              # all feedback in ns (no controls)
+./deploy --decoy --feedback --preset std-ctrls_v7.1.2 --target sum24   # single dataset
+./deploy --decoy --feedback --preset std-ctrls_v7.1.2 --target sum24,axyear,vt50g  # batch on one tier
+./deploy --decoy --feedback --source /path                        # explicit PHASE source (path encodes ns; no --preset)
+./deploy --decoy --controls --preset std-ctrls_v7.1.2 --target sum24    # controls + single feedback
+./deploy --decoy --feedback --preset std-ctrls_v7.1.2 --gpu rtx --target sum24   # RTX (PCI alias rtx2080ti:1)
+./deploy --decoy --feedback --preset exp-ctrls_v7.1.6 --gpu rtx-a --target axall # other lineage + A-pool
 ```
+
+**`--preset` (2026-06 namespace):** feedback datasets live under
+`{type}-controls/{preset}_v{version}/{dataset}/`. `--preset` is REQUIRED for any
+feedback deploy; missing/not-found aborts fail-loud (lists available namespaces).
+Folded into `core/feedback.py::_type_root` → transparent downstream. `controls/`
+stays un-namespaced (config.yaml `behavior_source`). Spinup lineage-asserts the
+config's stamped `_metadata.model_preset`/`model_version` == the deployed ns.
+Hard cutover with PHASE write-side. Full detail: CLAUDE.md "Feedback namespace".
+
+**Collision-safety:** the deploy NAME stamps the FULL ns incl. version (sanitized
+`[a-z0-9]` via `_ns_preset_token` from `source_dir.parent.name`) — e.g.
+`std-ctrls_v7.1.2` → `decoy-feedback-stdctrlsv712-{ds}-{scope}` vs `_v7.1.5` →
+`…stdctrlsv715…`. So two lineages OR two versions of the same dataset get distinct
+`deployment_name → run_dir → VM prefix (dep_id) → experiments.json key` and coexist
+(no idempotent-refresh teardown clash). `experiments.json` carries a `preset` attr
+(the sanitized token) per entry.
 
 GPU tier selection via `--gpu {v100,rtx,rtx-a}` (default v100). RTX
 tiers swap B2.gemma/S2.gemma → B2R.gemma/S2R.gemma and the V100 flavor
@@ -424,11 +441,31 @@ contract), `session_id` (8 hex, seed-derived → deterministic across replays),
 `agent_type` (config key), `event_type`, optional `workflow`, `details`.
 None values omitted.
 
-**16 event types**: `session_{start,success,fail,end}`,
+**17 event types**: `session_{start,success,fail,end}`,
 `workflow_{start,end}`, `step_{start,success,error}`,
-`llm_{request,response,error}`, `decision`, `timing_delay`, `warning`, `info`.
-PHASE-side consumers and the DuckDB collection (`/mnt/AXES2U1/SUP_LOGS/
-sup-logs-<exp>.duckdb`) read these directly.
+`llm_{request,response,error}`, `decision`, `timing_delay`, `warning`, `info`,
+`network_sample`. PHASE-side consumers and the DuckDB collection
+(`/mnt/AXES2U1/SUP_LOGS/sup-logs-<exp>.duckdb`) read these directly.
+
+`network_sample` (2026-06-01) is the **representative traffic signal** — emitted
+~per-minute by `background_services.py` via `OutboundConnSampler`
+(`common/network/conn_sampler.py`). Workflow/step COUNTS are honest but are NOT a
+traffic proxy (a BU `navigate` step = a full page-load with dozens of sub-resource
+conns; an MCHP step = one local micro-action — ground-truthed 2026-06-01: on the
+wire BU ~18 conn/min ≫ MCHP ~1 ≫ Smol ~0.27, the inverse of the workflow-count
+ranking). `details`: `active_opens` (real outbound TCP conns opened in the window,
+incl. short-lived; from `/proc/net/snmp` `Tcp:ActiveOpens` delta; minor loopback
+noise), `distinct_hosts` (loopback-excluded external peers from `/proc/net/tcp{,6}`),
+`d4_synthetic` (legacy D4-only count, = the `[bg-counter]` `conns=` floor), `window_s`.
+The `[bg-counter]` systemd.log line gained matching `active_opens=`/`hosts=` fields.
+Cadence follows the inter-task `maybe_generate` call, so for slow BU it's per-workflow
+(minutes), not strictly per-minute — `window_s` carries the true interval and
+`active_opens` is a delta, so volume is still complete.
+
+BU `llm_error` now also fires on `cancelled/timeout` (2026-06-01): CPU-slow LLM
+calls were cancelled mid-flight (`CancelledError`, a `BaseException`) and vanished
+silently (`llm_request` ≫ `llm_response`, `llm_error=0`). The wrapper now logs them
+(`fatal=False`) so the request/response gap is reconcilable.
 
 ### Canonical `workflow` field (2026-05-25)
 

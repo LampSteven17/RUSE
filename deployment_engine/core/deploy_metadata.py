@@ -24,7 +24,7 @@ def derive_metadata(deployment_name: str, gpu_tier_hint: str | None = None) -> d
 
     Returns all-null fields when the name doesn't match a recognized shape.
     """
-    null_meta = {"dataset": None, "gpu_tier": gpu_tier_hint}
+    null_meta = {"dataset": None, "gpu_tier": gpu_tier_hint, "preset": None}
     parts = deployment_name.split("-", 2)
     if len(parts) < 2:
         return null_meta
@@ -33,7 +33,7 @@ def derive_metadata(deployment_name: str, gpu_tier_hint: str | None = None) -> d
         return null_meta
 
     if kind == "controls":
-        return {"dataset": None, "gpu_tier": gpu_tier_hint}
+        return {"dataset": None, "gpu_tier": gpu_tier_hint, "preset": None}
     if kind != "feedback":
         return null_meta
 
@@ -55,14 +55,17 @@ def derive_metadata(deployment_name: str, gpu_tier_hint: str | None = None) -> d
 
     feedback_prefix = f"{type_prefix}-feedback-"
     if not base.startswith(feedback_prefix):
-        return {"dataset": None, "gpu_tier": gpu_tier}
+        return {"dataset": None, "gpu_tier": gpu_tier, "preset": None}
     inner = base[len(feedback_prefix):]
     tokens = inner.split("-")
     if len(tokens) < 3:
-        return {"dataset": None, "gpu_tier": gpu_tier}
-    # tokens = [preset, dataset_chunks..., scope]. We drop preset (always
-    # "stdctrls" in practice) and scope (always "all"), keep middle as dataset.
+        return {"dataset": None, "gpu_tier": gpu_tier, "preset": None}
+    # tokens = [preset, dataset_chunks..., scope]. preset (tokens[0]) now carries
+    # the full {preset}_v{version} namespace sanitized to [a-z0-9] (e.g.
+    # "stdctrlsv712") so PHASE can distinguish lineages/versions; scope (last) is
+    # dropped; the middle is the dataset.
     return {
         "dataset": "-".join(tokens[1:-1]),
         "gpu_tier": gpu_tier,
+        "preset": tokens[0],
     }

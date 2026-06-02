@@ -43,8 +43,12 @@ def build_deploy_plan(
     target: str | None,
     source: str | None,
     deploy_dir: Path,
+    preset: str | None = None,
 ) -> list[dict] | None:
     """Resolve controls + feedback intent into an ordered list of deploy tasks.
+
+    `preset` is the {preset}_v{version} namespace scoping feedback discovery
+    (None for controls-only or when `source` is an explicit full path).
 
     Returns None on hard failure. Empty list = nothing to do.
     """
@@ -56,6 +60,7 @@ def build_deploy_plan(
     if want_feedback:
         feedback_tasks = _build_feedback_tasks(
             deploy_type, configs_spec, single_selector, target, source,
+            preset=preset,
         )
         if feedback_tasks is None:
             return None
@@ -103,6 +108,7 @@ def _build_feedback_tasks(
     single_selector: str | None,
     target: str | None,
     source: str | None,
+    preset: str | None = None,
 ) -> list[dict] | None:
     """Resolve feedback sources into tasks. Returns None on resolution failure.
 
@@ -110,6 +116,10 @@ def _build_feedback_tasks(
     (e.g. "axes-summer24,axes-year,vt-fall22-50gb") — each is resolved
     independently and added to the plan. Useful for batching a subset
     of feedback datasets onto a specific GPU tier in one invocation.
+
+    `preset` is the {preset}_v{version} namespace dir scoping discovery under
+    {type}-controls/. Ignored when an explicit `--source` path is given (it
+    already encodes the namespace). Required-ness is enforced upstream in the CLI.
     """
     sources: list[dict] = []
     if single_selector:
@@ -124,19 +134,22 @@ def _build_feedback_tasks(
             # independently; fail loud if any one is unknown.
             targets = [t.strip() for t in target.split(",") if t.strip()]
             for tgt in targets:
-                src_path = find_feedback_by_target(tgt, deploy_type=deploy_type)
+                src_path = find_feedback_by_target(tgt, deploy_type=deploy_type,
+                                                   preset=preset)
                 if not src_path:
+                    ns = f"{preset}/" if preset else ""
                     output.error(
                         f"ERROR: No feedback source for target '{tgt}' "
-                        f"under /mnt/AXES2U1/feedback/{deploy_type}-controls/"
+                        f"under /mnt/AXES2U1/feedback/{deploy_type}-controls/{ns}"
                     )
                     return None
-                sources.append({"path": src_path, "dataset": src_path.name, "preset": "?"})
+                sources.append({"path": src_path, "dataset": src_path.name, "preset": preset or "?"})
     else:
-        sources = find_all_feedback_sources(deploy_type)
+        sources = find_all_feedback_sources(deploy_type, preset=preset)
         if not sources:
+            ns = f"{preset}/" if preset else ""
             output.error(f"ERROR: No PHASE feedback configs found for '{deploy_type}'")
-            output.info(f"  Searched: /mnt/AXES2U1/feedback/{deploy_type}-controls/")
+            output.info(f"  Searched: /mnt/AXES2U1/feedback/{deploy_type}-controls/{ns}")
             return None
 
     return [

@@ -1,6 +1,6 @@
 ---
 name: ghosts-deploy
-description: GHOSTS NPC deployment — running ./deploy --ghosts [feedback], 5-phase spinup of 1 API + N .NET clients with per-NPC timeline.json routing, cgroup memcap, Docker Hub auth. Inputs deployments/ghosts-controls/config.yaml + /mnt/AXES2U1/feedback/ghosts-controls/{dataset}/npc-{N}/timeline.json. Outputs deployments/ghosts-{controls,feedback-...}/runs/{run_id}/. Does NOT cover DECOY SUPs (see /decoy-deploy) or RAMPART AD (see /rampart-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
+description: GHOSTS NPC deployment — running ./deploy --ghosts [feedback], 5-phase spinup of 1 API + N .NET clients with per-NPC timeline.json routing, cgroup memcap, Docker Hub auth. Inputs deployments/ghosts-controls/config.yaml + /mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/npc-{N}/timeline.json (feedback namespaced 2026-06, needs --preset). Outputs deployments/ghosts-{controls,feedback-...}/runs/{run_id}/. Does NOT cover DECOY SUPs (see /decoy-deploy) or RAMPART AD (see /rampart-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
 type: skill
 ---
 
@@ -13,13 +13,23 @@ behavioral timelines (BrowserFirefox, Bash, Curl handlers).
 ## CLI scope flags
 
 ```bash
-./deploy --ghosts                              # controls + ALL feedback datasets (default)
-./deploy --ghosts --controls                   # controls only
-./deploy --ghosts --feedback                   # all feedback (no controls)
-./deploy --ghosts --feedback --target sum25    # single dataset (no controls)
-./deploy --ghosts --feedback --source /path    # explicit PHASE source dir
-./deploy --ghosts --controls --target sum25    # controls + single feedback
+# --preset {preset}_v{version} REQUIRED whenever feedback is in scope (2026-06).
+./deploy --ghosts --preset std-ctrls_v7.1.2                   # controls + ALL feedback (default)
+./deploy --ghosts --controls                                 # controls only (no --preset)
+./deploy --ghosts --feedback --preset std-ctrls_v7.1.2       # all feedback (no controls)
+./deploy --ghosts --feedback --preset std-ctrls_v7.1.2 --target sum25   # single dataset
+./deploy --ghosts --feedback --source /path                  # explicit source (path encodes ns; no --preset)
+./deploy --ghosts --controls --preset std-ctrls_v7.1.2 --target sum25   # controls + single feedback
 ```
+
+`--preset NS` (2026-06): feedback lives under
+`/mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/`. REQUIRED
+for any feedback deploy; missing/not-found aborts fail-loud. Skip for
+`--controls`-only / `--source`. The full ns (version incl.) is stamped into the
+deploy NAME → distinct lineages/versions coexist. Spinup lineage-asserts each
+per-NPC timeline's `_phase_metadata.model_preset`/`model_version` == the deployed
+ns (reads the source copy; the on-VM .NET client strips it). See CLAUDE.md
+"Feedback namespace".
 
 `--feedback` is a boolean switch, NOT a value flag. Single-dataset
 selection uses `--target NAME` (or `--source /path`). Typing
@@ -34,7 +44,7 @@ also work.
 
 | | |
 |---|---|
-| Inputs | `deployments/ghosts-controls/config.yaml`, `~/GHOSTS/` (clone of `cmu-sei/GHOSTS` master), `/mnt/AXES2U1/feedback/ghosts-controls/{dataset}/npc-{N}/timeline.json` (5 per-NPC tuned timelines), `~/.docker-hub-token` + `~/.docker-hub-token-user` (optional) |
+| Inputs | `deployments/ghosts-controls/config.yaml`, `~/GHOSTS/` (clone of `cmu-sei/GHOSTS` master), `/mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/npc-{N}/timeline.json` (5 per-NPC tuned timelines; namespaced 2026-06 — feedback needs `--preset`), `~/.docker-hub-token` + `~/.docker-hub-token-user` (optional) |
 | Outputs | `deployments/ghosts-{controls,feedback-...}/runs/{run_id}/` (config.yaml snapshot, inventory.ini with `[ghosts_api]` + `[ghosts_clients]` host vars, ssh_config_snippet.txt, deployment_type, timelines/g-{hash}-npc-N.json) |
 | Manifest | PHASE source `manifest.json`; same loader as DECOY/RAMPART |
 | Upstream | PHASE feedback engine writes target-native per-NPC `timeline.json` directly (no translation layer) |
@@ -120,7 +130,8 @@ Host vars:
 ## PHASE feedback → per-NPC timeline routing
 
 PHASE writes one tuned `timeline.json` per NPC at
-`/mnt/AXES2U1/feedback/ghosts-controls/{dataset}/npc-{N}/timeline.json`.
+`/mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/npc-{N}/timeline.json`
+(namespaced 2026-06 — feedback needs `--preset`, see CLAUDE.md "Feedback namespace").
 Native GHOSTS schema: `{"Status": "Run", "TimeLineHandlers": [...],
 "_phase_metadata": {...}}`. Per-VM tuning (different DelayAfter, handler
 mixes, lognormal sigmas).

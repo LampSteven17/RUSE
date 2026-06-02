@@ -84,6 +84,27 @@ _SMOL_DRIFT_THRESHOLD = 25
 _smol_drift_state = {"streak": 0, "warned": False}
 _SMOL_FINAL_ANSWER = re.compile(r"\bfinal_answer\s*\(", re.IGNORECASE)
 
+# Circuit breaker for gemma code-parse stalls. When the model emits code that
+# doesn't match smolagents' expected fence, smolagents raises AgentParsingError,
+# re-prompts, and consumes a step — small models loop this for the full
+# max_steps (~25, ~16 min) executing zero tool calls (live-confirmed
+# 2026-06-01). After N consecutive parse errors we call agent.interrupt() to
+# end the workflow and let the loop advance. Reset on any non-parse step.
+_SMOL_PARSE_BREAKER_THRESHOLD = 4
+_smol_parse_state = {"streak": 0}
+
+
+def _is_smol_parse_error(err) -> bool:
+    """True when an ActionStep.error is a smolagents code-parse failure
+    (AgentParsingError / "code snippet is invalid"). Accepts an exception
+    object or a string."""
+    if err is None:
+        return False
+    if type(err).__name__ == "AgentParsingError":
+        return True
+    s = str(err)
+    return "code snippet is invalid" in s or "regex pattern" in s
+
 
 def _smol_code_unmatched(code_action: str) -> bool:
     """True when executed code matched no action pattern and isn't a plain
@@ -108,10 +129,33 @@ def make_smol_step_callback(logger: "AgentLogger"):
     def _callback(memory_step, **_kwargs):
         if logger is None:
             return
+        err = getattr(memory_step, "error", None)
+        # Circuit breaker first: parse-error steps carry no code_action, so they
+        # would fall through the `if not code` guard below and log nothing while
+        # silently burning max_steps. Count consecutive parse errors and abort
+        # the workflow via agent.interrupt() once the threshold is hit.
+        if _is_smol_parse_error(err):
+            _smol_parse_state["streak"] += 1
+            if _smol_parse_state["streak"] >= _SMOL_PARSE_BREAKER_THRESHOLD:
+                agent = _kwargs.get("agent")
+                if agent is not None and hasattr(agent, "interrupt"):
+                    try:
+                        agent.interrupt()
+                    except Exception:
+                        pass
+                m = (f"[circuit-breaker] aborting workflow after "
+                     f"{_smol_parse_state['streak']} consecutive code-parse "
+                     f"errors (gemma not emitting valid code fences)")
+                print(f"[WARNING] {m}", flush=True)
+                logger.warning(m, details={"consecutive_parse_errors":
+                                           _smol_parse_state["streak"]})
+                _smol_parse_state["streak"] = 0  # reset so we don't re-warn
+            return
+        # Any non-parse step (success or execution error) breaks the streak.
+        _smol_parse_state["streak"] = 0
         code = getattr(memory_step, "code_action", None)
         if not code:
             return
-        err = getattr(memory_step, "error", None)
         dur_ms = None
         timing = getattr(memory_step, "timing", None)
         if timing is not None:

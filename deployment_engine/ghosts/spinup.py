@@ -519,6 +519,29 @@ def _build_npc_timeline_mapping(
     if not npc_timelines:
         return {}
 
+    # Lineage assert (PHASE 2026-06): feedback sources live under a
+    # {preset}_v{version} namespace dir, so source_path.parent.name IS the
+    # expected lineage. Catch a --preset pointed at a source stamped for a
+    # different lineage. Reads the SOURCE (mount) timeline — the on-VM .NET
+    # client strips _phase_metadata, but the source copy still carries it. Only
+    # namespaced feedback sources look like "{preset}_v{version}".
+    expected_ns = source_path.parent.name
+    if "_v" in expected_ns:
+        import json
+        for npc_id, tl in npc_timelines.items():
+            try:
+                pm = (json.loads(tl.read_text()) or {}).get("_phase_metadata") or {}
+            except (OSError, ValueError):
+                continue
+            mp, mv = pm.get("model_preset"), pm.get("model_version")
+            stamped = f"{mp}_v{mv}" if mp and mv else None
+            if stamped and stamped != expected_ns:
+                output.error(
+                    f"  FAIL: lineage mismatch in {tl} — stamped {stamped!r} != "
+                    f"deployed namespace {expected_ns!r}. --preset points at a "
+                    f"source generated for a different lineage.")
+                raise RuntimeError(f"lineage mismatch: {stamped} != {expected_ns}")
+
     # Stage per-host copies under run_dir/timelines/ for a self-contained run
     timelines_dir = run_dir / "timelines"
     timelines_dir.mkdir(parents=True, exist_ok=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from . import output
@@ -327,6 +328,7 @@ def resolve_feedback_args(
     source: str | None = None,
     target: str | None = None,
     deploy_type: str | None = None,
+    preset: str | None = None,
 ) -> tuple[str | None, str | None]:
     """Resolve feedback CLI args into (behavior_source, configs_spec).
 
@@ -334,6 +336,8 @@ def resolve_feedback_args(
     source: explicit PHASE directory path, or None (auto-detect).
     target: dataset target name (e.g., "summer24") to match against feedback dirs.
     deploy_type: "ghosts" or "decoy" — prefers matching feedback source.
+    preset: {preset}_v{version} namespace dir scoping discovery (None when an
+        explicit `source` path is given — it already encodes the namespace).
 
     Returns (None, None) if no feedback configs were requested.
     """
@@ -344,9 +348,11 @@ def resolve_feedback_args(
     behavior_source = source
     if not behavior_source:
         if target:
-            detected = find_feedback_by_target(target, deploy_type=deploy_type)
+            detected = find_feedback_by_target(target, deploy_type=deploy_type,
+                                               preset=preset)
         else:
-            detected = auto_detect_feedback_source(deploy_type=deploy_type)
+            detected = auto_detect_feedback_source(deploy_type=deploy_type,
+                                                   preset=preset)
         if not detected:
             msg = f"No PHASE feedback configs found for target '{target}'" if target else "No PHASE feedback configs found"
             output.info(f"ERROR: {msg}. Use --source <path>")
@@ -363,8 +369,17 @@ def resolve_feedback_args(
     return behavior_source, configs_spec
 
 
-def _type_root(deploy_type: str | None) -> Path | None:
+def _type_root(deploy_type: str | None, preset: str | None = None) -> Path | None:
     """Return the per-type subtree under FEEDBACK_BASE, e.g. decoy-controls.
+
+    When `preset` (a `{preset}_v{version}` namespace dir, e.g. std-ctrls_v7.1.2)
+    is given, descends one level into it: `{type}-controls/{preset}/`. PHASE
+    inserts this namespace between `{type}-controls` and `{dataset}` (2026-06);
+    datasets live UNDER it. Scoping root here makes the namespace transparent to
+    every discovery function — their dataset iteration (`root.iterdir()`) is
+    unchanged — and to the resolved source Path that spinup/distribute walk. The
+    `controls/` baseline slot is un-namespaced and is reached via config.yaml's
+    behavior_source, not through this function.
 
     Returns None if FEEDBACK_BASE doesn't exist or the subtree is missing.
     deploy_type=None / "decoy" all resolve to decoy-controls.
@@ -373,16 +388,20 @@ def _type_root(deploy_type: str | None) -> Path | None:
         return None
     kind = _deploy_type_prefix(deploy_type)  # "decoy" | "rampart" | "ghosts"
     root = FEEDBACK_BASE / f"{kind}-controls"
+    if preset:
+        root = root / preset
     return root if root.is_dir() else None
 
 
-def auto_detect_feedback_source(deploy_type: str | None = None) -> Path | None:
-    """Find the most recent dataset subdir under {type}-controls/.
+def auto_detect_feedback_source(deploy_type: str | None = None,
+                                preset: str | None = None) -> Path | None:
+    """Find the most recent dataset subdir under {type}-controls/[{preset}/].
 
-    New layout (/mnt/AXES2U1/feedback/{type}-controls/{dataset}/) is scoped
-    per-type, so there's no cross-type fallback like the old flat layout.
+    New layout (/mnt/AXES2U1/feedback/{type}-controls/{preset}/{dataset}/) is
+    scoped per-type and per-preset namespace, so there's no cross-type fallback
+    like the old flat layout.
     """
-    root = _type_root(deploy_type)
+    root = _type_root(deploy_type, preset)
     if root is None:
         return None
 
@@ -430,8 +449,28 @@ def _parse_source_name(source_dir: Path) -> tuple[str, str, str]:
         preset = manifest.get("version_preset", "std-ctrls")
         return (f"axes-{deploy_key}", dataset, preset)
 
-    # Fallback: dir name is the dataset, parent dir name is the deploy_key.
-    return (f"axes-{source_dir.parent.name}", source_dir.name, "std-ctrls")
+    # Fallback (no manifest, e.g. hand-built dev source): dir name is the
+    # dataset; its parent is now the {preset}_v{version} namespace dir, so derive
+    # the preset from that name rather than treating the parent as the deploy_key.
+    ns = source_dir.parent.name
+    preset = ns.split("_v")[0] if "_v" in ns else "std-ctrls"
+    return (f"axes-{source_dir.name}", source_dir.name, preset)
+
+
+def _ns_preset_token(source_dir: Path, preset_name: str) -> str:
+    """Deployment-name preset token, sanitized to [a-z0-9].
+
+    Post-2026-06 feedback sources live under a `{preset}_v{version}` namespace
+    dir (`source_dir.parent.name`). Use the FULL namespace (version INCLUDED) so
+    two lineages OR two versions of the same dataset don't collide on
+    deployment_name / run_dir / VM prefix / experiments.json key — e.g.
+    `std-ctrls_v7.1.2` → `stdctrlsv712`, `std-ctrls_v7.1.5` → `stdctrlsv715`
+    (distinct), whereas the old `manifest.version_preset` token dropped the
+    version and collided. Falls back to the parsed `preset_name` for legacy flat
+    sources (no `_v` in the parent)."""
+    ns = source_dir.parent.name
+    token = ns if "_v" in ns else preset_name
+    return re.sub(r"[^a-z0-9]", "", token.lower())
 
 
 def _is_valid_feedback_source(source_dir: Path, deploy_type: str | None) -> bool:
@@ -471,8 +510,9 @@ def _is_valid_feedback_source(source_dir: Path, deploy_type: str | None) -> bool
     )
 
 
-def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
-    """Find all PHASE feedback dataset dirs under {type}-controls/.
+def find_all_feedback_sources(deploy_type: str | None = None,
+                              preset: str | None = None) -> list[dict]:
+    """Find all PHASE feedback dataset dirs under {type}-controls/[{preset}/].
 
     Returns list of dicts sorted by dataset name:
         [{"path": Path, "name": str, "preset": str, "dataset": str}, ...]
@@ -482,7 +522,7 @@ def find_all_feedback_sources(deploy_type: str | None = None) -> list[dict]:
     manifest.json when present; otherwise directory name is treated as
     the dataset with preset defaulting to "std-ctrls".
     """
-    root = _type_root(deploy_type)
+    root = _type_root(deploy_type, preset)
     if root is None:
         return []
 
@@ -552,14 +592,15 @@ DATASET_TARGETS = {
 }
 
 
-def find_feedback_by_target(target: str, deploy_type: str | None = None) -> Path | None:
+def find_feedback_by_target(target: str, deploy_type: str | None = None,
+                            preset: str | None = None) -> Path | None:
     """Find a feedback dataset dir matching the given target name.
 
     e.g. target="summer24" or "sum24" resolves to dir "axes-summer24"
-    under {FEEDBACK_BASE}/{type}-controls/. DATASET_TARGETS normalizes
+    under {FEEDBACK_BASE}/{type}-controls/[{preset}/]. DATASET_TARGETS normalizes
     short aliases. Most-recent mtime wins if multiple dirs match.
     """
-    root = _type_root(deploy_type)
+    root = _type_root(deploy_type, preset)
     if root is None:
         return None
 
@@ -638,7 +679,7 @@ def generate_feedback_config(
         first = configs_spec.split(",")[0]
         scope_label = first.replace(".json", "").split("_")[0]
 
-    preset_clean = preset_name.replace("-", "")
+    preset_clean = _ns_preset_token(source_dir, preset_name)
     # When deploying on a non-default GPU tier, suffix the deployment name so
     # v100 + rtx deploys of the same dataset can coexist without name collision.
     tier_suffix = "" if gpu_tier == "v100" else f"-{gpu_tier}"
@@ -701,7 +742,7 @@ def generate_rampart_feedback_config(
         first = configs_spec.split(",")[0]
         scope_label = first.replace(".json", "").split("_")[0]
 
-    preset_clean = preset_name.replace("-", "")
+    preset_clean = _ns_preset_token(source_dir, preset_name)
     dep_name = f"rampart-feedback-{preset_clean}-{dataset_abbrev}-{scope_label}"
     dep_dir = deploy_dir / dep_name
     dep_dir.mkdir(parents=True, exist_ok=True)
@@ -767,7 +808,7 @@ def generate_ghosts_feedback_config(
         first = configs_spec.split(",")[0]
         scope_label = first.replace(".json", "").split("_")[0]
 
-    preset_clean = preset_name.replace("-", "")
+    preset_clean = _ns_preset_token(source_dir, preset_name)
     dep_name = f"ghosts-feedback-{preset_clean}-{dataset_abbrev}-{scope_label}"
     dep_dir = deploy_dir / dep_name
     dep_dir.mkdir(parents=True, exist_ok=True)

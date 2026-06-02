@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -376,6 +377,20 @@ def _derive_behavior_paths(sup_behavior: str) -> tuple[str, str]:
     return behavior_dir, baseline_config
 
 
+def _stamped_namespace(behavior_json_path: Path) -> str | None:
+    """Reconstruct the lineage namespace `{model_preset}_v{model_version}` from a
+    behavior.json's `_metadata` PHASE stamp. Returns None when the stamp is
+    absent/unreadable — absent stamp DEFERS (older sources have none), matching
+    the manifest-optional contract. Field names per the PHASE 2026-06 feedback
+    spec; adjust here if PHASE finalizes different names."""
+    try:
+        meta = (json.loads(behavior_json_path.read_text()) or {}).get("_metadata") or {}
+    except (OSError, json.JSONDecodeError):
+        return None
+    mp, mv = meta.get("model_preset"), meta.get("model_version")
+    return f"{mp}_v{mv}" if mp and mv else None
+
+
 def _validate_behavior_source(
     effective_source: str | None, config,
 ) -> list[str]:
@@ -398,6 +413,16 @@ def _validate_behavior_source(
         errors.append(f"behavior_source not a directory: {src}")
         return errors
 
+    # Lineage assert (PHASE 2026-06): feedback sources live under a
+    # {preset}_v{version} namespace dir, so src.parent.name IS the expected
+    # lineage. Catch a --preset pointed at a source whose configs are stamped
+    # for a different lineage. Only feedback namespaces look like
+    # "{preset}_v{version}"; the un-namespaced controls/ slot (parent name e.g.
+    # "decoy-controls") has no "_v", so it's skipped.
+    expected_ns = src.parent.name
+    check_lineage = "_v" in expected_ns
+    lineage_errs: list[str] = []
+
     missing: list[str] = []
     seen: set[tuple[str, str]] = set()
     for dep in config.deployments:
@@ -411,11 +436,24 @@ def _validate_behavior_source(
         path = src / behavior_dir / baseline_config / "behavior.json"
         if not path.is_file():
             missing.append(f"{beh}: expected {path}")
+            continue
+        if check_lineage:
+            stamped = _stamped_namespace(path)
+            if stamped and stamped != expected_ns:
+                lineage_errs.append(
+                    f"{beh}: {path} stamped lineage {stamped!r} != "
+                    f"deployed namespace {expected_ns!r}")
 
     if missing:
         errors.append(f"behavior_source: {src}")
         errors.append(f"missing behavior.json for {len(missing)} SUP(s):")
         for m in missing:
+            errors.append(f"  - {m}")
+    if lineage_errs:
+        errors.append(f"lineage mismatch under {src}: configs stamped for a "
+                      f"different model_preset/model_version than --preset "
+                      f"{expected_ns!r}:")
+        for m in lineage_errs:
             errors.append(f"  - {m}")
     return errors
 

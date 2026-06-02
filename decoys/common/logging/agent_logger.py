@@ -61,6 +61,9 @@ class EventType(str, Enum):
     WARNING = "warning"
     INFO = "info"
 
+    # Telemetry events
+    NETWORK_SAMPLE = "network_sample"  # per-minute OS-level outbound conn volume
+
 
 class StepCategory(str, Enum):
     """Categories for step-level actions."""
@@ -652,6 +655,37 @@ class AgentLogger:
             "reason": reason
         }
         return self._log(EventType.TIMING_DELAY, details=details)
+
+    def network_sample(
+        self,
+        active_opens: Optional[int] = None,
+        distinct_hosts: Optional[int] = None,
+        window_s: Optional[float] = None,
+        d4_synthetic: Optional[int] = None,
+        details: Optional[Dict[str, Any]] = None
+    ) -> LogEvent:
+        """Log a per-minute OS-level outbound-connection sample.
+
+        active_opens   — real outbound TCP connections opened this window (incl.
+                         short-lived sub-resource conns; minor loopback noise).
+        distinct_hosts — distinct non-loopback remote peer IPs (clean external floor).
+        d4_synthetic   — the legacy D4-only background-service conn count, for
+                         continuity with the [bg-counter] / audit BG column.
+        Workflow/step counts are NOT a traffic proxy; this is the representative
+        volume signal (BU ~18/min, MCHP ~1, Smol ~0.27 in 2026-06-01 ground-truth).
+        """
+        sample: Dict[str, Any] = {}
+        if active_opens is not None:
+            sample["active_opens"] = active_opens
+        if distinct_hosts is not None:
+            sample["distinct_hosts"] = distinct_hosts
+        if window_s is not None:
+            sample["window_s"] = round(window_s, 2)
+        if d4_synthetic is not None:
+            sample["d4_synthetic"] = d4_synthetic
+        if details:
+            sample.update(details)
+        return self._log(EventType.NETWORK_SAMPLE, details=sample)
 
     def warning(self, message: str, details: Optional[Dict[str, Any]] = None) -> LogEvent:
         """Log warning event."""

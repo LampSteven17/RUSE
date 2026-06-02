@@ -932,6 +932,13 @@ def _generate_feedback_user_roles(
         )
         return None
 
+    # Lineage assert (PHASE 2026-06): feedback sources live under a
+    # {preset}_v{version} namespace dir, so behavior_source.parent.name IS the
+    # expected lineage. Only namespaced (feedback) sources look like
+    # "{preset}_v{version}"; skip otherwise.
+    expected_ns = behavior_source.parent.name
+    check_lineage = "_v" in expected_ns
+
     # Extract the tuned role (first entry in roles array) for each node,
     # keyed by bare node name.
     #
@@ -960,6 +967,18 @@ def _generate_feedback_user_roles(
             output.error("  caught up with. Aborting rather than risk silent miswiring.")
             output.error("=" * 70)
             sys.exit(1)
+        if check_lineage:
+            pm = data.get("_phase_metadata") or {}
+            mp, mv = pm.get("model_preset"), pm.get("model_version")
+            stamped = f"{mp}_v{mv}" if mp and mv else None
+            if stamped and stamped != expected_ns:
+                output.error("")
+                output.error("=" * 70)
+                output.error(f"FATAL: lineage mismatch in {f}")
+                output.error(f"  stamped {stamped!r} != deployed namespace {expected_ns!r}")
+                output.error("  --preset points at a source generated for a different lineage.")
+                output.error("=" * 70)
+                sys.exit(1)
         roles = data.get("roles", [])
         if not roles:
             output.info(f"  WARNING: {f} has empty roles array, skipping")

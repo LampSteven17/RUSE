@@ -82,6 +82,13 @@ examples:
     p.add_argument("--controls", action="store_true", help="Deploy baseline controls (no feedback)")
     p.add_argument("--feedback", action="store_true", help="Deploy PHASE feedback variants")
 
+    p.add_argument("--preset", type=str,
+                   help="PHASE feedback namespace {preset}_v{version} "
+                        "(e.g. std-ctrls_v7.1.2). REQUIRED whenever feedback is "
+                        "in scope (datasets live under "
+                        "/mnt/AXES2U1/feedback/{type}-controls/{preset}/). Not "
+                        "needed for --controls-only or --source (which gives a "
+                        "full path). controls/ baseline is un-namespaced.")
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory (single)")
     p.add_argument("--target", type=str,
                    help="Dataset target(s). Single (--target sum24) OR comma-"
@@ -229,6 +236,24 @@ def main(argv: list[str] | None = None) -> int:
         output.close_session_log()
 
 
+def _print_available_presets(deploy_type: str) -> None:
+    """List the {preset}_v{version} namespace dirs available for a deploy type
+    (excludes the un-namespaced controls/ baseline slot)."""
+    from .core.feedback import FEEDBACK_BASE, BASELINE_DATASET_SLOTS
+    root = FEEDBACK_BASE / f"{deploy_type}-controls"
+    if not root.is_dir():
+        output.info(f"  (no feedback root at {root})")
+        return
+    presets = sorted(d.name for d in root.iterdir()
+                     if d.is_dir() and d.name not in BASELINE_DATASET_SLOTS)
+    if presets:
+        output.info("  Available --preset namespaces:")
+        for p in presets:
+            output.info(f"    {p}")
+    else:
+        output.info(f"  (no namespaces found under {root})")
+
+
 def _cmd_deploy(argv: list[str]) -> int:
     parser = _deploy_parser()
     args = parser.parse_args(argv)
@@ -261,6 +286,26 @@ def _cmd_deploy(argv: list[str]) -> int:
         if want_feedback and not configs_spec:
             configs_spec = "all"
 
+    # --- Validate --preset namespace (PHASE 2026-06 feedback layout) ---
+    # Feedback datasets now live under {type}-controls/{preset}/{dataset}. The
+    # namespace must be explicit (no guessing across lineages). Required whenever
+    # feedback is in scope and discovery (not an explicit --source path) is used.
+    if want_feedback and not args.source:
+        if not args.preset:
+            output.error("ERROR: --preset is required when deploying feedback "
+                         "(PHASE feedback now lives under "
+                         f"/mnt/AXES2U1/feedback/{deploy_type}-controls/"
+                         "{preset}/{dataset}/).")
+            _print_available_presets(deploy_type)
+            return 1
+        from .core.feedback import FEEDBACK_BASE
+        preset_root = FEEDBACK_BASE / f"{deploy_type}-controls" / args.preset
+        if not preset_root.is_dir():
+            output.error(f"ERROR: --preset {args.preset!r} not found "
+                         f"({preset_root}).")
+            _print_available_presets(deploy_type)
+            return 1
+
     # --- Build plan: list of (label, behavior_source, configs_spec) tasks ---
     from .core.plan import build_deploy_plan, show_plan_and_confirm, execute_plan
 
@@ -272,6 +317,7 @@ def _cmd_deploy(argv: list[str]) -> int:
         single_selector=single_selector,
         target=args.target,
         source=args.source,
+        preset=args.preset,
         deploy_dir=DEPLOY_DIR,
     )
     if plan is None:
