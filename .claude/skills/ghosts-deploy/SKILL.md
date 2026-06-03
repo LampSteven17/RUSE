@@ -131,7 +131,7 @@ Host vars:
 
 PHASE writes one tuned `timeline.json` per NPC at
 `/mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/npc-{N}/timeline.json`
-(namespaced 2026-06 — feedback needs `--preset`, see CLAUDE.md "Feedback namespace").
+(namespaced 2026-06 — feedback needs `--preset`, see /decoy-deploy "Feedback namespace").
 Native GHOSTS schema: `{"Status": "Run", "TimeLineHandlers": [...],
 "_phase_metadata": {...}}`. Per-VM tuning (different DelayAfter, handler
 mixes, lognormal sigmas).

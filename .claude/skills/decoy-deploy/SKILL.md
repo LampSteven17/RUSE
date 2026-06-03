@@ -104,21 +104,43 @@ Plus `d-{dep_id}-neighborhood-0` sidecar (feedback only, when any
 ./deploy --decoy --feedback --preset exp-ctrls_v7.1.6 --gpu rtx-a --target axall # other lineage + A-pool
 ```
 
-**`--preset` (2026-06 namespace):** feedback datasets live under
-`{type}-controls/{preset}_v{version}/{dataset}/`. `--preset` is REQUIRED for any
-feedback deploy; missing/not-found aborts fail-loud (lists available namespaces).
-Folded into `core/feedback.py::_type_root` → transparent downstream. `controls/`
-stays un-namespaced (config.yaml `behavior_source`). Spinup lineage-asserts the
-config's stamped `_metadata.model_preset`/`model_version` == the deployed ns.
-Hard cutover with PHASE write-side. Full detail: CLAUDE.md "Feedback namespace".
+## Feedback namespace `{preset}_v{version}` (`--preset`, 2026-06)
 
-**Collision-safety:** the deploy NAME stamps the FULL ns incl. version (sanitized
-`[a-z0-9]` via `_ns_preset_token` from `source_dir.parent.name`) — e.g.
-`std-ctrls_v7.1.2` → `decoy-feedback-stdctrlsv712-{ds}-{scope}` vs `_v7.1.5` →
-`…stdctrlsv715…`. So two lineages OR two versions of the same dataset get distinct
-`deployment_name → run_dir → VM prefix (dep_id) → experiments.json key` and coexist
-(no idempotent-refresh teardown clash). `experiments.json` carries a `preset` attr
-(the sanitized token) per entry.
+Canonical reference (rampart/ghosts skills point here). PHASE feedback lives one
+level deeper, under a lineage namespace inserted between `{type}-controls` and
+`{dataset}`:
+
+```
+OLD:  /mnt/AXES2U1/feedback/{type}-controls/{dataset}/...
+NEW:  /mnt/AXES2U1/feedback/{type}-controls/{preset}_v{version}/{dataset}/...
+```
+
+- **`--preset NS` REQUIRED** for any feedback deploy (`--feedback`, `--target`, or
+  the default controls+all-feedback). Missing/not-found → fail-loud, lists
+  available namespaces. NOT needed for `--controls`-only or `--source /full/path`
+  (the explicit path already encodes the ns). `controls/` stays **un-namespaced**
+  (`{type}-controls/controls/`, reached via config.yaml `behavior_source`).
+- **Mechanism:** `core/feedback.py::_type_root(deploy_type, preset)` folds the
+  preset into root resolution once → `{type}-controls/{preset}`. The discovery
+  functions, the resolved source Path, and every downstream spinup/distribute glob
+  inherit the namespace transparently — **no per-site path edits**. Config JSON
+  schemas (behavior/user-roles/timeline) are UNCHANGED.
+- **Lineage-assert:** spinup compares each config's stamped
+  `_metadata.model_preset`/`model_version` (DECOY) / `_phase_metadata.*`
+  (RAMPART/GHOSTS) to the deployed ns and aborts on mismatch (absent stamp defers,
+  per the manifest-optional contract).
+- **Collision-safety:** the deploy NAME stamps the FULL ns incl. version (sanitized
+  `[a-z0-9]` via `_ns_preset_token` from `source_dir.parent.name`) —
+  `std-ctrls_v7.1.2` → `decoy-feedback-stdctrlsv712-{ds}-{scope}` vs `_v7.1.5` →
+  `…stdctrlsv715…`. So two lineages OR two versions of one dataset get distinct
+  `deployment_name → run_dir → VM prefix (dep_id) → experiments.json key` and
+  coexist (no idempotent-refresh teardown clash). `experiments.json` carries a
+  `preset` attr (sanitized token) per entry via `deploy_metadata.derive_metadata`.
+- **Hard cutover:** RUSE read-side + PHASE write-side migration land together —
+  until PHASE creates the `{ns}` dirs on the mount, feedback deploys fail-loud
+  (intended). Confirm w/ PHASE: stamp field names (`model_preset`/`model_version`),
+  manifest.json placement (RUSE assumes per-dataset `{ns}/{dataset}/manifest.json`),
+  and that `ablation/` is a `_metadata` field, not a directory RUSE reads.
 
 GPU tier selection via `--gpu {v100,rtx,rtx-a}` (default v100). RTX
 tiers swap B2.gemma/S2.gemma → B2R.gemma/S2R.gemma and the V100 flavor

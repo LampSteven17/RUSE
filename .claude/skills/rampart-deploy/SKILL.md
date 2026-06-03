@@ -29,7 +29,7 @@ for any feedback deploy; missing/not-found aborts fail-loud. Skip for
 `--controls`-only / `--source`. The full ns (version incl.) is stamped into the
 deploy NAME → distinct lineages/versions coexist. Spinup lineage-asserts the
 per-node `_phase_metadata.model_preset`/`model_version` == the deployed ns. See
-CLAUDE.md "Feedback namespace".
+/decoy-deploy "Feedback namespace".
 
 `--feedback` is a boolean switch, NOT a value flag. Single-dataset
 selection is done via `--target NAME` or `--source /path`. Typing
@@ -71,7 +71,7 @@ is always bare positional.
 
 | | |
 |---|---|
-| Inputs | `deployments/rampart-controls/config.yaml`, `~/uva-cs-workflow/cloud-configs/axes-cicd.json` (or `axes-cicd-feedback.json` for feedback flavor bump), `~/uva-cs-workflow/enterprise-configs/enterprise-med.json`, `~/uva-cs-workflow/user-roles/user-roles.json` (3-role baseline), `/mnt/AXES2U1/feedback/rampart-controls/{preset}_v{version}/{dataset}/{bare_node}/user-roles.json` (19 per-node feedback files; namespaced 2026-06 — feedback needs `--preset`, see CLAUDE.md "Feedback namespace") |
+| Inputs | `deployments/rampart-controls/config.yaml`, `~/uva-cs-workflow/cloud-configs/axes-cicd.json` (or `axes-cicd-feedback.json` for feedback flavor bump), `~/uva-cs-workflow/enterprise-configs/enterprise-med.json`, `~/uva-cs-workflow/user-roles/user-roles.json` (3-role baseline), `/mnt/AXES2U1/feedback/rampart-controls/{preset}_v{version}/{dataset}/{bare_node}/user-roles.json` (19 per-node feedback files; namespaced 2026-06 — feedback needs `--preset`, see /decoy-deploy "Feedback namespace") |
 | Outputs | `deployments/rampart-{controls,feedback-...}/runs/{run_id}/` (cloud-config-prefixed.json, dns_zone.txt, deploy-output.json, post-deploy-output.json, enterprise-config-feedback.json, user-roles-feedback.json, logins.json, ssh_config_snippet.txt, deploy_status.json) |
 | Manifest | PHASE source `manifest.json`; same loader as DECOY |
 | Upstream | PHASE feedback engine writes target-native per-node `user-roles.json` directly (no translation layer) |
