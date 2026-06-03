@@ -169,6 +169,26 @@ Dataset target aliases (`core/feedback.py::DATASET_TARGETS`): `sum24` →
 `axes-2025`. Resolution is substring against
 `/mnt/AXES2U1/feedback/decoy-controls/`.
 
+## Deploy plan / confirm (`core/plan.py::show_plan_and_confirm`)
+
+Before provisioning, the CLI prints a per-task plan and asks `y/N`. Each
+task renders a manifest summary (`target env`, `preset`, source path,
+`generated_at_utc` + age) AND a **VMs to provision** table
+(Behavior/Brain/Flavor/LLM model):
+
+- **Feedback** tasks: table from the GPU-tier template
+  (`FEEDBACK_TEMPLATES_BY_TIER[gpu_tier]`, 5 VMs) — `tier=` shown.
+- **Controls** task: table from `decoy-controls/config.yaml`'s `deployments`
+  (9 VMs: C0/M0/M1 + V100 B0/S0 + rtx-a B0R/S0R + CPU B0C/S0C) via
+  `config_vm_table_lines` (added 2026-06; C0/M0 special-cased as
+  `bare ubuntu`/`MITRE pyhuman`, not brain SUPs).
+
+**Quirk:** a plan that is a **single controls-only task** auto-proceeds with
+NO `y/N` (`if n==1 and is_controls: return True` — "nothing to confirm"); it
+still prints the plan first. To force the gate on controls, bundle it with
+feedback (`--controls --feedback …`) so the plan is multi-task. A
+manifest.target ≠ deploy-type aborts the whole plan.
+
 ## Spinup phases (`decoy/spinup.py`)
 
 0. `_validate_behavior_source` — walk every non-C0/M0 SUP's expected
