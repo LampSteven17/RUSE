@@ -95,20 +95,26 @@ def _vm_runtime_details(behavior: str) -> tuple[str, str]:
     return (brain, model)
 
 
-def template_vm_table_lines(gpu_tier: str, indent: str = "    ") -> list[str]:
-    """Return aligned table rows describing the per-VM provisioning plan.
+# Pure-control behaviors aren't brain SUPs — _vm_runtime_details would
+# mislabel them (C0's "C" reads as a CPU-edge LLM). Map them explicitly.
+_CONTROL_BEHAVIOR_LABELS = {
+    "C0": ("bare ubuntu", "—"),
+    "M0": ("MITRE pyhuman", "—"),
+}
 
-    Reads FEEDBACK_TEMPLATES_BY_TIER[gpu_tier] and emits one row per VM
-    with columns: Behavior, Brain, Flavor, LLM model. Returns an empty
-    list if the tier is unknown.
-    """
-    spec = FEEDBACK_TEMPLATES_BY_TIER.get(gpu_tier)
-    if not spec:
+
+def _controls_vm_runtime_details(behavior: str) -> tuple[str, str]:
+    """(brain, model) for a controls behavior — special-cases C0/M0, else
+    falls back to the standard brain/model derivation."""
+    special = _CONTROL_BEHAVIOR_LABELS.get(behavior.split(".")[0])
+    return special if special else _vm_runtime_details(behavior)
+
+
+def _render_vm_table(rows: list[tuple], indent: str) -> list[str]:
+    """Aligned Behavior/Brain/Flavor/LLM-model table from (beh, brain, flavor,
+    model) rows. Empty list when no rows."""
+    if not rows:
         return []
-    rows = []
-    for vm in spec["template"]:
-        brain, model = _vm_runtime_details(vm["behavior"])
-        rows.append((vm["behavior"], brain, vm["flavor"], model))
     headers = ("Behavior", "Brain", "Flavor", "LLM model")
     widths = [
         max(len(headers[i]), max(len(row[i]) for row in rows))
@@ -116,13 +122,35 @@ def template_vm_table_lines(gpu_tier: str, indent: str = "    ") -> list[str]:
     ]
     fmt = f"{{:<{widths[0]}}}  {{:<{widths[1]}}}  {{:<{widths[2]}}}  {{:<{widths[3]}}}"
     sep = "  ".join("─" * w for w in widths)
-    lines = [
-        f"{indent}{fmt.format(*headers)}",
-        f"{indent}{sep}",
-    ]
+    lines = [f"{indent}{fmt.format(*headers)}", f"{indent}{sep}"]
     for row in rows:
         lines.append(f"{indent}{fmt.format(*row)}")
     return lines
+
+
+def template_vm_table_lines(gpu_tier: str, indent: str = "    ") -> list[str]:
+    """Per-VM provisioning table for a FEEDBACK tier template
+    (FEEDBACK_TEMPLATES_BY_TIER[gpu_tier]). Empty list if the tier is unknown."""
+    spec = FEEDBACK_TEMPLATES_BY_TIER.get(gpu_tier)
+    if not spec:
+        return []
+    rows = []
+    for vm in spec["template"]:
+        brain, model = _vm_runtime_details(vm["behavior"])
+        rows.append((vm["behavior"], brain, vm["flavor"], model))
+    return _render_vm_table(rows, indent)
+
+
+def config_vm_table_lines(deployments: list[dict], indent: str = "    ") -> list[str]:
+    """Per-VM provisioning table for a config.yaml `deployments` list
+    ([{behavior, flavor, count}, ...]). Used for CONTROLS, whose VMs come from
+    config.yaml rather than a GPU-tier template."""
+    rows = []
+    for dep in deployments or []:
+        beh = dep.get("behavior", "?")
+        brain, model = _controls_vm_runtime_details(beh)
+        rows.append((beh, brain, dep.get("flavor", "?"), model))
+    return _render_vm_table(rows, indent)
 
 
 def manifest_summary_lines(

@@ -25,6 +25,7 @@ from pathlib import Path
 from . import output
 from .config import DeploymentConfig
 from .feedback import (
+    config_vm_table_lines,
     find_all_feedback_sources,
     find_feedback_by_target,
     load_manifest,
@@ -89,6 +90,7 @@ def _build_controls_task(deploy_type: str, deploy_dir: Path) -> dict:
             "configs_spec": None,
             "manifest": None,
             "is_controls": True,
+            "deployments": [],
         }
 
     cfg = DeploymentConfig.load(controls_cfg_path)  # raises on parse errors — fail loud
@@ -99,6 +101,7 @@ def _build_controls_task(deploy_type: str, deploy_dir: Path) -> dict:
         "configs_spec": None,
         "manifest": load_manifest(src) if src else None,
         "is_controls": True,
+        "deployments": cfg.deployments,
     }
 
 
@@ -193,6 +196,15 @@ def show_plan_and_confirm(
                 output.info("      (baseline controls — no PHASE feedback)")
             else:
                 for line in manifest_summary_lines(src, mf, indent="      "):
+                    output.info(line)
+            # Controls VMs come from config.yaml's deployments, not a tier
+            # template — render them so the operator sees the full baseline
+            # topology (C0/M0/M1 + V100/RTX/CPU SUPs), same as feedback tasks.
+            deps = task.get("deployments")
+            if deps:
+                output.info("")
+                output.info(f"      VMs to provision ({sum(d.get('count', 1) for d in deps)}):")
+                for line in config_vm_table_lines(deps, indent="        "):
                     output.info(line)
         else:
             mf = task["manifest"]
