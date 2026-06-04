@@ -185,7 +185,12 @@ if [ -n "$SYSLOG" ]; then
   # cluster boundary. Counted separately so _classify_vm can subtract for
   # M-brains.
   echo "WARN_G1_COUNT=$(grep -c '\\[WARNING\\] G1 prompt_augmentation' "$SYSLOG" 2>/dev/null || echo 0)"
-  echo "WARN_LINES=$(grep '\\[WARNING\\]' "$SYSLOG" 2>/dev/null | tail -10 | tr '\\n' '|')"
+  # [circuit-breaker] warnings are EXPECTED, not bugs: the Smol parse-error
+  # circuit breaker firing (aborting a workflow after 4 consecutive
+  # AgentParsingError on small gemma) is healthy behavior, not a deploy fault.
+  # Counted separately so _classify_vm subtracts it (like WARN_G1_COUNT).
+  echo "WARN_BREAKER_COUNT=$(grep -c '\\[WARNING\\] \\[circuit-breaker\\]' "$SYSLOG" 2>/dev/null || echo 0)"
+  echo "WARN_LINES=$(grep '\\[WARNING\\]' "$SYSLOG" 2>/dev/null | grep -v '\\[circuit-breaker\\]' | tail -10 | tr '\\n' '|')"
   # Phase 0c seed-override visibility: should appear ONCE per service start
   # (apply_phase_seed prints with flush=True). Catches the runner-bypass bug.
   echo "SEED_LINE_COUNT=$(grep -c 'PHASE _metadata.seed=' "$SYSLOG" 2>/dev/null || echo 0)"
@@ -196,6 +201,7 @@ else
   echo "WARN_COUNT=0"
   echo "INFO_COUNT=0"
   echo "WARN_G1_COUNT=0"
+  echo "WARN_BREAKER_COUNT=0"
   echo "WARN_LINES="
   echo "SEED_LINE_COUNT=0"
   echo "SVC_HITS=0"
@@ -543,6 +549,12 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
     warn_count = int(probe.get("WARN_COUNT", "0") or "0")
     info_count = int(probe.get("INFO_COUNT", "0") or "0")
     warn_g1 = int(probe.get("WARN_G1_COUNT", "0") or "0")
+    warn_breaker = int(probe.get("WARN_BREAKER_COUNT", "0") or "0")
+    # [circuit-breaker] firings are EXPECTED, not bugs: the Smol parse-error
+    # breaker aborting a workflow after 4 consecutive AgentParsingError on
+    # small gemma is healthy behavior (prevents the 16-min stall). Subtract
+    # from the unexpected-warning total for every brain; report separately.
+    warn_count = max(0, warn_count - warn_breaker)
     # MCHP brains don't use LLMs — G1 prompt_augmentation warnings are
     # structurally inapplicable. Subtract from the unexpected-warning total.
     if behavior.startswith("M"):
@@ -555,12 +567,16 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         checks["warnings"] = "n/a (controls)"
     elif behavior in ("C0", "M0"):
         checks["warnings"] = "n/a"
-    elif warn_count == 0 and info_count == 0:
-        checks["warnings"] = "OK"
-    elif warn_count == 0 and info_count > 0:
-        checks["warnings"] = f"OK ({info_count} ablation-gated)"
-    else:
+    elif warn_count > 0:
         checks["warnings"] = f"FAIL ({warn_count} unexpected warnings)"
+    else:
+        # Clean of real warnings — annotate any expected/benign categories.
+        notes = []
+        if info_count:
+            notes.append(f"{info_count} ablation-gated")
+        if warn_breaker:
+            notes.append(f"{warn_breaker} circuit-breaker")
+        checks["warnings"] = f"OK ({', '.join(notes)})" if notes else "OK"
 
     # Post-pass: interpret IDLE correctly.
     # Ollama unloads idle models after OLLAMA_KEEP_ALIVE (default 5m).
