@@ -185,6 +185,23 @@ Logs:    journalctl -u rampart-human -f
 `install-rampart-emulation.yaml` asserts `systemctl is-active` AND
 `NRestarts ≤ 10` (catches services oscillating between active and crash).
 
+These `Args:` are the COMPLETE set the runtime honors — `human.py` runs
+`--stopafter 0` (infinite loop, `random.choice(workflows)` uniform; dup
+workflow names do NOT upweight, membership is a set). Per-minute Zeek
+connection VOLUME is shaped only by `clustersize × taskinterval ×
+taskgroupinterval` + which workflows are in the set (heavy external
+browse_web/youtube/build/google vs light internal iis/shibboleth/moodle —
+the latter are the only local_resp internal traffic; internal targets are
+sed-rewritten `project1.os`→`{domain}.{enterprise_url}` at install per
+`role_human.py`). The per-invocation request counts inside each workflow
+(browse_web ≤15 clicks, youtube ≤10 videos, build 1–2 projects) are the
+biggest volume multiplier but are HARDCODED in `workflows.zip` — not
+config-tunable today. The login-graph fields
+(`activity_*_logins_per_hour`, `min/max_login_length`, `terminals_open`,
+`recursive_logins_*`, `fraction_of_logins_*`) are NOT passed here — they
+fed only the dead `logins.json` (see "Manual workflow testing"). PHASE
+passes them through verbatim but they are **runtime-inert**.
+
 ## Windows emulation (scheduled task)
 
 ```
