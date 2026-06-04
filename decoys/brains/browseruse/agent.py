@@ -22,6 +22,8 @@ def log(msg: str):
 from browser_use import Agent, ChatOllama
 from browser_use.browser.session import BrowserSession
 
+from brains.browseruse.config import CHROMIUM_ARGS
+
 from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
 from brains.browseruse.prompts import BUPrompts, DEFAULT_PROMPTS
 
@@ -353,13 +355,7 @@ class BrowserUseAgent:
         return BrowserSession(
             headless=self.headless,
             channel="chromium",
-            args=[
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-extensions',
-                '--disable-gpu',
-            ]
+            args=CHROMIUM_ARGS,
         )
 
     async def run_async(self, task: str) -> Optional[str]:

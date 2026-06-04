@@ -13,6 +13,7 @@ from browser_use.browser.session import BrowserSession
 from brains.browseruse.workflows.base import BUWorkflow
 from brains.browseruse.prompts import BUPrompts
 from brains.browseruse.agent import create_logged_chat_ollama
+from brains.browseruse.config import CHROMIUM_ARGS
 from common.config.model_config import get_model
 
 if TYPE_CHECKING:
@@ -96,13 +97,7 @@ class BrowseWebWorkflow(BUWorkflow):
         return BrowserSession(
             headless=self.headless,
             channel="chromium",
-            args=[
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-extensions',
-                '--disable-gpu',
-            ]
+            args=CHROMIUM_ARGS,
         )
 
     async def _run_task_async(self, task: str, logger: Optional["AgentLogger"] = None) -> Optional[str]:

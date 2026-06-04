@@ -136,7 +136,7 @@ class SmolAgentLoop(BaseEmulationLoop):
                     w.outcome_mix = fc.download_outcome_mix
             elif wname == "BrowseWeb" and hasattr(w, "url_pool"):
                 w.url_pool = fc.browse_url_pool
-            elif wname == "BrowseYoutube" and hasattr(w, "video_pool"):
+            elif wname == "BrowseYouTube" and hasattr(w, "video_pool"):
                 w.video_pool = fc.youtube_video_pool
             elif wname == "WebSearch" and hasattr(w, "query_pool"):
                 w.query_pool = fc.google_search_pool

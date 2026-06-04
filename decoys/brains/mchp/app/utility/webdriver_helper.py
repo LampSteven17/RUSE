@@ -36,6 +36,11 @@ class WebDriverHelper(BaseDriverHelper):
             self.options.set_preference("browser.sessionstore.resume_from_crash", False)
             self.options.set_preference("browser.shell.checkDefaultBrowser", False)
             self.options.set_preference("browser.startup.homepage_override.mstone", "ignore")
+            # Allow video autoplay so BrowseYouTube actually streams the video
+            # (Firefox blocks autoplay by default -> the player sits unstarted and
+            # no media flows; confirmed 2026-06-04 the pref makes it play).
+            self.options.set_preference("media.autoplay.default", 0)
+            self.options.set_preference("media.autoplay.blocking_policy", 0)
 
             super().__init__(name=DRIVER_NAME)
             self._driver_path = FirefoxService(executable_path=geckodriver_path)

@@ -9,6 +9,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import ElementNotInteractableException
 
+from common.network.youtube import pick_available_video
+
 # LLM augmentation - only used for M4/M5 configurations
 def _use_llm_augmentation():
     """Check if LLM augmentation should be used (M4/M5 configs)."""
@@ -55,7 +57,8 @@ class YoutubeSearch(BaseWorkflow):
         # with a direct /watch?v={id} navigation. The watch + suggested-video
         # logic below is reused as-is — same DOM, same elements.
         if self.video_pool:
-            video_id = random.choice(self.video_pool)
+            # Skip dead/private pool entries (PHASE pool rots ~30% over time).
+            video_id = pick_available_video(self.video_pool)
             video_url = f"https://www.youtube.com/watch?v={video_id}"
             if logger:
                 logger.decision(
@@ -165,17 +168,25 @@ class YoutubeSearch(BaseWorkflow):
             if logger:
                 logger.step_start("click", category="video", message=f"Suggested video {i+1}/{num_suggested}")
             try:
-                suggested_videos = self.driver.driver.find_elements(By.ID, "video-title")
+                # Watch-page recommendations live in the #secondary sidebar as
+                # watch-links (ytd-watch-next-...); the old By.ID 'video-title'
+                # only matched the SEARCH-results layout, not the watch page
+                # (confirmed 2026-06-04: this CSS returns ~40 on a live video,
+                # 0 on a dead/private one). Short wait — the sidebar lazy-loads.
+                SUGGESTED_SELECTOR = '#secondary a[href*="watch"]'
+                try:
+                    WebDriverWait(self.driver.driver, 5).until(
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, SUGGESTED_SELECTOR)))
+                except Exception:
+                    pass  # empty-list check below handles a still-empty sidebar
+                suggested_videos = self.driver.driver.find_elements(By.CSS_SELECTOR, SUGGESTED_SELECTOR)
                 if not suggested_videos:
-                    # Fail-loud: empty list almost always means the DOM
-                    # selector ('id=video-title') doesn't match this page.
-                    # Likely YouTube changed the sidebar markup OR (Phase 1
-                    # path) direct-URL navigation lands on a page whose
-                    # sidebar uses different IDs than the search-results
-                    # path. Either way audit/[WARNING] grep surfaces it.
+                    # Empty sidebar = usually a dead/private video (no related
+                    # videos render) — the availability guard skips most, but a
+                    # video can die between guard-check and navigation.
                     msg = (
                         f"[WARNING] BrowseYouTube suggested_videos empty — "
-                        f"selector By.ID 'video-title' returned 0 elements on "
+                        f"selector '{SUGGESTED_SELECTOR}' returned 0 elements on "
                         f"{self.driver.driver.current_url} (pool_mode="
                         f"{'phase' if self.video_pool else 'search'})"
                     )
@@ -183,8 +194,6 @@ class YoutubeSearch(BaseWorkflow):
                     if logger:
                         logger.step_error("click", msg)
                     break
-                # Pre-existing off-by-one (randrange(0, len-1)) would crash
-                # on len==1 with ValueError. Use the full len.
                 suggested_videos[random.randrange(0, len(suggested_videos))].click()
                 if logger:
                     logger.step_success("click")

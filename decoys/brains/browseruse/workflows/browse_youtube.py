@@ -13,7 +13,9 @@ from browser_use.browser.session import BrowserSession
 from brains.browseruse.workflows.base import BUWorkflow
 from brains.browseruse.prompts import BUPrompts
 from brains.browseruse.agent import create_logged_chat_ollama
+from brains.browseruse.config import CHROMIUM_ARGS
 from common.config.model_config import get_model
+from common.network.youtube import pick_available_video
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -95,13 +97,7 @@ class BrowseYouTubeWorkflow(BUWorkflow):
         return BrowserSession(
             headless=self.headless,
             channel="chromium",
-            args=[
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-extensions',
-                '--disable-gpu',
-            ]
+            args=CHROMIUM_ARGS,
         )
 
     async def _run_task_async(self, task: str, logger: Optional["AgentLogger"] = None) -> Optional[str]:
@@ -141,7 +137,8 @@ class BrowseYouTubeWorkflow(BUWorkflow):
             task = extra.get('task')
         if task is None:
             if self.video_pool:
-                vid = random.choice(self.video_pool)
+                # Skip dead/private pool entries (PHASE pool rots ~30% over time).
+                vid = pick_available_video(self.video_pool)
                 task = f"Watch the YouTube video at https://www.youtube.com/watch?v={vid} and browse around the page."
                 options_preview = self.video_pool[:5]
                 pool_size = len(self.video_pool)

@@ -349,8 +349,35 @@ WhoisLookup + DownloadFiles bypass the Agent's tool-decision loop:
 - MCHP — `random.choice(pool)` no-LLM picker
 
 Helpers in `decoys/common/network/`: `whois.py`, `downloader.py`,
-`probes.py`, `neighborhood_traffic.py`. Brain workflow files import
-directly — no cross-brain imports.
+`probes.py`, `neighborhood_traffic.py`, `youtube.py`. Brain workflow files
+import directly — no cross-brain imports.
+
+## BrowseYouTube real streaming (2026-06-04)
+
+All three brains now generate REAL video traffic from `content.youtube_video_pool`,
+each in-character (NOT unified onto one engine). Before this, none streamed:
+
+- **MCHP / Firefox**: autoplay was blocked → player never started. Fix:
+  `webdriver_helper.py` sets `media.autoplay.default=0` → Firefox streams (state 1,
+  currentTime advances). Suggested-video selector fixed: watch-page recommendations
+  live at `#secondary a[href*="watch"]` (the old `By.ID 'video-title'` only matched
+  the SEARCH page, returned 0 on watch pages).
+- **BU / Chromium**: needed `--autoplay-policy=no-user-gesture-required`. The 4
+  duplicate `BrowserSession(args=[...])` lists were dedup'd into
+  `brains/browseruse/config.py::CHROMIUM_ARGS` (single source of truth) with the
+  autoplay arg added.
+- **Smol / yt-dlp**: no browser by design. In pool mode it now STREAMS the real
+  media over HTTP via `common/network/youtube.stream_youtube_video` (yt-dlp resolves
+  the googlevideo URL; ~30 MB byte-capped fetch) → genuine CDN traffic, in-character
+  with its HTTP nature. No-pool falls back to the DuckDuckGo research path. Also
+  fixed a name-match bug in `smolagents/loop.py` (`"BrowseYoutube"` → `"BrowseYouTube"`)
+  that meant the pool was NEVER wired into Smol. `INSTALL_SUP.sh` adds `yt-dlp` to
+  Smol deps.
+
+**Dead-video guard** (`common/network/youtube.py`, all three): the PHASE pool rots
+(~30% deleted/private). `pick_available_video` oEmbed-checks each pick (HTTP 401/404
+→ skip) before navigating/streaming. Root fix is PHASE-side (re-validate the pool at
+emit time); this is RUSE-side defense-in-depth.
 
 ## Distribute flow (`distribute-behavior-configs.yaml`)
 

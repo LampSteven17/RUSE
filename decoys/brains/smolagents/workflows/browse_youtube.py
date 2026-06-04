@@ -11,6 +11,7 @@ from smolagents import CodeAgent, LiteLLMModel, DuckDuckGoSearchTool, VisitWebpa
 from brains.smolagents.workflows.base import SmolWorkflow
 from common.config.model_config import get_model, get_ollama_seed, get_num_ctx
 from common.logging.llm_callbacks import setup_litellm_callbacks, make_smol_step_callback
+from common.network.youtube import pick_available_video, stream_youtube_video
 
 if TYPE_CHECKING:
     from common.logging.agent_logger import AgentLogger
@@ -150,27 +151,45 @@ class BrowseYouTubeWorkflow(SmolWorkflow):
         task = None
         if extra and isinstance(extra, dict):
             task = extra.get('task')
+
+        # Pool mode (PHASE youtube_video_pool): Smol has no browser, so it "watches"
+        # by streaming the video's real media over HTTP via yt-dlp — genuine
+        # googlevideo CDN traffic, in-character with its HTTP nature. Deterministic
+        # (not routed through the flaky gemma tool loop). Dead/private IDs skipped.
+        if task is None and self.video_pool:
+            vid = pick_available_video(self.video_pool)
+            watch_seconds = random.randint(20, 90)
+            self.category = "video"
+            self.description = f"Stream youtube {vid} ({watch_seconds}s)"
+            print(self.display)
+            if logger:
+                logger.decision(
+                    choice="browse_youtube_task", selected=vid,
+                    context=f"Stream from PHASE pool ({len(self.video_pool)} videos)",
+                    method="phase_video_pool_stream",
+                )
+                logger.step_start("watch", category="video",
+                                  message=f"https://www.youtube.com/watch?v={vid} ({watch_seconds}s)")
+            res = stream_youtube_video(vid, watch_seconds, logger=logger)
+            ok = res.get("outcome") == "ok"
+            if logger:
+                if ok:
+                    logger.step_success("watch", category="video", duration_ms=res.get("elapsed_ms"))
+                else:
+                    logger.step_error("watch", message=str(res.get("outcome")), category="video")
+            return res, ok
+
+        # No-pool fallback: CodeAgent researches YouTube content via DuckDuckGo.
+        # Tasks are (query, category) tuples since 2026-04-27.
         if task is None:
-            if self.video_pool:
-                vid = random.choice(self.video_pool)
-                task = f"Watch the YouTube video at https://www.youtube.com/watch?v={vid} and browse around the page."
-                options_preview = self.video_pool[:5]
-                pool_size = len(self.video_pool)
-                selection_method = "phase_video_pool"
-            else:
-                # Tasks are (query, category) tuples since 2026-04-27. YouTube
-                # does not consume site_weights — flat random over all tasks.
-                task = random.choice(BROWSE_YOUTUBE_TASKS)[0]
-                options_preview = [t for t, _ in BROWSE_YOUTUBE_TASKS[:5]]
-                pool_size = len(BROWSE_YOUTUBE_TASKS)
-                selection_method = "random"
+            task = random.choice(BROWSE_YOUTUBE_TASKS)[0]
             if logger:
                 logger.decision(
                     choice="browse_youtube_task",
-                    options=options_preview,
+                    options=[t for t, _ in BROWSE_YOUTUBE_TASKS[:5]],
                     selected=task,
-                    context=f"Task from {pool_size} available tasks",
-                    method=selection_method
+                    context=f"Task from {len(BROWSE_YOUTUBE_TASKS)} available tasks",
+                    method="random",
                 )
 
         self.category = "video"
