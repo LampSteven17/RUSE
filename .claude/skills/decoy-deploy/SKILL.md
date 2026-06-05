@@ -220,6 +220,13 @@ manifest.target ≠ deploy-type aborts the whole plan.
    `~/.ssh/config`) + PHASE register (return False → abort with
    `return 1`)
 
+Run outcome stamp (2026-06-05): `run_dir/deploy_status.json` is written
+`failed` right after `run_dir.mkdir` and flipped to `ok` only on the final
+clean return (`install_result.rc == 0`). Any phase abort / exception / kill
+leaves it `failed` → `./teardown --decoy --failed` targets it. Runs from
+before 2026-06-05 are unstamped (`unknown`) → not matched; use positional
+teardown or retro-stamp them. See `core/run_status.py` + the `/teardown` skill.
+
 ## Service naming
 
 `{behavior_lowercase}.service` with dots → underscores:

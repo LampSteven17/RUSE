@@ -76,12 +76,14 @@ prints the full list and a single y/N:
 echo n | ./teardown --failed --rampart    # dry-run: prints matches, cancels
 ```
 
-**Instrumentation status:** only **rampart** spinup stamps today
-(`rampart/spinup.py`). DECOY and GHOSTS runs read `unknown` until their
-spinups get the same two `run_status.write_run_status` calls (FAILED right
-after `run_dir.mkdir`, OK right before the final `return 0`) — until then
-`--failed` won't surface their broken runs. Wire them the same way when
-needed and update this skill in the same change.
+**Instrumentation status:** **rampart** (`rampart/spinup.py`) and **decoy**
+(`decoy/spinup.py`, wired 2026-06-05) spinups stamp — FAILED right after
+`run_dir.mkdir`, OK only on the final clean return (decoy gates the OK flip on
+`install_result.rc == 0`). **GHOSTS is still unwired** → ghosts runs read
+`unknown` and `--failed` won't surface their broken runs; wire it the same way
+(same two `run_status.write_run_status` calls) and update this skill in the same
+change. Runs that predate a type's wiring also read `unknown` (e.g. decoy deploys
+from before 2026-06-05) — backfill those (below) or use the positional teardown.
 
 Backfill for runs that predate stamping: classify each run dir and write
 `deploy_status.json`. For rampart, presence of the terminal artifact
