@@ -16,6 +16,7 @@ from ..core.openstack import OpenStack
 from ..core.ssh_config import install_ssh_config
 from ..core.feedback import generate_feedback_config
 from ..core.vm_naming import make_vm_prefix
+from ..core import run_status
 from ..core.deploy_steps import (
     ssh_connectivity_test, register_phase, neighborhood_extra_ips,
 )
@@ -95,6 +96,12 @@ def run_decoy_spinup(
     # Create run directory
     run_dir.mkdir(parents=True, exist_ok=True)
     _copy_file(config_file, run_dir / "config.yaml")
+
+    # Stamp FAILED up front; flipped to OK only at the final clean return below.
+    # Any early return (provision/install/distribute/register abort), exception,
+    # or kill leaves this run marked failed — which is what `./teardown --failed`
+    # targets. See core/run_status.py.
+    run_status.write_run_status(run_dir, run_status.FAILED, "in_progress")
 
     runner = AnsibleRunner(deploy_dir / "logs")
 
@@ -291,6 +298,8 @@ def run_decoy_spinup(
     output.info(f"DONE: {provisioned}/{vm_count} VMs deployed")
     output.info(f"  Log: {install_result.log_path}")
 
+    if install_result.rc == 0:
+        run_status.write_run_status(run_dir, run_status.OK, "deploy complete")
     return install_result.rc
 
 
