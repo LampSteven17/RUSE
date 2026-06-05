@@ -194,19 +194,20 @@ class ScriptedServiceScheduler:
     """Cron-style scheduler for scripted protocol probes.
 
     Reads diversity.background_services.{name}_enabled booleans from
-    PHASE config. On maybe_run(), fires any service whose schedule
-    matches the current UTC minute and that hasn't yet fired this minute.
+    PHASE config. On maybe_run(), fires any enabled service whose most
+    recent scheduled minute this hour is at or before the current minute
+    and hasn't yet fired this hour (catch-up semantics — robust to a loop
+    that sleeps past the exact scheduled minute).
 
-    Behavior is fully deterministic given the wall clock — same seed,
-    same minute → same probes fire. (Probes' own random behavior, if any,
-    flows through the seeded module-level random state.)
+    Each (service, hour-slot) fires at most once. (Probes' own random
+    behavior, if any, flows through the seeded module-level random state.)
     """
 
     def __init__(self, config: Optional[dict] = None, logger=None):
         self.logger = logger
         self.enabled: dict[str, bool] = {}
-        # last_fire_min tracks per-service the most recent (utc_hour, minute)
-        # we fired in, so re-entering the same minute doesn't re-fire.
+        # _last_fire_key tracks per-service the most recent (utc_hour, slot)
+        # we fired, so re-ticking the same hour-slot doesn't re-fire.
         self._last_fire_key: dict[str, Optional[tuple]] = {}
         for name in PROBE_REGISTRY:
             self.enabled[name] = False
@@ -228,22 +229,29 @@ class ScriptedServiceScheduler:
         return any(self.enabled.values())
 
     def maybe_run(self) -> int:
-        """Fire any enabled services whose schedule matches the current minute.
+        """Fire any enabled service whose latest scheduled slot this hour is due.
 
         Returns the number of probes fired this call. Safe to call many
-        times per minute — dedup ensures each (service, minute) pair runs
-        at most once per pass through that minute.
+        times per minute — dedup on (service, hour-slot) ensures each slot
+        runs at most once per hour even across repeated/late ticks.
         """
         if not self._any_enabled():
             return 0
         now = datetime.now(timezone.utc)
-        key = (now.hour, now.minute)
         fired = 0
         for name, (fn, schedule) in PROBE_REGISTRY.items():
             if not self.enabled[name]:
                 continue
-            if now.minute not in schedule:
+            # Catch-up semantics: fire the most recent scheduled minute at
+            # or before the current minute this hour. A sleepy loop (long
+            # inter-task / inter-cluster sleeps) rarely ticks exactly on a
+            # scheduled minute, so exact-minute matching missed the 2-min/hr
+            # window entirely. Firing the latest due-but-unfired slot keeps
+            # the per-hour cadence without bursting all missed slots at once.
+            due = [m for m in schedule if m <= now.minute]
+            if not due:
                 continue
+            key = (now.hour, max(due))
             if self._last_fire_key[name] == key:
                 continue
             try:
