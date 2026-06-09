@@ -17,7 +17,7 @@ is in CLAUDE.md.
 | Outputs | `deployments/decoy-{controls,feedback-{preset}-{dataset}-{scope}}/runs/{run_id}/` (inventory.ini, ssh_config_snippet.txt, deployment_type), per-VM `/opt/ruse/deployed_sups/{key}/`. `{preset}` = sanitized full-ns token incl. version (`stdctrlsv712`), so different lineages/versions don't collide |
 | Manifest | `manifest.json` in PHASE source; loaded via `core/feedback.py::load_manifest`, validated against deploy type via `validate_manifest_target` |
 | Upstream | PHASE feedback engine (`feedback_engine.baseline` writes `controls/`; `feedback_engine.decoy_generator` writes `{dataset}/`) |
-| Downstream | PHASE Zeek pipeline (`PHASE.py --decoy`), reads `experiments.json` for active deploys (carries `dataset`/`scope`/`gpu_tier` descriptive fields since 2026-05-22, + `preset` sanitized-namespace token since 2026-06; see CLAUDE.md "experiments.json schema") |
+| Downstream | PHASE Zeek pipeline (`PHASE.py --decoy`), reads `experiments.json` for active deploys (carries `dataset`/`scope`/`gpu_tier` descriptive fields since 2026-05-22, + `preset` sanitized-namespace token since 2026-06; see CLAUDE.md "experiments.json schema"). **Dredge is a HISTORICAL op — it iterates EVERY decoy entry (active + torn-down), not just live ones**, re-dredging stored Zeek conn.log bounded by `[start_date, end_date]`. **Gotcha:** `stage2_dredge.py` does `exit 1` (aborts the WHOLE run) when an entry's window yields 0 conn rows. A same-day deploy/teardown (`start_date == end_date`, no traffic captured) leaves a 0-row entry that kills the pipeline. RUSE-side fix = remove the invalid entry from `experiments.json` (back it up first; the key is RUSE-owned state, NOT PHASE); durable fix = PHASE skip-on-empty in `stage2_dredge.py` (PHASE-side, can't touch). Confirmed 2026-06-07: a June-3 `decoy-feedback-expctrlsv716-vt50g-all` (0-day span) aborted PHASE at [14/26]; removed it, run cleared. |
 | Narrow exceptions | C0 (no install — bare Ubuntu, only provisioned + SSH-tested); M0 (upstream MITRE pyhuman, crash-loops on Linux by design — `os.startfile()` Windows-only) |
 
 ## Topology
@@ -499,7 +499,8 @@ Loader (`load_behavioral_config`) → consumers:
 | `behavior.enable_whois` / `enable_download` | (read via `load_workflow_gates`) | Workflow registration |
 | `behavior.keep_alive_probability` | `behavior_modifiers` | MCHP `BrowseWeb.keep_alive_probability` |
 | `behavior.max_steps` | `behavior_modifiers` | BU/Smol per-workflow max_steps |
-| `diversity.background_services.*` | `diversity_injection` | `BackgroundServiceGenerator` (D4) |
+| `diversity.background_services.*` | `diversity_injection` | `BackgroundServiceGenerator` (D4) — `maybe_generate` |
+| `diversity.background_services.{name}_enabled` | (read by `ScriptedServiceScheduler`) | Phase-3 scripted protocol probes (`scripted_services.py`: smb/ldap/imap/doh/mdns/websocket/failed_conn). `maybe_run` fires from the in-window cluster loop (`emulation_loop.py:583`, same gating as D4) — **never outside an active window**. Per-probe cron slots (e.g. `failed_conn` :17/:47). **Catch-up scheduling (2026-06-05, commit `26c2489`):** fires the latest slot at/before the current minute not yet fired this hour, so a sleepy loop that misses the exact minute still fires; the prior exact-minute match fired 0× over 8.5h. `[scripted-svc] {name} ok= state= latency_ms=` → stdout/systemd.log (+ jsonl `info`); `[scripted-svc] {name}=enabled` config marker is jsonl-only. |
 | `diversity.workflow_rotation.*` | `diversity_injection` | D2 rotation in `emulation_loop` |
 | `diversity.topology_mimicry.inbound_*_per_hour` | `diversity_injection` | Neighborhood sidecar daemon |
 | `_metadata.mode` | `mode` | Baseline short-circuit in `_reload_behavioral_config` |
