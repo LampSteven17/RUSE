@@ -41,13 +41,16 @@ hour — per-event printing at up to 120/hr/service would flood it.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import socket
 import ssl
+import struct
 import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
@@ -67,6 +70,98 @@ QUIC_TIMEOUT_SECS = 10.0
 # Defensive ceiling on per-service hourly events. PHASE caps its vector at
 # 120; this only guards against a malformed emission.
 MAX_EVENTS_PER_HOUR = 150
+
+# ─── Responder contract (see service_responder.py) ───────────────────────
+# Empirically (human CPTC9_24 Zeek data) Zeek labels smb/splunk by DPD on
+# real protocol bytes, NOT by port: a SYN to a dead fake-infra IP yields
+# conn_state=S0 / service="-" and does nothing for the gap. So when a
+# responder is deployed (on the neighborhood sidecar), the smb/splunk/udp
+# generators target IT and exchange real bytes → completed flows Zeek
+# classifies. Absent a responder, they fall back to fake-infra (volume
+# only, unclassified) so the field is still a no-crash no-op.
+#
+# The sidecar IP is delivered post-provision (deploy phase 5) to this file;
+# read each reload tick. Ports/payloads are shared with service_responder.py
+# here so the two ends can't drift.
+RESPONDER_CONFIG_PATH = Path("/etc/ruse-service-mix/responder.json")
+
+SMB_PORT = 445
+SPLUNK_PORT = 9997
+# A small fixed set of high UDP ports the responder binds + the generator
+# targets. Generic/service-less by design (PHASE relabels service-less UDP
+# → "udp"); the responder echoes so the flow is bidirectional like the human.
+SERVICE_MIX_UDP_PORTS = [40000, 40001, 40002, 40003]
+
+
+def _build_smb_negotiate_response() -> bytes:
+    """Minimal but well-formed SMB1 NEGOTIATE response (NT LM 0.12 selected).
+
+    The responder sends this so the smb flow carries resp bytes. Zeek
+    confirms service=smb on the ORIGINATOR's \\xffSMB negotiate over the
+    established connection, so this just needs to be SMB-shaped. (Exact
+    byte-size tuning vs the human ~400B resp is a deferred follow-up — pull
+    the per-conn distribution from the raw dredge to size it.)"""
+    hdr = (
+        b"\xffSMB"            # protocol id
+        b"\x72"               # SMB_COM_NEGOTIATE
+        b"\x00\x00\x00\x00"   # status = OK
+        b"\x88"               # flags: reply | case-insensitive
+        b"\x01\x28"           # flags2
+        b"\x00\x00"           # pid-high
+        b"\x00\x00\x00\x00\x00\x00\x00\x00"   # security signature (8 bytes)
+        b"\x00\x00"           # reserved
+        b"\x00\x00"           # tid
+        b"\xfe\xff"           # pid-low
+        b"\x00\x00"           # uid
+        b"\x00\x00"           # mid
+    )
+    params = b"".join([
+        struct.pack("<B", 17),          # word count (NT LM 0.12)
+        struct.pack("<H", 0),           # selected dialect index
+        struct.pack("<B", 3),           # security mode
+        struct.pack("<H", 32),          # max mpx count
+        struct.pack("<H", 1),           # max VCs
+        struct.pack("<I", 16644),       # max buffer size
+        struct.pack("<I", 65536),       # max raw size
+        struct.pack("<I", 0),           # session key
+        struct.pack("<I", 0x8001F3FD),  # capabilities
+        struct.pack("<Q", 0),           # system time
+        struct.pack("<h", 0),           # server timezone
+        struct.pack("<B", 0),           # challenge/key length
+    ])
+    body = params + struct.pack("<H", 0)   # byte count = 0
+    smb = hdr + body
+    return b"\x00" + struct.pack(">I", len(smb))[1:] + smb   # NetBIOS framing
+
+
+SMB_NEGOTIATE_RESPONSE = _build_smb_negotiate_response()
+
+# Splunk forwarder S2S "cooked mode" preamble the generator sends, and the
+# indexer-side ack the responder returns. Splunk has NO native Zeek analyzer
+# — the conn.log "splunk" label comes from a sensor-side signature we can't
+# read from here, so this path is SENSOR-VALIDATED-ONLY (no local Zeek gate).
+# These strings mirror the real forwarder S2S signature shape; refine to the
+# sensor's exact signature once it's confirmed on the wire.
+SPLUNK_S2S_PREAMBLE = (
+    b"--splunk-cooked-mode-v3--\n"
+    b"_serverName=ruse-forwarder\n"
+    b"_serverGUID=00000000-0000-0000-0000-000000000000\n"
+    + b"_raw=" + b"x" * 2048 + b"\n"        # bulk so orig_bytes is nontrivial
+)
+SPLUNK_ACK_PAYLOAD = b"--splunk-cooked-mode-v3--\n_ack=1\n" + b"\x00" * 1024
+
+
+def _read_responder_ip() -> Optional[str]:
+    """Read the sidecar responder IP delivered to this VM, or None.
+
+    Absent file (no responder for this deploy, or not yet delivered) →
+    None → generators fall back to fake-infra. Cheap; called each reload."""
+    try:
+        data = json.loads(RESPONDER_CONFIG_PATH.read_text())
+    except (OSError, ValueError):
+        return None
+    ip = data.get("responder_ip")
+    return ip if isinstance(ip, str) and ip else None
 
 
 def _local_ip() -> Optional[str]:
@@ -142,14 +237,23 @@ def _tcp_send(host: str, port: int, payload: bytes = b"") -> Tuple[bool, str, in
         return False, "S0", int((time.monotonic() - start) * 1000)
 
 
-def _udp_send(host: str, port: int, payload: bytes) -> Tuple[bool, str, int]:
-    """One UDP datagram — Zeek logs a unidirectional flow either way."""
+def _udp_send(host: str, port: int, payload: bytes,
+              expect_reply: bool = False) -> Tuple[bool, str, int]:
+    """One UDP datagram. With expect_reply (responder mode) wait briefly for
+    the echo so Zeek records a bidirectional flow (human udp carries resp
+    bytes); without it, a unidirectional send (fake-infra fallback)."""
     start = time.monotonic()
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            s.settimeout(0.5)
+            s.settimeout(1.0)
             s.sendto(payload, (host, port))
+            if expect_reply:
+                try:
+                    s.recvfrom(4096)
+                    return True, "SF", int((time.monotonic() - start) * 1000)
+                except (socket.timeout, OSError):
+                    return True, "unidir", int((time.monotonic() - start) * 1000)
             return True, "unidir", int((time.monotonic() - start) * 1000)
         finally:
             s.close()
@@ -196,11 +300,14 @@ def _gen_smb(sched) -> Tuple[bool, str, int, str, int, str]:
 
 
 def _gen_splunk(sched) -> Tuple[bool, str, int, str, int, str]:
-    # 9997-weighted (forwarder→indexer dominates real splunk traffic);
-    # 8089 mgmt REST appears occasionally. Bare connect — a splunk
-    # forwarder opens TCP and waits for the server banner.
+    # Forwarder→indexer S2S on 9997 (dominates real splunk traffic). Send the
+    # cooked-mode preamble so a completed flow carries forwarder bytes; the
+    # responder acks + closes clean (SF, like the human's 100% SF). Splunk has
+    # no native Zeek analyzer — the label is sensor-signature-driven, so this
+    # path is sensor-validated-only. Against fake-infra (no responder) this is
+    # still S0 and won't classify; that's expected until the responder lands.
     host, port = sched.pick_infra("splunk")
-    ok, state, ms = _tcp_send(host, port)
+    ok, state, ms = _tcp_send(host, port, SPLUNK_S2S_PREAMBLE)
     return ok, state, ms, host, port, "tcp"
 
 
@@ -213,10 +320,13 @@ def _gen_ntp(sched) -> Tuple[bool, str, int, str, int, str]:
 def _gen_udp(sched) -> Tuple[bool, str, int, str, int, str]:
     # Generic service-less UDP flow: random small binary payload to a
     # stable (host, high-port) pair. Varied size so flows aren't uniform.
+    # With a responder, wait for the echo so the flow is bidirectional like
+    # the human udp rows; otherwise unidirectional to fake-infra.
     host, port = sched.pick_infra("udp")
     size = sched.rng.randint(32, 512)
     payload = bytes(sched.rng.getrandbits(8) for _ in range(size))
-    ok, state, ms = _udp_send(host, port, payload)
+    ok, state, ms = _udp_send(host, port, payload,
+                              expect_reply=sched.has_responder)
     return ok, state, ms, host, port, "udp"
 
 
@@ -325,7 +435,13 @@ class ServiceMixScheduler:
         # break seed-replay. Jitter offsets the PHASE seed so the mix
         # stream is decorrelated from workflow selection.
         self.rng = random.Random(((seed if seed is not None else 0) ^ 0x5E12C3A1))
+        # Responder targeting (sidecar) when delivered; else fake-infra. Read
+        # at construction and re-checked each update_config (reload tick), so a
+        # responder.json delivered post-start (deploy phase 5) is picked up
+        # without a service restart.
+        self._responder_ip: Optional[str] = None
         self._infra = derive_fake_infra(dataset)
+        self._refresh_responder()
         self._lock = threading.Lock()
         self._targets: Dict[str, List[int]] = {}
         self._config_gen = 0
@@ -339,6 +455,7 @@ class ServiceMixScheduler:
 
     def update_config(self, bg_config: dict) -> None:
         """Swap targets from the latest background_services dict."""
+        self._refresh_responder()
         smt = (bg_config or {}).get("service_mix_targets") or {}
         raw = smt.get("targets") or {}
         clean: Dict[str, List[int]] = {}
@@ -370,6 +487,36 @@ class ServiceMixScheduler:
 
     def stop(self) -> None:
         self._stop_evt.set()
+
+    @property
+    def has_responder(self) -> bool:
+        return self._responder_ip is not None
+
+    def _refresh_responder(self) -> None:
+        """Re-read the delivered responder IP and (re)point smb/splunk/udp at
+        it. When the IP changes (incl. first delivery), rebuild the infra
+        map so generators target the sidecar responder with the contracted
+        ports; falls back to fake-infra when no responder is configured."""
+        ip = _read_responder_ip()
+        if ip == self._responder_ip:
+            return
+        self._responder_ip = ip
+        if ip:
+            self._infra = {
+                "smb":    [(ip, SMB_PORT)],
+                "splunk": [(ip, SPLUNK_PORT)],
+                "udp":    [(ip, p) for p in SERVICE_MIX_UDP_PORTS],
+                # ntp has no responder listener; keep a fake-infra-style target
+                # (cptc9 has no ntp service-mix target, so this is unused there).
+                "ntp":    [(ip, 123)],
+            }
+            print(f"[service-mix] responder active → {ip} "
+                  f"(smb:{SMB_PORT} splunk:{SPLUNK_PORT} udp:{SERVICE_MIX_UDP_PORTS})",
+                  flush=True)
+            if self._logger:
+                self._logger.info(f"[service-mix] responder active → {ip}")
+        else:
+            self._infra = derive_fake_infra(self._dataset)
 
     def pick_infra(self, service: str) -> Tuple[str, int]:
         return self.rng.choice(self._infra[service])

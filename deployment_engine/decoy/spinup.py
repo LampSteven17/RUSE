@@ -255,20 +255,47 @@ def run_decoy_spinup(
     #   (b) we gate on topology_mimicry rates existing in the PHASE source.
     # See docs/topology-mimicry.md for design rationale.
     if effective_source:
+        import json as _json
         sups_json = _synthesize_neighborhood_config(
             Path(effective_source), inventory_path, run_dir,
         )
-        if sups_json is not None:
-            rc = _provision_and_install_neighborhood(
+        # The sidecar hosts BOTH the topology daemon and the service-mix
+        # responder (smb/splunk/udp). Provision it if EITHER is needed.
+        needs_responder = _needs_service_responder(
+            Path(effective_source), inventory_path,
+        )
+        if sups_json is None and needs_responder:
+            # No topology layer, but service-mix needs a responder host —
+            # provision the sidecar anyway with an idle neighborhood config so
+            # install-neighborhood's sups.json copy succeeds (daemon sits idle).
+            (run_dir / "neighborhood-sups.json").write_text(
+                _json.dumps({"sups": []}, indent=2) + "\n")
+            output.info("  service_mix_targets present — provisioning sidecar "
+                        "for the responder (no topology_mimicry)")
+        if sups_json is not None or needs_responder:
+            rc, sidecar_ip = _provision_and_install_neighborhood(
                 runner, dep_id, run_dir, deploy_dir,
             )
             if rc != 0:
                 output.error("")
                 output.error("ABORTING: neighborhood sidecar failed.")
-                output.error("Topology-mimicry layer is not active — feedback deploy "
-                             "would be running without the network-layer feature.")
+                output.error("Topology/service-mix network layer is not active — "
+                             "feedback deploy would run without it.")
                 output.error(f"  Tear down with: ./teardown {config_name}-{run_id}")
                 return 1
+            # Deliver the responder IP to every SUP so service_mix targets the
+            # sidecar (completed flows Zeek classifies) instead of dead fake-
+            # infra. Fail-loud: a delivered-but-unreachable responder is worse
+            # than none (silent S0 noise), so abort if distribution fails.
+            if needs_responder and sidecar_ip:
+                rc = _distribute_service_responder(
+                    runner, inventory_path, run_dir, sidecar_ip,
+                )
+                if rc != 0:
+                    output.error("")
+                    output.error("ABORTING: service-mix responder IP distribution failed.")
+                    output.error(f"  Tear down with: ./teardown {config_name}-{run_id}")
+                    return 1
 
     # Post-deploy: SSH config + PHASE registration
     snippet_path = run_dir / "ssh_config_snippet.txt"
@@ -669,11 +696,72 @@ def _synthesize_neighborhood_config(behavior_source: Path, inventory_path: Path,
     return cfg
 
 
+def _needs_service_responder(behavior_source: Path, inventory_path: Path) -> bool:
+    """True if any SUP's behavior.json declares a service_mix_targets entry
+    for a service that needs an on-network responder (smb/splunk/udp).
+
+    Mirrors _synthesize_neighborhood_config's inventory walk + baseline-key
+    derivation so the two gates resolve the same behavior.json files.
+    """
+    import json
+    responder_services = {"smb", "splunk", "udp"}
+    for line in inventory_path.read_text().splitlines():
+        m = re.match(r'^(\S+)\s+ansible_host=(\S+)\s+sup_behavior=(\S+)', line)
+        if not m:
+            continue
+        _name, _ip, behavior = m.group(1), m.group(2), m.group(3)
+        if behavior in ("C0", "M0"):
+            continue
+        baseline_version = "1" if behavior[0] == "M" else "0"
+        baseline = re.sub(r'^([A-Z])\d+', r'\g<1>' + baseline_version, behavior)
+        bjson = _resolve_sup_behavior_json(behavior_source, behavior, baseline)
+        if bjson is None:
+            continue
+        try:
+            data = json.loads(bjson.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        targets = (
+            (((data.get("diversity") or {}).get("background_services") or {})
+             .get("service_mix_targets") or {}).get("targets") or {}
+        )
+        if responder_services & set(targets.keys()):
+            return True
+    return False
+
+
+def _distribute_service_responder(
+    runner: AnsibleRunner, inventory_path: Path, run_dir: Path, sidecar_ip: str,
+) -> int:
+    """Write service-responder.json and push it to every SUP so service_mix
+    targets the sidecar responder. Returns 0 on success, non-zero on failure."""
+    import json
+    cfg_path = run_dir / "service-responder.json"
+    cfg_path.write_text(json.dumps({"responder_ip": sidecar_ip}) + "\n")
+    output.info("")
+    output.info("--- Distributing service-mix responder IP to SUPs ---")
+    output.info(f"  responder_ip: {sidecar_ip}")
+    result = runner.run_playbook(
+        "decoy/distribute-service-responder.yaml",
+        inventory_path,
+        extra_vars={"responder_src": str(cfg_path)},
+        on_event=default_event_handler,
+    )
+    if result.rc != 0:
+        output.error(f"  FAIL: distribute-service-responder.yaml rc={result.rc}")
+        output.error(f"  Log: {result.log_path}")
+        return 1
+    output.info("  Responder IP delivered to all SUPs")
+    return 0
+
+
 def _provision_and_install_neighborhood(
     runner: AnsibleRunner, dep_id: str, run_dir: Path, deploy_dir: Path,
-) -> int:
+) -> tuple[int, str]:
     """Provision 1 neighborhood VM, write neighborhood-inventory.ini, run
-    install-neighborhood.yaml. Returns 0 on success, non-zero on failure."""
+    install-neighborhood.yaml. Returns (0, vm_ip) on success, (rc, "") on
+    failure. The sidecar runs both the topology daemon and the service-mix
+    responder; vm_ip is needed by the caller to point SUPs at the responder."""
     import subprocess
     import shlex
     import json
@@ -710,7 +798,7 @@ def _provision_and_install_neighborhood(
     r = subprocess.run(["bash", "-c", create_cmd], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         output.error(f"  FAIL: VM create: {(r.stderr or '').strip()[:200]}")
-        return 1
+        return 1, ""
     output.info(f"  [{time.strftime('%H:%M:%S')}]    OK  {vm_name} provisioned")
 
     # Wait for ACTIVE
@@ -726,11 +814,11 @@ def _provision_and_install_neighborhood(
             break
         if status == "ERROR":
             output.error(f"  FAIL: neighborhood VM in ERROR state")
-            return 1
+            return 1, ""
         time.sleep(5)
     else:
         output.error(f"  FAIL: neighborhood VM never reached ACTIVE ({status})")
-        return 1
+        return 1, ""
 
     # Get IP
     ri = subprocess.run(
@@ -743,7 +831,7 @@ def _provision_and_install_neighborhood(
     vm_ip = (ri.stdout or "").strip().splitlines()[0] if ri.stdout.strip() else ""
     if not vm_ip:
         output.error(f"  FAIL: could not resolve IP for {vm_name}")
-        return 1
+        return 1, ""
     output.info(f"  [{time.strftime('%H:%M:%S')}]    OK  {vm_name} => {vm_ip}")
 
     # Write inventory
@@ -780,7 +868,7 @@ def _provision_and_install_neighborhood(
         time.sleep(5)
     if not ssh_ok:
         output.error(f"  FAIL: SSH never reachable on {vm_name}")
-        return 1
+        return 1, ""
 
     # Add to ~/.ssh/config so operator can SSH by name
     snippet_path = run_dir / "neighborhood-ssh-snippet.txt"
@@ -813,7 +901,7 @@ def _provision_and_install_neighborhood(
     if result.rc != 0:
         output.error(f"  FAIL: install-neighborhood.yaml rc={result.rc}")
         output.error(f"  Log: {result.log_path}")
-        return 1
+        return 1, ""
 
     output.info(f"  Neighborhood sidecar active at {vm_ip}")
-    return 0
+    return 0, vm_ip

@@ -1,0 +1,56 @@
+---
+# Ansible Playbook: distribute-service-responder.yaml
+# Deliver the per-deploy service-mix responder IP to every SUP.
+#
+# The neighborhood sidecar runs the service-mix responder (ruse-service-
+# responder) on TCP 445/9997 + UDP echo ports. The SUPs' service_mix_targets
+# generators must target it (not a dead fake-infra IP) so the smb/splunk/udp
+# flows COMPLETE and Zeek classifies them. The sidecar IP isn't known until
+# it's provisioned (deploy phase 5, after distribute), so it's pushed here
+# as /etc/ruse-service-mix/responder.json. service_mix.py re-reads it each
+# reload tick — no SUP restart needed; generators switch from fake-infra to
+# the responder at the next cluster boundary.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini distribute-service-responder.yaml \
+#       -e responder_src=runs/<run>/service-responder.json
+#
+# C0/M0 controls have no service that reads it; the file is harmless there,
+# but we skip them anyway to mirror behavior-config distribution.
+
+- name: Distribute service-mix responder config
+  hosts: sup_hosts
+  become: yes
+  strategy: free
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ConnectTimeout=30 -o IdentitiesOnly=yes'
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    responder_config_dir: /etc/ruse-service-mix
+    responder_src: ""
+
+  tasks:
+    - name: Skip controls (C0, M0)
+      meta: end_host
+      when: sup_behavior in ['C0', 'M0']
+
+    - name: Fail if responder_src not provided
+      fail:
+        msg: "responder_src extra-var is required (path to service-responder.json)"
+      when: responder_src | length == 0
+      run_once: true
+
+    - name: Ensure responder config dir
+      file:
+        path: "{{ responder_config_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Deliver responder.json
+      copy:
+        src: "{{ responder_src }}"
+        dest: "{{ responder_config_dir }}/responder.json"
+        mode: '0644'
+
+    - name: Assert responder.json present + parses
+      shell: "python3 -c \"import json,sys; ip=json.load(open('{{ responder_config_dir }}/responder.json')).get('responder_ip'); sys.exit(0 if ip else 1)\""
+      changed_when: false

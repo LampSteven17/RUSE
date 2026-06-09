@@ -119,6 +119,71 @@
         state: restarted
         daemon_reload: yes
 
+    # ── service-mix responder (PHASE service_mix_targets v1) ──────────────
+    # Answers the SUPs' smb/splunk/udp generators so the flows COMPLETE and
+    # exchange protocol bytes → Zeek classifies them (a SYN to a dead IP is
+    # S0/service="-" and useless). Runs as root for the privileged 445 bind.
+    # Idle-safe: pure listener, emits nothing unless a SUP connects, so it is
+    # installed on every sidecar unconditionally.
+    - name: Create service-mix responder systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=RUSE Service-Mix Responder Daemon
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/python3 -m common.network.service_responder --log /var/log/ruse-service-responder.jsonl
+          WorkingDirectory={{ ruse_path }}/decoys
+          Environment=PYTHONUNBUFFERED=1
+          Environment=PYTHONPATH={{ ruse_path }}/decoys
+          Restart=always
+          RestartSec=15
+          StandardOutput=append:/var/log/ruse-service-responder.systemd.log
+          StandardError=append:/var/log/ruse-service-responder.systemd.log
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/ruse-service-responder.service
+        mode: '0644'
+
+    - name: Enable + start ruse-service-responder.service
+      systemd:
+        name: ruse-service-responder
+        enabled: yes
+        state: restarted
+        daemon_reload: yes
+
+    - name: Verify service-responder is active
+      shell: systemctl is-active ruse-service-responder
+      register: responder_status
+      changed_when: false
+      failed_when: false
+
+    - name: Assert service-responder is active
+      fail:
+        msg: >-
+          ruse-service-responder is '{{ responder_status.stdout }}' on
+          {{ inventory_hostname }} (expected: active). Check:
+          /var/log/ruse-service-responder.systemd.log
+      when: responder_status.stdout != "active"
+
+    - name: Confirm responder is listening on 445 + 9997
+      shell: "ss -ltn | grep -Ec ':(445|9997)\\b'"
+      register: responder_listen
+      changed_when: false
+      failed_when: false
+
+    - name: Assert responder bound both TCP ports
+      fail:
+        msg: >-
+          ruse-service-responder bound {{ responder_listen.stdout }} of 2
+          expected TCP ports (445, 9997) on {{ inventory_hostname }}.
+          Check /var/log/ruse-service-responder.systemd.log
+      when: (responder_listen.stdout | default('0') | trim | int) < 2
+
     - name: Verify neighborhood service is active
       shell: systemctl is-active ruse-neighborhood
       register: neighborhood_status
