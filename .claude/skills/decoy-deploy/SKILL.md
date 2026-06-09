@@ -501,6 +501,7 @@ Loader (`load_behavioral_config`) → consumers:
 | `behavior.max_steps` | `behavior_modifiers` | BU/Smol per-workflow max_steps |
 | `diversity.background_services.*` | `diversity_injection` | `BackgroundServiceGenerator` (D4) — `maybe_generate` |
 | `diversity.background_services.{name}_enabled` | (read by `ScriptedServiceScheduler`) | Phase-3 scripted protocol probes (`scripted_services.py`: smb/ldap/imap/doh/mdns/websocket/failed_conn). `maybe_run` fires from the in-window cluster loop (`emulation_loop.py:583`, same gating as D4) — **never outside an active window**. Per-probe cron slots (e.g. `failed_conn` :17/:47). **Catch-up scheduling (2026-06-05, commit `26c2489`):** fires the latest slot at/before the current minute not yet fired this hour, so a sleepy loop that misses the exact minute still fires; the prior exact-minute match fired 0× over 8.5h. `[scripted-svc] {name} ok= state= latency_ms=` → stdout/systemd.log (+ jsonl `info`); `[scripted-svc] {name}=enabled` config marker is jsonl-only. |
+| `diversity.background_services.service_mix_targets` | (read by `ServiceMixScheduler`) | **service_mix_targets v1 (2026-06)** — own-thread background generators for Zeek service types no workflow can produce (`udp`/`splunk`/`smb`/`ntp`/`http2`/`quic`). `targets.{service}.suggested_events_per_hour[h]` (UTC, human-anchored, ≤120, NOT rescaled) drives a jittered per-hour plan in `common/network/service_mix.py`. **NOT window-gated** — the diurnal shape lives in the vector (near-zero off hours), so it runs across all 24h regardless of `active_minute_windows`. **Field OMITTED → clean no-op** (scheduler stays threadless; feedback-only since `diversity_injection` is never set for controls). **Precedence:** a service named here WINS over the legacy knob — `BackgroundServiceGenerator` zeroes `ntp_checks_per_day`/`dns_per_hour`/`http_head_per_hour` and `ScriptedServiceScheduler` force-disables `{name}_enabled` for any covered service (via `service_mix.covered_services`). **Destinations:** smb/splunk/ntp/udp → deploy-stable fake-infra 10/8 IPs seeded from `_metadata.dataset` (same across the fleet = shared-infra topology); http2/quic → internet ALPN/QUIC handshakes. **Unknown service key → one `[WARNING]`, skip** (forward-compat). Each firing → jsonl `background_service` event (`service`/`host`/`port`/`proto`/`ok`/`conn_state`/`latency_ms`). `quic` needs `aioquic` (added to INSTALL_SUP.sh all 3 brains); missing → warn-once skip. systemd.log gets one `[service-mix] hour=HH plan:`/`fired:` line per hour, not per-event. |
 | `diversity.workflow_rotation.*` | `diversity_injection` | D2 rotation in `emulation_loop` |
 | `diversity.topology_mimicry.inbound_*_per_hour` | `diversity_injection` | Neighborhood sidecar daemon |
 | `_metadata.mode` | `mode` | Baseline short-circuit in `_reload_behavioral_config` |
@@ -518,10 +519,11 @@ contract), `session_id` (8 hex, seed-derived → deterministic across replays),
 `agent_type` (config key), `event_type`, optional `workflow`, `details`.
 None values omitted.
 
-**17 event types**: `session_{start,success,fail,end}`,
+**18 event types**: `session_{start,success,fail,end}`,
 `workflow_{start,end}`, `step_{start,success,error}`,
 `llm_{request,response,error}`, `decision`, `timing_delay`, `warning`, `info`,
-`network_sample`. PHASE-side consumers and the DuckDB collection
+`network_sample`, `background_service` (service_mix_targets generator
+firings, 2026-06). PHASE-side consumers and the DuckDB collection
 (`/mnt/AXES2U1/SUP_LOGS/sup-logs-<exp>.duckdb`) read these directly.
 
 `network_sample` (2026-06-01) is the **representative traffic signal** — emitted

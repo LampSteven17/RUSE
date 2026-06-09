@@ -49,6 +49,12 @@ class BehavioralConfig:
     # distinct RNG. None means PHASE didn't ship a seed; CLI default applies.
     seed: Optional[int] = None
 
+    # _metadata.dataset (feedback only). Anchors deploy-stable derivations —
+    # every SUP in a deploy shares it, so the service-mix fake-infra
+    # endpoints come out identical across the fleet (shared-infrastructure
+    # topology, not per-SUP scatter).
+    dataset: Optional[str] = None
+
     # Window contract — present in BOTH shapes.
     # UTC minute-of-day [start, end) half-open ranges. Feedback emits 5–15
     # windows; controls emits a single 60-minute slot.
@@ -434,6 +440,7 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         download_url_pool = content.get("download_url_pool") or None
         whois_domain_pool = content.get("whois_domain_pool") or None
 
+        fc.dataset = metadata.get("dataset")
         fc.timing_profile = timing or None
         fc.variance_injection = timing.get("variance")
         fc.workflow_weights = content.get("workflow_weights")

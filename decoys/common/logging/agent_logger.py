@@ -63,6 +63,7 @@ class EventType(str, Enum):
 
     # Telemetry events
     NETWORK_SAMPLE = "network_sample"  # per-minute OS-level outbound conn volume
+    BACKGROUND_SERVICE = "background_service"  # service_mix_targets generator firing
 
 
 class StepCategory(str, Enum):
@@ -686,6 +687,42 @@ class AgentLogger:
         if details:
             sample.update(details)
         return self._log(EventType.NETWORK_SAMPLE, details=sample)
+
+    def background_service(
+        self,
+        service: str,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        proto: Optional[str] = None,
+        ok: Optional[bool] = None,
+        conn_state: Optional[str] = None,
+        latency_ms: Optional[int] = None,
+        count: int = 1,
+        details: Optional[Dict[str, Any]] = None
+    ) -> LogEvent:
+        """Log one service_mix_targets background-generator firing.
+
+        Distinguishable from workflow traffic so PHASE swimlanes /
+        workflow-effectiveness can attribute these connections separately.
+        `service` is the Zeek service key from the PHASE targets dict;
+        `count` is events represented by this row (always 1 today — kept
+        so consumers can sum(count) without special-casing)."""
+        ev: Dict[str, Any] = {"service": service, "count": count}
+        if host is not None:
+            ev["host"] = host
+        if port is not None:
+            ev["port"] = port
+        if proto is not None:
+            ev["proto"] = proto
+        if ok is not None:
+            ev["ok"] = ok
+        if conn_state is not None:
+            ev["conn_state"] = conn_state
+        if latency_ms is not None:
+            ev["latency_ms"] = latency_ms
+        if details:
+            ev.update(details)
+        return self._log(EventType.BACKGROUND_SERVICE, details=ev)
 
     def warning(self, message: str, details: Optional[Dict[str, Any]] = None) -> LogEvent:
         """Log warning event."""

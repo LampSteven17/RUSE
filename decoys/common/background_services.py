@@ -17,6 +17,12 @@ try:
 except Exception:
     OutboundConnSampler = None
 
+try:
+    # Precedence helper for PHASE service_mix_targets (v1, 2026-06).
+    from common.network.service_mix import covered_services
+except Exception:
+    covered_services = None
+
 
 # Common domains for background DNS lookups (CDN, OS updates, services)
 BACKGROUND_DOMAINS = [
@@ -68,6 +74,7 @@ class BackgroundServiceGenerator:
         self._dns_per_hour = self._config.get("dns_per_hour", [0] * 24)
         self._ntp_per_day = self._config.get("ntp_checks_per_day", 0)
         self._http_per_hour = self._config.get("http_head_per_hour", [0] * 24)
+        self._apply_service_mix_precedence()
         self._enabled = bool(self._config)
         self._dns_count_this_hour = 0
         self._http_count_this_hour = 0
@@ -272,10 +279,29 @@ class BackgroundServiceGenerator:
         except Exception:
             pass
 
+    def _apply_service_mix_precedence(self):
+        """service_mix_targets WINS over the legacy knob for the same
+        service (PHASE v1 contract, 2026-06): a config that ships an "ntp"
+        target gets its rate from ServiceMixScheduler, so the legacy
+        ntp_checks_per_day must not double-generate. Silent — this runs on
+        every reload tick; ServiceMixScheduler logs the takeover once.
+        Deficit-burst is untouched (window-mode volume top-up, a separate
+        mechanism from per-service rates)."""
+        if covered_services is None:
+            return
+        covered = covered_services(self._config)
+        if "ntp" in covered:
+            self._ntp_per_day = 0
+        if "dns" in covered:
+            self._dns_per_hour = [0] * 24
+        if "http" in covered:
+            self._http_per_hour = [0] * 24
+
     def update_config(self, config: dict):
         """Hot-update background service config."""
         self._config = config or {}
         self._dns_per_hour = self._config.get("dns_per_hour", [0] * 24)
         self._ntp_per_day = self._config.get("ntp_checks_per_day", 0)
         self._http_per_hour = self._config.get("http_head_per_hour", [0] * 24)
+        self._apply_service_mix_precedence()
         self._enabled = bool(self._config)
