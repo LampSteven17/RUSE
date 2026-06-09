@@ -39,8 +39,6 @@ from typing import Callable, Optional
 
 import requests
 
-from common.network.service_mix import covered_services
-
 
 # ─── Endpoints (hardcoded; PHASE only toggles on/off) ────────────────────
 
@@ -214,27 +212,12 @@ class ScriptedServiceScheduler:
         for name in PROBE_REGISTRY:
             self.enabled[name] = False
             self._last_fire_key[name] = None
-        self._suppressed_noted: set = set()
         self.update_config(config or {})
 
     def update_config(self, config: dict) -> None:
-        """Re-read enable booleans on PHASE hot-reload.
-
-        Precedence (PHASE service_mix_targets v1, 2026-06): a service
-        named in service_mix_targets gets its rate from
-        ServiceMixScheduler — the {name}_enabled presence hint is
-        force-disabled so the two don't double-generate."""
-        covered = covered_services(config)
+        """Re-read enable booleans on PHASE hot-reload."""
         for name in PROBE_REGISTRY:
-            raw_val = bool(config.get(f"{name}_enabled", False))
-            new_val = raw_val and name not in covered
-            if raw_val and name in covered and name not in self._suppressed_noted:
-                self._suppressed_noted.add(name)
-                msg = (f"[scripted-svc] {name}_enabled suppressed — "
-                       f"service_mix_targets owns '{name}'")
-                print(msg, flush=True)
-                if self.logger:
-                    self.logger.info(msg)
+            new_val = bool(config.get(f"{name}_enabled", False))
             if new_val != self.enabled[name]:
                 if self.logger:
                     self.logger.info(

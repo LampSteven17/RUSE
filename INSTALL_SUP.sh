@@ -737,7 +737,7 @@ install_python_deps() {
     case "$BRAIN" in
         mchp)
             pip install selenium beautifulsoup4 webdriver-manager lxml pyautogui lorem \
-                certifi chardet colorama configparser crayons idna requests urllib3 aioquic
+                certifi chardet colorama configparser crayons idna requests urllib3
             # Add LiteLLM if content augmentation is enabled
             if [[ "$CONTENT" == "llm" ]]; then
                 pip install litellm torch transformers
@@ -747,13 +747,13 @@ install_python_deps() {
             # smolagents pinned: the step-action log parser (_SMOL_ACTION_PATTERNS
             # in common/logging/llm_callbacks.py) keys on this version's tool-call
             # vocabulary. Bumping unpinned silently breaks step logging.
-            pip install 'smolagents==1.25.0' litellm torch transformers datasets numpy pandas requests duckduckgo-search ddgs yt-dlp aioquic
+            pip install 'smolagents==1.25.0' litellm torch transformers datasets numpy pandas requests duckduckgo-search ddgs yt-dlp
             ;;
         browseruse)
             # browser-use pinned: _BU_ACTION_MAP in brains/browseruse/agent.py keys
             # on this version's action names (renamed across the 0.12.x line).
             # Bumping unpinned silently breaks step logging — confirmed 2026-05-25.
-            pip install uv 'browser-use==0.12.7' langchain-ollama playwright aioquic
+            pip install uv 'browser-use==0.12.7' langchain-ollama playwright
             playwright install chromium
             playwright install-deps chromium
             ;;

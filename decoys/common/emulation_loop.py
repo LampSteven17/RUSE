@@ -58,11 +58,6 @@ class BaseEmulationLoop(ABC):
         # Created lazily on first feedback reload; toggled via per-service
         # *_enabled booleans under diversity.background_services.
         self._scripted_svc = None
-        # PHASE service_mix_targets v1 (2026-06) — own-thread generators for
-        # workflow-unreachable Zeek services (udp/splunk/smb/ntp/http2/quic).
-        # Deliberately NOT window-gated: the diurnal shape is encoded in the
-        # per-hour vector itself, so it runs across all 24h on its own thread.
-        self._service_mix = None
         self._recent_workflows = []
         self._cluster_distinct = set()
         self._cluster_remaining = 0
@@ -243,18 +238,6 @@ class BaseEmulationLoop(ABC):
                 self._scripted_svc = ScriptedServiceScheduler(bg_config, self.logger)
             else:
                 self._scripted_svc.update_config(bg_config)
-            # service_mix_targets (v1) — absent field is a clean no-op
-            # (scheduler stays threadless until targets appear). Feedback
-            # docs only by construction: diversity_injection is never set
-            # for controls mode. Suppression of overlapping legacy knobs
-            # happens inside the two consumers above via covered_services().
-            if self._service_mix is None:
-                from common.network.service_mix import ServiceMixScheduler
-                self._service_mix = ServiceMixScheduler(
-                    bg_config, logger=self.logger,
-                    dataset=fc.dataset, seed=fc.seed)
-            else:
-                self._service_mix.update_config(bg_config)
 
         # Push window contract — both modes consume it identically.
         if self._phase_timing is not None:
@@ -709,8 +692,6 @@ class BaseEmulationLoop(ABC):
         if not self._running:
             return
         self._running = False
-        if self._service_mix is not None:
-            self._service_mix.stop()
         label = self._agent_type_label()
         print(f"\nTerminating {label}...")
         if self.logger:
