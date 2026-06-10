@@ -111,8 +111,13 @@
             force: yes
 
         - name: Assert Firefox is resolvable + GTK present (fail loud — no silent dead browser)
+          # NOTE: `set -eu`, NOT `pipefail`. `grep -q` exits on first match and
+          # closes the pipe, so `ldconfig` gets SIGPIPE (rc 141); with pipefail
+          # that intermittently failed the whole task (raced ~1/5 VMs) even
+          # though Firefox was fine. Without pipefail the pipeline's status is
+          # grep's (0 found / 1 missing) — the semantics we actually want.
           shell: |
-            set -euo pipefail
+            set -eu
             test -e /usr/bin/firefox
             /usr/bin/firefox --version
             ldconfig -p | grep -q libgtk-3
