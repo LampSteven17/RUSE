@@ -106,10 +106,13 @@ client defaulted to its own hardcoded `master` while only the API got the ref.
   emits **~zero traffic** — an inert control, not a degraded one. (The v9.0.0
   controls canary `g-1e273` confirmed `libgtk-3` absent + browser-only timeline;
   Firefox was ungated to all clients before waiting for the window.)
-- **memcap drop-in (`MemoryMax=12G`) + NPC flavor (`m1.xlarge`) → FEEDBACK-ONLY.**
+- **memcap drop-in (`MemoryMax=3G`) + NPC flavor (`m1.medium`) → FEEDBACK-ONLY.**
   Those are survivability / sizing, not traffic-generating behavior, so controls
-  stay on the big flavor with no cap (pristine). Flavor → m1.small/medium after the
-  leak canary passes.
+  stay on the big flavor with no cap (pristine). Set to m1.medium 2026-06-10 after
+  the v9.0.0 leak canary passed (client flat ~160 MB over 12h → the big-RAM
+  headroom is unneeded). 4 GB is tight for Firefox (~3 GB under load), so the cap
+  is now an sshd-protection guard, not leak mitigation; if NRestarts climbs on
+  feedback, move to m1.large (8 GB).
 - **Only the PHASE `timeline.json` differs** between controls and feedback — the
   intended independent variable.
 
@@ -170,12 +173,14 @@ runs are unstamped (`unknown`) and not matched by `--failed`.
 OpenStack cores are a **hard project quota** (2000, raised to 2500 on
 2026-06-08; check:
 `source ~/vxn3kr-bot-rc && openstack limits show --absolute -c Name -c Value | grep -i core`).
-Feedback flavor split (2026-06-09): **API on `v1.14vcpu.28g` (14 vCPU)**, the 5
-**NPC clients on `m1.xlarge` (8 vCPU / 16 GB)** — so a feedback dataset =
-14 + 5×8 = **54 cores** (was 84 when NPCs were also 14-vCPU); a full 13-dataset
-batch = ~702 cores. **Controls stay all-`v1.14vcpu.28g`** (84 cores; no memcap →
-want the RAM headroom). The cluster routinely runs near the cap (observed
-2026-06-08: 1991/2000 used — d-/r-/g- ≈ 978/621/392 cores).
+Feedback flavor split (2026-06-10): **API on `v1.14vcpu.28g` (14 vCPU)**, the 5
+**NPC clients on `m1.medium` (2 vCPU / 4 GB)** — so a feedback dataset =
+14 + 5×2 = **24 cores** (was 84 at 14-vCPU NPCs, 54 at the interim m1.xlarge); a
+full 13-dataset batch = ~312 cores. **Controls stay all-`v1.14vcpu.28g`** (84
+cores; pristine, no memcap). m1.medium chosen after the v9.0.0 leak canary (client
+flat ~160 MB); 4 GB is tight for Firefox (~3 GB) → bump to m1.large if NRestarts
+climbs. The cluster routinely runs near the cap (observed 2026-06-08: 1991/2000
+used — d-/r-/g- ≈ 978/621/392 cores).
 
 When a batch hits the wall mid-run, `_provision_vms` aborts that dataset (<90%
 ACTIVE) but the VMs it *did* create before the `Quota exceeded for cores` error
@@ -261,22 +266,25 @@ API VM never targeted: `install-ghosts-clients.yaml` has
 
 ## Memcap drop-in (FEEDBACK ONLY)
 
-Upstream `cmu-sei/GHOSTS` .NET client leaks memory until kernel OOM-killer
-takes out sshd before the leaky process — pure-upstream clients
-unrunnable past 2-3h without hard-reboot.
+Historically the upstream `cmu-sei/GHOSTS` .NET client leaked memory until the
+kernel OOM-killer took out sshd (unrunnable past 2-3h on `master`). **The v9.0.0
+canary disproved this for the pinned version** (2026-06-10): the client held flat
+at ~160 MB over 12h of continuous browsing. So on v9.0.0 the memcap is no longer
+leak mitigation — it's an **sshd-protection guard** sized to the (now small) NPC
+flavor, in case Firefox (the real ~3 GB footprint) runs away.
 
 Mitigation: systemd drop-in at
 `/etc/systemd/system/ghosts-client.service.d/memcap.conf`:
 
 ```ini
 [Service]
-MemoryMax=12G
+MemoryMax=3G
 MemorySwapMax=0
 ```
 
-`MemoryMax` is sized to the NPC flavor's RAM with ~4 GB system headroom: 12G
-for the `m1.xlarge` (16 GB) NPCs (2026-06-09; was 20G when NPCs were
-`v1.14vcpu.28g`/28 GB). When .NET RSS hits cap, kernel kills process **inside
+`MemoryMax` is sized to the NPC flavor's RAM leaving ~1 GB for the OS: **3G for
+m1.medium (4 GB)** (2026-06-10; was 12G on the interim m1.xlarge/16 GB, 20G on the
+original 28 GB). When the cgroup hits the cap the kernel kills a process **inside
 its cgroup ONLY**; systemd respawns via `Restart=always` within `RestartSec=10`.
 sshd / cron / system services stay alive — VM remains usable indefinitely even
 as leak recurs. Lower RAM → faster respawn (~hourly at 12G vs ~2h at 20G); stays

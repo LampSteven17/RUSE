@@ -856,16 +856,18 @@ def generate_ghosts_feedback_config(
         "behavior_configs": behavior_configs,
         "ghosts": {
             # API runs the full Docker stack (postgres + 5 containers) → keep it
-            # on the big flavor. NPC clients are .NET traffic generators capped
-            # to m1.xlarge (8 vCPU / 16 GB, 2026-06-09): 14→8 vCPU drops a
-            # feedback dataset from 84→54 cores. The 16 GB still gives the
-            # memleak-mitigation memcap (lowered to 12G in
-            # install-ghosts-clients.yaml) enough headroom that the cgroup
-            # respawn stays ~hourly — under the audit NRestarts≤50 threshold.
-            # Controls stay on v1.14vcpu.28g (no memcap → want the RAM headroom),
-            # same controls/feedback flavor split RAMPART uses.
+            # on the big flavor. NPC clients are .NET traffic generators on
+            # m1.medium (2 vCPU / 4 GB, 2026-06-10): a feedback dataset = 14 + 5×2
+            # = 24 cores (was 84 on v1.14vcpu.28g, 54 on the interim m1.xlarge).
+            # Justified by the v9.0.0 canary: the .NET client no longer leaks
+            # (flat ~160 MB over 12h), so the big-RAM headroom is unnecessary;
+            # Firefox is the footprint (~3 GB under continuous always-on load,
+            # less on the real 1h/day schedule). 4 GB is tight, so the memcap in
+            # install-ghosts-clients.yaml is sized to 3G to protect sshd. Controls
+            # stay on v1.14vcpu.28g (pristine, no memcap), same controls/feedback
+            # flavor split RAMPART uses.
             "api_flavor": "v1.14vcpu.28g",
-            "client_flavor": "m1.xlarge",
+            "client_flavor": "m1.medium",
             "client_count": 5,
             "ghosts_repo": "https://github.com/cmu-sei/GHOSTS.git",
             # Pinned to v9.0.0 to match controls (2026-06-09) — controls and

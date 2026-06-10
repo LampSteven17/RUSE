@@ -407,12 +407,16 @@
           # Memleak mitigation for upstream cmu-sei/GHOSTS .NET client.
           # Feedback-deploy-only — controls run the pure upstream unit.
           # See install-ghosts-clients.yaml comment for full context.
-          # 12G sized for the m1.xlarge NPC flavor (16 GB RAM, 2026-06-09) —
-          # leaves ~4 GB system headroom so the cgroup OOM-kills the leaky
-          # .NET process before the kernel takes out sshd. Respawn lands
-          # ~hourly, under the audit NRestarts<=50 healthy threshold.
+          # 3G sized for the m1.medium NPC flavor (4 GB RAM, 2026-06-10) —
+          # leaves ~1 GB for the OS so the cgroup is OOM-killed before the
+          # kernel takes out sshd. Since v9.0.0 fixed the .NET memleak (canary:
+          # client flat ~160 MB over 12h), this cap is now an sshd-protection
+          # guard against a Firefox runaway, NOT leak mitigation. Firefox can
+          # approach ~3 GB under heavy continuous browsing, so on the light
+          # 1h/day schedule the cap rarely fires; if NRestarts climbs, the VM
+          # is too small for the browse load and should move to m1.large.
           [Service]
-          MemoryMax=12G
+          MemoryMax=3G
           MemorySwapMax=0
         dest: /etc/systemd/system/ghosts-client.service.d/memcap.conf
         mode: '0644'
