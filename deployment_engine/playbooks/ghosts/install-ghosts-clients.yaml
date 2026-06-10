@@ -116,6 +116,8 @@
             test -e /usr/bin/firefox
             /usr/bin/firefox --version
             ldconfig -p | grep -q libgtk-3
+          args:
+            executable: /bin/bash
           changed_when: false
 
     - name: Install .NET 10 SDK
