@@ -429,13 +429,24 @@
         state: started
         daemon_reload: yes
 
-    - name: Check GHOSTS client status
+    - name: Wait for GHOSTS client to become active
+      # Poll, don't check once: the .NET client can still be 'activating' the
+      # instant after `state: started`, so a single is-active produced
+      # false-negative deploy failures (caught a slow start, esp. under
+      # strategy: free where the immediate check raced the service). Retry up
+      # to ~60s. failed_when: false so we surface a clear message in the assert.
       shell: systemctl is-active ghosts-client
       register: client_status
+      until: client_status.stdout == "active"
+      retries: 12
+      delay: 5
       changed_when: false
-      failed_when: false  # we assert explicitly below for clear error msg
+      failed_when: false
 
     - name: Assert GHOSTS client is active
+      # `| default('')` guards against a registered result with no stdout key
+      # (the strategy: free quirk that crashed the old conditional with
+      # "'dict object' has no attribute 'stdout'").
       fail:
-        msg: "ghosts-client service is '{{ client_status.stdout }}' on {{ inventory_hostname }} (expected: active). Check journalctl -u ghosts-client and /opt/ghosts-client/config/."
-      when: client_status.stdout != "active"
+        msg: "ghosts-client service is '{{ client_status.stdout | default('unknown') }}' on {{ inventory_hostname }} (expected: active after 60s). Check journalctl -u ghosts-client and /opt/ghosts-client/config/."
+      when: client_status.stdout | default('') != "active"
