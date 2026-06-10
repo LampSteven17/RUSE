@@ -45,7 +45,7 @@ also work.
 | | |
 |---|---|
 | Inputs | `deployments/ghosts-controls/config.yaml`, `~/GHOSTS/` (clone of `cmu-sei/GHOSTS` master), `/mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/npc-{N}/timeline.json` (5 per-NPC tuned timelines; namespaced 2026-06 — feedback needs `--preset`), `~/.docker-hub-token` + `~/.docker-hub-token-user` (optional) |
-| Outputs | `deployments/ghosts-{controls,feedback-...}/runs/{run_id}/` (config.yaml snapshot, inventory.ini with `[ghosts_api]` + `[ghosts_clients]` host vars, ssh_config_snippet.txt, deployment_type, timelines/g-{hash}-npc-N.json) |
+| Outputs | `deployments/ghosts-{controls,feedback-...}/runs/{run_id}/` (config.yaml snapshot, inventory.ini with `[ghosts_api]` + `[ghosts_clients]` host vars, ssh_config_snippet.txt, deployment_type, deploy_status.json, timelines/g-{hash}-npc-N.json) |
 | Manifest | PHASE source `manifest.json`; same loader as DECOY/RAMPART |
 | Upstream | PHASE feedback engine writes target-native per-NPC `timeline.json` directly (no translation layer) |
 | Downstream | PHASE Zeek pipeline (`PHASE.py --ghosts`) scoped by `start_date` |
@@ -80,11 +80,72 @@ ghosts:
   client_flavor: v1.14vcpu.28g
   client_count: 5
   ghosts_repo: https://github.com/cmu-sei/GHOSTS.git
-  ghosts_branch: master
+  ghosts_branch: v9.0.0   # PINNED (was master) — see "Version pinning" below
 ```
+
+## Version pinning + Firefox runtime dependency (2026-06-09)
+
+GHOSTS was tracking `master` (`ghosts_branch: master`) — **unpinned**. The git
+clone task passes `ghosts_branch` straight to the git module's `version:`, which
+accepts a tag, so pinning is just `ghosts_branch: v9.0.0` (the `v9.0.0` release
+tag; tags list: `git -C ~/GHOSTS tag -l`).
+
+**Rollout (2026-06-09):** BOTH controls (`ghosts-controls/config.yaml`) and the
+feedback generator (`core/feedback.py::generate_ghosts_feedback_config`) pinned to
+`v9.0.0` — controls and feedback build the **same GHOSTS version** so the only
+intended difference is the PHASE `timeline.json` (the independent variable). NOTE:
+the client build only honors the pin because `ghosts/spinup.py` now passes
+`ghosts_repo`/`ghosts_branch` from config into the client playbook — previously the
+client defaulted to its own hardcoded `master` while only the API got the ref.
+
+**What matches vs differs (final, 2026-06-09):**
+- **Firefox install + GHOSTS version `v9.0.0` → BOTH controls and feedback.** These
+  determine *what traffic is generated*, so they must match or the control isn't a
+  baseline. Decisive evidence: the controls `timeline.json` is **browser-only** (a
+  single `BrowserFirefox` handler, ~1h/day), so a controls NPC with no Firefox
+  emits **~zero traffic** — an inert control, not a degraded one. (The v9.0.0
+  controls canary `g-1e273` confirmed `libgtk-3` absent + browser-only timeline;
+  Firefox was ungated to all clients before waiting for the window.)
+- **memcap drop-in (`MemoryMax=12G`) + NPC flavor (`m1.xlarge`) → FEEDBACK-ONLY.**
+  Those are survivability / sizing, not traffic-generating behavior, so controls
+  stay on the big flavor with no cap (pristine). Flavor → m1.small/medium after the
+  leak canary passes.
+- **Only the PHASE `timeline.json` differs** between controls and feedback — the
+  intended independent variable.
+
+A controls deploy from *before* this ungating (e.g. `g-1e273`) has NO Firefox —
+**redeploy controls** to pick it up.
+
+**Why it matters — silent fleet regression:** on 2026-06-06 a controls NPC's
+`BrowserFirefox` handler started failing every cycle with `XPCOMGlueLoad error …
+libgtk-3.so.0: cannot open shared object file` → `Couldn't load XPCOM`. Root
+cause: `BrowserFirefox.cs` expects a system Firefox at `/usr/bin/firefox`; the
+install playbook **never installs one** (only `git/curl/wget` + .NET SDK), so
+Selenium Manager auto-downloads the *latest* Firefox (151.0.4) into
+`/root/.cache/selenium/…`, and that bare binary needs system GTK libs that aren't
+present. NPCs silently stopped browsing fleet-wide (only Bash/Curl handlers left)
+with `NRestarts=0`, `svc=active` — the audit didn't catch it. **Two independent
+drift sources:** the GHOSTS source (pin via tag) AND the Selenium-fetched Firefox
+(needs a system Firefox install, ideally version-pinned).
+
+**Canary caveat:** a pure-upstream controls NPC showing flat memory over days is
+NOT evidence the .NET memleak is fixed — verify Firefox is actually *running*
+(`pgrep -f firefox`, no `Couldn't load XPCOM` in `journalctl -u ghosts-client`).
+With Firefox dead the memory-heavy leak path never executes, so the soak proves
+nothing about the leak. A valid leak soak needs working browser traffic first.
 
 ## Spinup phases (`ghosts/spinup.py`)
 
+0. `_teardown_matching_prior_runs` (idempotent same-deploy refresh) — for
+   each prior `runs/{old_rid}/` whose saved `config.yaml` has the SAME ghosts
+   topology (`_ghosts_topology` = client_count + api/client flavor + repo +
+   branch) as the new config, openstack-delete its VMs under the prior g-
+   prefix (`wait_until_zero`) and `safe_rmtree` the prior run_dir. Re-running
+   `./deploy` against an existing config_name no longer piles orphan VMs (each
+   run_id hashes to a different g- prefix → no collision, just accumulation).
+   A hand-edited ghosts block (e.g. client_count bumped) = different topology
+   → prior run left intact; clean it up with explicit `./teardown`. Mirrors
+   `decoy/spinup.py` (which keys on gpu_tier + deployments[]).
 1. Provision VMs (OpenStack Python wrapper, NOT Ansible) — tracks ACTIVE
    state, IP-extraction audit
 2. SSH connectivity test (parallel, 20 workers) — abort if < 90%
@@ -96,6 +157,39 @@ ghosts:
    build + systemd)
 6. Finalize: SSH config, `deployment_type` marker, PHASE register
    (fail-loud)
+
+Run outcome stamp (2026-06-08): `run_dir/deploy_status.json` is written
+`failed` right after the config snapshot is copied, flipped to `ok` only on
+the final clean `return 0`. Any phase abort / exception / kill leaves it
+`failed` → `./teardown --ghosts --failed` (or `--failed` alone) targets it.
+Same `core/run_status.py` contract as DECOY + RAMPART; pre-2026-06-08 GHOSTS
+runs are unstamped (`unknown`) and not matched by `--failed`.
+
+## Quota-exceeded partial-provision recovery
+
+OpenStack cores are a **hard project quota** (2000, raised to 2500 on
+2026-06-08; check:
+`source ~/vxn3kr-bot-rc && openstack limits show --absolute -c Name -c Value | grep -i core`).
+Feedback flavor split (2026-06-09): **API on `v1.14vcpu.28g` (14 vCPU)**, the 5
+**NPC clients on `m1.xlarge` (8 vCPU / 16 GB)** — so a feedback dataset =
+14 + 5×8 = **54 cores** (was 84 when NPCs were also 14-vCPU); a full 13-dataset
+batch = ~702 cores. **Controls stay all-`v1.14vcpu.28g`** (84 cores; no memcap →
+want the RAM headroom). The cluster routinely runs near the cap (observed
+2026-06-08: 1991/2000 used — d-/r-/g- ≈ 978/621/392 cores).
+
+When a batch hits the wall mid-run, `_provision_vms` aborts that dataset (<90%
+ACTIVE) but the VMs it *did* create before the `Quota exceeded for cores` error
+stay alive as **orphans** (e.g. api+npc-0/1/2 up, npc-3/4 rejected). The deploy
+stamps that run `failed`. Recovery:
+
+1. `./teardown --ghosts --failed` — deletes every failed run's orphan/partial
+   VMs + run_dirs (frees their cores), leaves the `ok` ones alone.
+2. Re-deploy only the datasets that didn't land, via `--target` (comma list of
+   the failed datasets) — NOT a full re-run, which would idempotent-refresh
+   (tear down + redeploy) the already-`ok` datasets too.
+
+Pre-flight before a big batch: confirm `(maxTotalCores − totalCoresUsed) ≥
+84 × n_datasets`, or expect a partial-landing + `--failed` cleanup cycle.
 
 ## Inventory format (two host groups)
 
@@ -176,14 +270,18 @@ Mitigation: systemd drop-in at
 
 ```ini
 [Service]
-MemoryMax=20G
+MemoryMax=12G
 MemorySwapMax=0
 ```
 
-When .NET RSS hits cap, kernel kills process **inside its cgroup ONLY**;
-systemd respawns via `Restart=always` within `RestartSec=10`. sshd / cron
-/ system services stay alive — VM remains usable indefinitely even as
-leak recurs every ~2h.
+`MemoryMax` is sized to the NPC flavor's RAM with ~4 GB system headroom: 12G
+for the `m1.xlarge` (16 GB) NPCs (2026-06-09; was 20G when NPCs were
+`v1.14vcpu.28g`/28 GB). When .NET RSS hits cap, kernel kills process **inside
+its cgroup ONLY**; systemd respawns via `Restart=always` within `RestartSec=10`.
+sshd / cron / system services stay alive — VM remains usable indefinitely even
+as leak recurs. Lower RAM → faster respawn (~hourly at 12G vs ~2h at 20G); stays
+under the audit `NRestarts ≤ 50` healthy threshold. The audit reads `MemoryMax`
+live from the unit, so it tracks the cap automatically.
 
 Scope: feedback ONLY. Controls keep pure upstream so they remain
 experimentally pristine.
@@ -220,6 +318,17 @@ pattern.
    pins 6.0.5. Patched with `/p:NoWarn=NU1605` in `dotnet publish`
 3. **Client DLL casing** — Published DLL is PascalCase
    `Ghosts.Client.Universal.dll`. Systemd ExecStart must match
+4. **Firefox runtime deps (FIXED 2026-06-09, FEEDBACK-ONLY)** —
+   `install-ghosts-clients.yaml` installs only `git/curl/wget` + .NET; it does NOT
+   install a system Firefox or its GTK libs. `BrowserFirefox.cs` wants
+   `/usr/bin/firefox`; absent it, Selenium Manager fetches the latest Firefox which
+   fails on missing `libgtk-3.so.0` (silent fleet browser death, 2026-06-06). Fix
+   (runs for ALL clients — controls + feedback, since the controls timeline is
+   browser-only): add Mozilla's APT repo + pin-priority pref (beats the Ubuntu
+   snap), `apt install firefox-esr={{ ghosts_firefox_version }}` (default
+   `140.11.0esr~build2`, pulls the GTK closure), symlink
+   `/usr/bin/firefox`→`firefox-esr`, then assert `firefox --version` + libgtk
+   present. See "Version pinning".
 
 ## Docker Hub rate-limit auth
 
@@ -270,6 +379,7 @@ deployments/ghosts-{controls,feedback-...}/runs/<run_id>/
 ├── inventory.ini            # [ghosts_api] + [ghosts_clients] (with per-host vars)
 ├── ssh_config_snippet.txt
 ├── deployment_type          # "ghosts"
+├── deploy_status.json        # run outcome stamp (failed→ok); --failed teardown filter
 └── timelines/               # Per-NPC PHASE timelines (feedback only)
     ├── g-{hash}-npc-0.json
     ├── g-{hash}-npc-1.json

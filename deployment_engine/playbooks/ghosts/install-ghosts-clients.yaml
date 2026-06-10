@@ -17,7 +17,17 @@
     ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
     ansible_ssh_retries: 5
     ghosts_repo: "https://github.com/cmu-sei/GHOSTS.git"
-    ghosts_branch: "master"
+    # Default pinned to the v9.0.0 release tag (2026-06-09). spinup.py passes
+    # ghosts_branch from config.yaml as an extra_var, so this is just the
+    # fallback; both must stay pinned to avoid the unpinned-master drift that
+    # regressed the Firefox handler. Value is a git tag (clone uses `version:`).
+    ghosts_branch: "v9.0.0"
+    # System Firefox pin. BrowserFirefox.cs wants /usr/bin/firefox; absent it,
+    # Selenium auto-fetches the latest Firefox (broke 2026-06-06 on libgtk-3).
+    # Installing a pinned ESR from Mozilla's APT repo brings the GTK dep closure
+    # and stops the runtime auto-fetch drift. Bump deliberately, in lockstep
+    # with a soak test.
+    ghosts_firefox_version: "140.11.0esr~build2"
     ghosts_path: "/opt/ghosts"
     ghosts_client_src: "/opt/ghosts/src/Ghosts.Client.Universal"
     ghosts_client_publish: "/opt/ghosts-client"
@@ -45,6 +55,68 @@
       apt:
         name: [git, curl, wget]
         state: present
+
+    # --- System Firefox (pinned) for the BrowserFirefox handler — ALL CLIENTS ---
+    # GHOSTS' BrowserFirefox.cs looks for /usr/bin/firefox; if it's absent
+    # Selenium Manager auto-downloads the *latest* Firefox at runtime, which
+    # broke 2026-06-06 (missing libgtk-3.so.0). Install a pinned ESR from
+    # Mozilla's APT repo (real .deb → pulls libgtk-3 + the full dep closure,
+    # not the Ubuntu snap) so browsing works and can't silently drift.
+    # APPLIED TO BOTH controls AND feedback (2026-06-09): the controls timeline is
+    # browser-only (a single BrowserFirefox handler), so without a working Firefox
+    # the control emits ~zero traffic and isn't a valid baseline. Firefox
+    # availability + GHOSTS version must match controls↔feedback; only the PHASE
+    # timeline differs. (The memcap drop-in + NPC flavor stay feedback-only —
+    # those are survivability / sizing, not traffic-generating behavior.)
+    - name: Pinned system Firefox (all clients — controls + feedback)
+      block:
+        - name: Ensure apt keyrings dir
+          file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: '0755'
+
+        - name: Add Mozilla APT signing key
+          get_url:
+            url: https://packages.mozilla.org/apt/repo-signing-key.gpg
+            dest: /etc/apt/keyrings/packages.mozilla.org.asc
+            mode: '0644'
+
+        - name: Add Mozilla APT repo
+          copy:
+            content: "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main\n"
+            dest: /etc/apt/sources.list.d/mozilla.list
+            mode: '0644'
+
+        - name: Prefer Mozilla repo over the Ubuntu snap transitional package
+          copy:
+            content: |
+              Package: *
+              Pin: origin packages.mozilla.org
+              Pin-Priority: 1000
+            dest: /etc/apt/preferences.d/mozilla
+            mode: '0644'
+
+        - name: Install pinned Firefox ESR (system firefox so Selenium won't auto-fetch)
+          apt:
+            name: "firefox-esr={{ ghosts_firefox_version }}"
+            state: present
+            update_cache: yes
+
+        - name: Symlink /usr/bin/firefox -> firefox-esr (BrowserFirefox.cs checks /usr/bin/firefox)
+          file:
+            src: /usr/bin/firefox-esr
+            dest: /usr/bin/firefox
+            state: link
+            force: yes
+
+        - name: Assert Firefox is resolvable + GTK present (fail loud — no silent dead browser)
+          shell: |
+            set -euo pipefail
+            test -e /usr/bin/firefox
+            /usr/bin/firefox --version
+            ldconfig -p | grep -q libgtk-3
+          changed_when: false
 
     - name: Install .NET 10 SDK
       shell: |
@@ -333,8 +405,12 @@
           # Memleak mitigation for upstream cmu-sei/GHOSTS .NET client.
           # Feedback-deploy-only — controls run the pure upstream unit.
           # See install-ghosts-clients.yaml comment for full context.
+          # 12G sized for the m1.xlarge NPC flavor (16 GB RAM, 2026-06-09) —
+          # leaves ~4 GB system headroom so the cgroup OOM-kills the leaky
+          # .NET process before the kernel takes out sshd. Respawn lands
+          # ~hourly, under the audit NRestarts<=50 healthy threshold.
           [Service]
-          MemoryMax=20G
+          MemoryMax=12G
           MemorySwapMax=0
         dest: /etc/systemd/system/ghosts-client.service.d/memcap.conf
         mode: '0644'

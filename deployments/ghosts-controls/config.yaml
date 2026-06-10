@@ -23,4 +23,11 @@ ghosts:
   client_flavor: v1.14vcpu.28g
   client_count: 5
   ghosts_repo: https://github.com/cmu-sei/GHOSTS.git
-  ghosts_branch: master
+  # PINNED to the v9.0.0 release tag (2026-06-09) instead of tracking master.
+  # Tracking master silently regressed the BrowserFirefox handler on 2026-06-06
+  # (Selenium auto-fetched Firefox 151 needing libgtk-3, which isn't installed —
+  # NPCs stopped browsing fleet-wide, undetected). The git clone uses this as
+  # `version:` which accepts a tag. NOTE: pinning the GHOSTS *source* does NOT
+  # pin the runtime Firefox binary — see install-ghosts-clients.yaml's firefox
+  # install. ghosts_branch field name kept for back-compat; value is a tag.
+  ghosts_branch: v9.0.0

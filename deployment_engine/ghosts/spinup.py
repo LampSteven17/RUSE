@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from ..core import output
+from ..core import run_status
 from ..core.ansible_runner import AnsibleRunner, default_event_handler
 from ..core.config import DeploymentConfig
 from ..core.openstack import OpenStack
@@ -77,7 +78,24 @@ def run_ghosts_spinup(
     # Snapshot config
     shutil.copy2(config_dir / "config.yaml", run_dir / "config.yaml")
 
+    # Stamp FAILED up front; flipped to OK only at the final clean return below.
+    # Any early return (provision/SSH/install/register abort), exception, or
+    # kill leaves this run marked failed — which is what `./teardown --failed`
+    # targets. Matches decoy/spinup.py + rampart/spinup.py. See core/run_status.py.
+    run_status.write_run_status(run_dir, run_status.FAILED, "in_progress")
+
     os_client = OpenStack()
+
+    # Phase 0: idempotent same-deploy refresh.
+    # If a prior run under this same config_name has a matching ghosts
+    # topology (= same logical deploy), teardown its VMs and drop its
+    # run_dir before we provision the new ones. Without this, re-running
+    # ./deploy against an existing config silently piles new VMs alongside
+    # old ones — each new run_id hashes to a different g- prefix, so there's
+    # no name collision, just orphan accumulation. Matches decoy/spinup.py's
+    # _teardown_matching_prior_runs. A hand-edited ghosts block (client_count
+    # / flavor change) reads as a different deploy → left intact.
+    _teardown_matching_prior_runs(os_client, config_dir, run_dir, config)
 
     # [1/5] Provision VMs
     output.info("[1/5] Provisioning VMs...")
@@ -174,6 +192,12 @@ def run_ghosts_spinup(
         "ghosts/install-ghosts-clients.yaml",
         inventory_path,
         extra_vars={
+            # Pin the CLIENT build to the same ref as the API. Without these the
+            # client playbook fell back to its own `ghosts_branch: master`
+            # default — so a pinned config.yaml pinned the API but the NPC
+            # clients still cloned master (the part that actually runs Firefox).
+            "ghosts_repo": config.ghosts_repo(),
+            "ghosts_branch": config.ghosts_branch(),
             # Feedback deploys get a systemd drop-in capping the .NET client's
             # memory, mitigating the upstream cmu-sei/GHOSTS memleak. Controls
             # stay on the pure upstream unit (leaky-as-designed) so they
@@ -221,6 +245,7 @@ def run_ghosts_spinup(
     output.info(f"  Grafana:  http://{api_vm['ip']}:3000")
     output.info(f"  Clients:  {len(client_vms)} NPCs")
 
+    run_status.write_run_status(run_dir, run_status.OK, "deploy complete")
     return 0
 
 
@@ -477,6 +502,100 @@ def _make_dep_id(deployment_name: str, run_id: str) -> str:
             dep = dep[len(prefix):]
     dep = dep.replace("-", "")
     return f"{dep}{run_id}"
+
+
+def _ghosts_topology(cfg: DeploymentConfig) -> tuple:
+    """Comparable signature of a GHOSTS deploy's VM topology + install target.
+
+    Two runs under the same config_name are "the same logical deploy" iff
+    these match. config_name already pins preset+dataset+scope, so this just
+    catches a hand-edited ghosts block (e.g. client_count bumped, repo/branch
+    changed) — in which case the prior run is left intact.
+    """
+    return (
+        cfg.ghosts_client_count(),
+        cfg.ghosts_api_flavor(),
+        cfg.ghosts_client_flavor(),
+        cfg.ghosts_repo(),
+        cfg.ghosts_branch(),
+    )
+
+
+def _teardown_matching_prior_runs(
+    os_client: OpenStack,
+    config_dir: Path,
+    new_run_dir: Path,
+    new_config: DeploymentConfig,
+) -> None:
+    """Teardown VMs from any prior run of this config_name whose ghosts
+    topology matches the new config.
+
+    Two checks per prior run (both must match to count as "same deploy"):
+      1. prior run_dir/config.yaml exists and parses (= got past snapshot)
+      2. prior ghosts topology == new ghosts topology (_ghosts_topology)
+
+    On match: openstack-delete every VM under the prior run's g- prefix,
+    wait until zero, then safe_rmtree the prior run_dir. The experiments.json
+    entry is left alone — register_phase's upsert refreshes its IPs +
+    end_date=None at the end of this same spinup.
+
+    On mismatch (ghosts block hand-edited): leave the prior run fully intact;
+    the operator clearly meant something different by reusing the name and
+    can clean it up with explicit ./teardown.
+    """
+    runs_dir = config_dir / "runs"
+    if not runs_dir.is_dir():
+        return
+
+    prior_run_dirs = [
+        d for d in runs_dir.iterdir()
+        if d.is_dir() and d != new_run_dir and (d / "config.yaml").exists()
+    ]
+    if not prior_run_dirs:
+        return
+
+    from ..core.teardown_steps import safe_rmtree, wait_until_zero
+
+    new_topo = _ghosts_topology(new_config)
+    to_teardown: list[tuple[Path, str]] = []  # (prior_run_dir, vm_prefix)
+    for prior in prior_run_dirs:
+        try:
+            prior_cfg = DeploymentConfig.load(prior / "config.yaml")
+        except Exception as e:
+            output.dim(f"  skipping prior run {prior.name}: can't parse config.yaml ({e})")
+            continue
+        if _ghosts_topology(prior_cfg) != new_topo:
+            output.dim(
+                f"  prior run {prior.name} has a different ghosts topology "
+                f"(hand-edited) — leaving alone"
+            )
+            continue
+        prior_dep_id = _make_dep_id(new_config.deployment_name, prior.name)
+        prior_prefix = make_ghosts_vm_prefix(prior_dep_id)
+        to_teardown.append((prior, prior_prefix))
+
+    if not to_teardown:
+        return
+
+    output.info("")
+    output.info(f"--- Refreshing {len(to_teardown)} matching prior run(s) ---")
+    for prior_dir, prior_prefix in to_teardown:
+        servers = os_client.server_list_with_ids(prefix=prior_prefix)
+        if servers:
+            output.info(f"  Deleting {len(servers)} VM(s) under {prior_prefix}*")
+            os_client.server_delete_many([s["id"] for s in servers], wait=True)
+            remaining = wait_until_zero(os_client, prior_prefix)
+            if remaining:
+                output.error(
+                    f"  ERROR: {remaining} VM(s) under {prior_prefix}* still alive "
+                    f"after teardown wait. Aborting before provisioning new VMs "
+                    f"(avoid mixing old + new state)."
+                )
+                raise SystemExit(1)
+        else:
+            output.dim(f"  no live VMs under {prior_prefix}* — just dropping run_dir")
+        safe_rmtree(prior_dir)
+        output.dim(f"  dropped prior run_dir {prior_dir.name}")
 
 
 def _build_npc_timeline_mapping(

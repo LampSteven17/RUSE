@@ -791,10 +791,12 @@ def generate_rampart_feedback_config(
 
     # Feedback-only flavor bump (2026-04-28): override enterprise.cloud_config
     # to point at axes-cicd-feedback.json which maps the "small" alias to
-    # m1.xlarge (16GB RAM / 8 vCPU / 160GB disk). Controls keep m1.small via
+    # m1.medium (4GB RAM / 2 vCPU / 40GB disk). Controls keep m1.small via
     # the original axes-cicd.json — pristine baseline. Reason: m1.small (1cpu/
     # 2GB) caused rolling sshd kills under emulation load on Windows endpoints
     # (audit on 2026-04-28 showed ~5 of 180 winep rotating-down at any time).
+    # NOTE: originally bumped to m1.xlarge but the cluster ran out of 8-core
+    # host slots for it, so axes-cicd-feedback.json settled on m1.medium.
     if "enterprise" in base and isinstance(base["enterprise"], dict):
         base["enterprise"]["cloud_config"] = "cloud-configs/axes-cicd-feedback.json"
 
@@ -853,11 +855,24 @@ def generate_ghosts_feedback_config(
         "behavior_source": str(source_dir),
         "behavior_configs": behavior_configs,
         "ghosts": {
+            # API runs the full Docker stack (postgres + 5 containers) → keep it
+            # on the big flavor. NPC clients are .NET traffic generators capped
+            # to m1.xlarge (8 vCPU / 16 GB, 2026-06-09): 14→8 vCPU drops a
+            # feedback dataset from 84→54 cores. The 16 GB still gives the
+            # memleak-mitigation memcap (lowered to 12G in
+            # install-ghosts-clients.yaml) enough headroom that the cgroup
+            # respawn stays ~hourly — under the audit NRestarts≤50 threshold.
+            # Controls stay on v1.14vcpu.28g (no memcap → want the RAM headroom),
+            # same controls/feedback flavor split RAMPART uses.
             "api_flavor": "v1.14vcpu.28g",
-            "client_flavor": "v1.14vcpu.28g",
+            "client_flavor": "m1.xlarge",
             "client_count": 5,
             "ghosts_repo": "https://github.com/cmu-sei/GHOSTS.git",
-            "ghosts_branch": "master",
+            # Pinned to v9.0.0 to match controls (2026-06-09) — controls and
+            # feedback build the SAME GHOSTS version so the only intended
+            # difference is the PHASE timeline. The Firefox install + memcap +
+            # flavor remain feedback-only (controls pristine upstream).
+            "ghosts_branch": "v9.0.0",
         },
     }
 
