@@ -45,11 +45,16 @@ def build_deploy_plan(
     source: str | None,
     deploy_dir: Path,
     preset: str | None = None,
+    tier_plan: list[tuple[str, list[str]]] | None = None,
 ) -> list[dict] | None:
     """Resolve controls + feedback intent into an ordered list of deploy tasks.
 
     `preset` is the {preset}_v{version} namespace scoping feedback discovery
     (None for controls-only or when `source` is an explicit full path).
+
+    `tier_plan` is a static (gpu_tier, [targets]) assignment (e.g.
+    feedback.TIER_PLANS["exp1"]) — each resulting feedback task carries its
+    own "gpu_tier" key, overriding the invocation-wide --gpu value.
 
     Returns None on hard failure. Empty list = nothing to do.
     """
@@ -61,7 +66,7 @@ def build_deploy_plan(
     if want_feedback:
         feedback_tasks = _build_feedback_tasks(
             deploy_type, configs_spec, single_selector, target, source,
-            preset=preset,
+            preset=preset, tier_plan=tier_plan,
         )
         if feedback_tasks is None:
             return None
@@ -112,6 +117,7 @@ def _build_feedback_tasks(
     target: str | None,
     source: str | None,
     preset: str | None = None,
+    tier_plan: list[tuple[str, list[str]]] | None = None,
 ) -> list[dict] | None:
     """Resolve feedback sources into tasks. Returns None on resolution failure.
 
@@ -125,7 +131,24 @@ def _build_feedback_tasks(
     already encodes the namespace). Required-ness is enforced upstream in the CLI.
     """
     sources: list[dict] = []
-    if single_selector:
+    if tier_plan:
+        # Static tier plan: resolve every (tier, targets) pair up front,
+        # fail loud if any dataset is missing from the namespace. Each
+        # source carries its tier so the task gets a per-task gpu_tier.
+        for tier, targets in tier_plan:
+            for tgt in targets:
+                src_path = find_feedback_by_target(tgt, deploy_type=deploy_type,
+                                                   preset=preset)
+                if not src_path:
+                    ns = f"{preset}/" if preset else ""
+                    output.error(
+                        f"ERROR: tier plan target '{tgt}' (tier {tier}) not found "
+                        f"under /mnt/AXES2U1/feedback/{deploy_type}-controls/{ns}"
+                    )
+                    return None
+                sources.append({"path": src_path, "dataset": src_path.name,
+                                "preset": preset or "?", "gpu_tier": tier})
+    elif single_selector:
         if source:
             src_path = Path(source)
             if not src_path.is_dir():
@@ -157,11 +180,15 @@ def _build_feedback_tasks(
 
     return [
         {
-            "label": f"{deploy_type}-feedback: {src['dataset']}",
+            "label": (f"{deploy_type}-feedback: {src['dataset']}"
+                      + (f" [{src['gpu_tier']}]" if src.get("gpu_tier") else "")),
             "behavior_source": src["path"],
             "configs_spec": configs_spec,
             "manifest": load_manifest(src["path"]),
             "is_controls": False,
+            # Per-task tier from a static tier plan; None = use the
+            # invocation-wide --gpu value.
+            "gpu_tier": src.get("gpu_tier"),
         }
         for src in sources
     ]
@@ -209,9 +236,10 @@ def show_plan_and_confirm(
         else:
             mf = task["manifest"]
             err = validate_manifest_target(mf, deploy_type)
+            task_tier = (task.get("gpu_tier") or feedback_tier) if deploy_type == "decoy" else None
             for line in manifest_summary_lines(
                 task["behavior_source"], mf, indent="      ",
-                gpu_tier=feedback_tier,
+                gpu_tier=task_tier,
             ):
                 output.info(line)
             if err:
@@ -275,7 +303,7 @@ def execute_plan(
             # rampart/ghosts spinups don't accept it. Pass conditionally.
             spinup_kwargs = {}
             if deploy_type == "decoy" and not task["is_controls"]:
-                spinup_kwargs["gpu_tier"] = gpu_tier
+                spinup_kwargs["gpu_tier"] = task.get("gpu_tier") or gpu_tier
             rc = spinup(
                 base_config, deploy_dir,
                 spinup_source,

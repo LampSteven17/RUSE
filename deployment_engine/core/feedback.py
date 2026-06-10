@@ -620,6 +620,27 @@ DATASET_TARGETS = {
 }
 
 
+# Static tier plans: a named, operator-curated assignment of feedback
+# datasets to GPU tiers, sized to the physical card pools (which are NOT
+# queryable from OpenStack — totals are operator knowledge). Selected via
+# `./deploy --decoy --exp1`. Each entry is an ordered list of
+# (gpu_tier, [dataset targets]) — targets use the same aliases as --target
+# (resolved through DATASET_TARGETS).
+#
+# exp1 (2026-06-10): V100 pool holds 19 cards, controls eat 2 → 8 feedback
+# deploys (16 cards); non-A rtx pool fits 2 deploys; rtx-a fits 1 next to
+# controls' B0R/S0R. cptc8/cptc9 are deliberately EXCLUDED — structurally
+# unreachable (see project_service_mix_targets), not worth GPU quota.
+TIER_PLANS = {
+    "exp1": [
+        ("v100", ["2025", "axall", "axyear", "fall24", "fall25",
+                  "spr25", "sum24", "sum25"]),
+        ("rtx", ["vt1g", "vt10g"]),
+        ("rtx-a", ["vt50g"]),
+    ],
+}
+
+
 def find_feedback_by_target(target: str, deploy_type: str | None = None,
                             preset: str | None = None) -> Path | None:
     """Find a feedback dataset dir matching the given target name.

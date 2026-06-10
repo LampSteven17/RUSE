@@ -102,7 +102,29 @@ Plus `d-{dep_id}-neighborhood-0` sidecar (feedback only, when any
 ./deploy --decoy --controls --preset std-ctrls_v7.1.2 --target sum24    # controls + single feedback
 ./deploy --decoy --feedback --preset std-ctrls_v7.1.2 --gpu rtx --target sum24   # RTX (PCI alias rtx2080ti:1)
 ./deploy --decoy --feedback --preset exp-ctrls_v7.1.6 --gpu rtx-a --target axall # other lineage + A-pool
+./deploy --decoy --exp1 --preset exp-ctrls_v7.1.6                 # static tier plan (see below)
 ```
+
+## Static tier plans (`--exp1`, 2026-06-10)
+
+Named operator-curated dataset→tier assignments in
+`core/feedback.py::TIER_PLANS`, sized to the physical GPU pools (totals
+are NOT queryable from OpenStack — operator knowledge baked in). `exp1`:
+
+| Tier | Datasets | Cards |
+|------|----------|-------|
+| v100 | 2025, axall, axyear, fall24, fall25, spr25, sum24, sum25 | 16 of 19 (controls hold 2, 1 spare) |
+| rtx | vt1g, vt10g | 4 of 4 |
+| rtx-a | vt50g | 2 of 4 (controls B0R/S0R hold 2) |
+
+cptc8/cptc9 deliberately excluded (structurally unreachable — see
+`project_service_mix_targets`). `--exp1` implies `--feedback`, requires
+`--preset`, and conflicts with `--target`/`--source`/`--gpu` (each task
+carries its own `gpu_tier`, shown as `[tier]` in the task label and
+`tier=` in the plan confirm). Resolution is fail-loud per dataset; the
+whole plan aborts if any target is missing from the namespace. Tasks run
+sequentially like any batch. To change the split, edit `TIER_PLANS`
+(one dict) — new plans get their own flag wired in `__main__.py`.
 
 ## Feedback namespace `{preset}_v{version}` (`--preset`, 2026-06)
 

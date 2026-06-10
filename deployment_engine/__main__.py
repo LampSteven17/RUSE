@@ -94,13 +94,20 @@ examples:
                    help="Dataset target(s). Single (--target sum24) OR comma-"
                         "separated list (--target sum24,axyear,vt50g) for a "
                         "multi-dataset batch on one GPU tier.")
-    p.add_argument("--gpu", type=str, choices=["v100", "rtx", "rtx-a"], default="v100",
+    p.add_argument("--gpu", type=str, choices=["v100", "rtx", "rtx-a"], default=None,
                    help="GPU tier for feedback B2/S2 VMs (default: v100). "
                         "rtx = rtx2080ti-1gpu (PCI alias rtx2080ti:1) w/ "
                         "B2R.gemma+S2R.gemma (gemma4:e4b, fits 11GB VRAM). "
                         "rtx-a = rtx2080ti-A-1gpu (PCI alias 2080ti-rtx-a:1) "
                         "— same SUPs, separate physical card pool; use when "
                         "the rtx pool is exhausted.")
+    p.add_argument("--exp1", action="store_true",
+                   help="Static tier plan exp1 (DECOY feedback only): 8 axes "
+                        "datasets on v100, vt1g+vt10g on rtx, vt50g on rtx-a; "
+                        "cptc excluded. Sized to physical card pools (19 v100 / "
+                        "4 rtx / 4 rtx-a, controls eat 2 v100 + 2 rtx-a). "
+                        "Requires --preset; conflicts with --target/--source/--gpu. "
+                        "Plan defined in core/feedback.py::TIER_PLANS.")
     return p
 
 
@@ -267,9 +274,30 @@ def _cmd_deploy(argv: list[str]) -> int:
     # means "copy *.json" (i.e. behavior.json), None means controls-only path.
     configs_spec = "all" if args.feedback else None
 
+    # --- Static tier plan (--exp1) ---
+    # A named, operator-curated dataset→tier assignment sized to the
+    # physical GPU pools. Implies feedback; per-task gpu_tier overrides
+    # the invocation-wide --gpu (which is therefore a conflict).
+    tier_plan = None
+    if args.exp1:
+        if deploy_type != "decoy":
+            output.error("ERROR: --exp1 is a DECOY tier plan (GPU tiers are decoy-specific).")
+            return 1
+        if args.target or args.source:
+            output.error("ERROR: --exp1 conflicts with --target/--source "
+                         "(the plan already names its datasets).")
+            return 1
+        if args.gpu:
+            output.error("ERROR: --exp1 conflicts with --gpu "
+                         "(the plan assigns a tier per dataset).")
+            return 1
+        from .core.feedback import TIER_PLANS
+        tier_plan = TIER_PLANS["exp1"]
+
     # --- Resolve intent: controls? feedback? ---
-    # --target / --source imply feedback (harmless shorthand).
-    explicit_feedback = bool(configs_spec) or bool(args.source) or bool(args.target)
+    # --target / --source / --exp1 imply feedback (harmless shorthand).
+    explicit_feedback = (bool(configs_spec) or bool(args.source)
+                         or bool(args.target) or bool(tier_plan))
     explicit_controls = args.controls
     single_selector = args.target or args.source
 
@@ -319,6 +347,7 @@ def _cmd_deploy(argv: list[str]) -> int:
         source=args.source,
         preset=args.preset,
         deploy_dir=DEPLOY_DIR,
+        tier_plan=tier_plan,
     )
     if plan is None:
         return 1
@@ -326,7 +355,7 @@ def _cmd_deploy(argv: list[str]) -> int:
         output.error("Nothing to deploy. Use --controls and/or --feedback.")
         return 1
 
-    gpu_tier = getattr(args, "gpu", "v100")
+    gpu_tier = getattr(args, "gpu", None) or "v100"
     if not show_plan_and_confirm(plan, deploy_type, gpu_tier=gpu_tier):
         return 0
 
