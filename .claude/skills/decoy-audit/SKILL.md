@@ -67,7 +67,7 @@ Probe collects:
 | Seed | session_id from latest `session_*.jsonl` filename matches `Random(_metadata.seed).getrandbits(32):08x` — catches Phase 0c install-path bypass bugs | `PHASE_SEED` + `EXPECTED_SID` + `ACTUAL_SID` |
 | Pools | Phase 1 fields present in `content` (browse_url_pool / youtube_video_pool / google_search_pool); empty list is OK (intentional floor), missing key is FAIL | `POOL_BROWSE_N` + `POOL_YT_N` + `POOL_SEARCH_N` + `POOL_MISSING` |
 | Sched | Phase 2 — `content.schedule` covers all 24 UTC hours when present; `n/a` when PHASE hasn't shipped | `SCHED_STATE` + `SCHED_BLOCKS` + `SCHED_COVERAGE` |
-| Svcs | Phase 3 — when any `diversity.background_services.*_enabled` is true, `[scripted-svc]` lines must appear in systemd.log. **In-window-only + catch-up (2026-06-05, commit `26c2489`):** scripted probes fire ONLY from the in-window cluster loop (`emulation_loop.py:583`, same gating as D4 `maybe_generate` one line above) — outside an active window the loop `continue`s past the task body and nothing fires. The scheduler uses **catch-up** semantics (fire the most recent scheduled slot at/before the current minute that hasn't fired this hour) — the prior exact-minute match (`now.minute in schedule`) almost never landed a tick on the 2-min/hr slots, so `failed_conn` (:17/:47) fired 0× over 8.5h even while in-window. **`FAIL (enabled: X but 0 firings)` is BENIGN when the deploy came up off-window or hasn't reached its active window yet** (e.g. window `[[658,1073]]`=10:58–17:53 UTC but VM booted at 20:54 UTC → never in-window → self-clears at next window). Only a real fault if 0 firings persists across in-window periods. | `SVCS_ENABLED` + `SVC_HITS` |
+| Svcs | Phase 3 — when any `diversity.background_services.*_enabled` is true, `[scripted-svc]` lines must appear in systemd.log. **In-window-only + catch-up (2026-06-05, commit `26c2489`):** scripted probes fire ONLY from the in-window cluster loop (`emulation_loop.py:583`, same gating as D4 `maybe_generate` one line above) — outside an active window the loop `continue`s past the task body and nothing fires. The scheduler uses **catch-up** semantics (fire the most recent scheduled slot at/before the current minute that hasn't fired this hour) — the prior exact-minute match (`now.minute in schedule`) almost never landed a tick on the 2-min/hr slots, so `failed_conn` (:17/:47) fired 0× over 8.5h even while in-window. **`FAIL (enabled: X but 0 firings)` is BENIGN when the deploy came up off-window or hasn't reached its active window yet** (e.g. window `[[658,1073]]`=10:58–17:53 UTC but VM booted at 20:54 UTC → never in-window → self-clears at next window). **Also benign right after deploy on the slowest CPU brains (B2C/S2C):** probes fire from the in-window cluster loop, so a CPU-BU SUP that has only completed 1-2 slow workflows hasn't cycled enough to hit a probe slot yet — it fires as it iterates (seen on cptc9 2026-06-09: 4/5 SUPs firing, B2C the lone lagging holdout, cleared on its own). Only a real fault if 0 firings persists across in-window periods on a brain that IS cycling. | `SVCS_ENABLED` + `SVC_HITS` |
 | DL | Phase 4 — `download_url_pool` shape detected (dict for bucketed, list for legacy); `behavior.download.{size_mix, outcome_mix}` presence reported in detail | `DL_SHAPE` + `DL_BUCKETS` + `DL_SIZE_MIX` + `DL_OUTCOME_MIX` |
 
 ## Window-mode column states (post 2026-05-08)
@@ -100,6 +100,17 @@ Ground-truthed on 2026-05-10 with tcpdump: real total outbound was
 same SUP. Thresholds are deliberately loose because workflows dominate
 the actual emitted traffic; this column only flags "D4 isn't running
 at all." If `Win=OK` but `BG=FAIL`, the SUP is almost certainly fine.
+
+**cptc datasets always FAIL BG/volume — by design (2026-06-09).** cptc8/cptc9
+behavior.json carry a competition-scale `target_conn_per_minute_during_active`
+(~185 — cptc9 hostile-competition rate), which D4's ~16/min ceiling (see
+`feedback_d4_throughput_ceiling`) + browsing workflows structurally cannot
+reach. So `BG=0/N` and `volume=FAIL (≈9/185, ratio ≈0.05)` are PERMANENT and
+EXPECTED on every cptc deploy — same structural unreachability that scores cptc
+~0 on the model. NOT a fault, NOT fixable RUSE-side. Confirmed on the
+`decoy-feedback-expctrlsv716-cptc9-all` smoke test. (The real total-outbound
+signal — BU browsers hitting `active_opens` 150-170/min — is healthy; it's only
+the D4-floor-vs-185 ratio that reads red.)
 
 **Future column (not wired):** the `network_sample` jsonl event (2026-06-01,
 `active_opens`/`distinct_hosts` from `OutboundConnSampler`) and the new
