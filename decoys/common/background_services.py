@@ -82,6 +82,11 @@ class BackgroundServiceGenerator:
         # exactly as the legacy hour-rate generator.
         self._in_window = False
         self._volume_target = None
+        # Net-out: conns opened this minute by OTHER in-process generators
+        # (currently the PersistentSession daemon). Subtracted from the
+        # deficit so D4 doesn't double-fill the per-minute volume budget.
+        # Pushed by the main loop via set_window_state each cluster boundary.
+        self._external_conns = 0
         # Per-minute counter — every call to _do_dns/http/ntp increments.
         # Reset + logged when the UTC minute rolls. Logged value feeds
         # the audit Vol column. Cheap-and-dirty: counts only bg-service
@@ -149,11 +154,17 @@ class BackgroundServiceGenerator:
             self._last_day = now.day
 
     def set_window_state(self, in_window: bool,
-                         volume_target: float = None):
+                         volume_target: float = None,
+                         external_conns: int = 0):
         """Push window-mode state from emulation_loop at cluster
         boundaries. When in_window is True and a positive volume_target
         is given, maybe_generate() will deficit-burst extra probes to
         approach `volume_target` bg-conns/minute (cap at 1.5x).
+
+        `external_conns` is the count of conns opened this minute by other
+        in-process generators (the PersistentSession daemon) — subtracted
+        from the deficit so D4 tops up to target MINUS those, keeping total
+        per-minute volume at target instead of stacking on top.
 
         Outside windows or with no target, behaves as the legacy
         hour-rate generator (no burst)."""
@@ -161,6 +172,7 @@ class BackgroundServiceGenerator:
         self._volume_target = (float(volume_target)
                                if volume_target and volume_target > 0
                                else None)
+        self._external_conns = max(0, int(external_conns or 0))
 
     def maybe_generate(self):
         """
@@ -211,7 +223,11 @@ class BackgroundServiceGenerator:
         # task-delay loops; over a minute we converge on target.
         if self._in_window and self._volume_target:
             cap = self._volume_target * self._DEFICIT_BURST_OVERSHOOT_CAP
-            deficit = self._volume_target - self._minute_conn_count
+            # Net out conns the PersistentSession daemon already opened this
+            # minute so D4 fills only the remaining deficit (total stays at
+            # target; service mix shifts toward ssl).
+            deficit = (self._volume_target - self._minute_conn_count
+                       - self._external_conns)
             if deficit > 0 and self._minute_conn_count < cap:
                 # How many probes to emit this call. Keep small — the
                 # generator is called many times per minute.

@@ -58,6 +58,11 @@ class BaseEmulationLoop(ABC):
         # Created lazily on first feedback reload; toggled via per-service
         # *_enabled booleans under diversity.background_services.
         self._scripted_svc = None
+        # PersistentSession daemon (diversity.persistent_sessions). Unlike D4 /
+        # scripted-svc (inline, window-gated), this runs in its OWN thread so it
+        # can hold TLS sessions open + open new ones during the loop's inter-
+        # window sleeps. Created once on first feedback reload when enabled.
+        self._persistent_svc = None
         self._recent_workflows = []
         self._cluster_distinct = set()
         self._cluster_remaining = 0
@@ -238,6 +243,19 @@ class BaseEmulationLoop(ABC):
                 self._scripted_svc = ScriptedServiceScheduler(bg_config, self.logger)
             else:
                 self._scripted_svc.update_config(bg_config)
+            # PersistentSession daemon — its own thread (see __init__). Started
+            # once when PHASE ships an enabled persistent_sessions block; config
+            # hot-reloads on subsequent boundaries (endpoint_pool diffed so the
+            # resolve-once IP cache survives — see PersistentSessionDaemon).
+            ps_config = fc.diversity_injection.get("persistent_sessions")
+            if ps_config and ps_config.get("enabled"):
+                if self._persistent_svc is None:
+                    from common.network.persistent_session import PersistentSessionDaemon
+                    self._persistent_svc = PersistentSessionDaemon(
+                        ps_config, self.logger, seed=self.seed)
+                    self._persistent_svc.start()
+                else:
+                    self._persistent_svc.update_config(ps_config, seed=self.seed)
 
         # Push window contract — both modes consume it identically.
         if self._phase_timing is not None:
@@ -514,9 +532,17 @@ class BaseEmulationLoop(ABC):
             # BASELINE), in_window=False disables the burst — bg-svc
             # falls back to its hour-rate behavior.
             if self._background_svc is not None:
+                # Net-out: pass the daemon's per-minute open count so D4's
+                # deficit-burst tops up to target MINUS what PersistentSession
+                # already opened — total stays at target instead of stacking,
+                # and the mix shifts from dns/http toward ssl. Read-by-value of
+                # an int on the main thread → race-free (D4 stays passive).
+                external = (self._persistent_svc.opens_in_current_minute()
+                            if self._persistent_svc is not None else 0)
                 self._background_svc.set_window_state(
                     in_window=self._cluster_deadline_ts is not None,
                     volume_target=self._volume_target,
+                    external_conns=external,
                 )
 
             # Log activity level
@@ -696,6 +722,13 @@ class BaseEmulationLoop(ABC):
         print(f"\nTerminating {label}...")
         if self.logger:
             self.logger.info(f"{label} terminating")
+        # Stop the persistent-session thread first so its sockets FIN-close
+        # cleanly (-> Zeek conn_state=SF) before the process exits.
+        if self._persistent_svc is not None:
+            try:
+                self._persistent_svc.stop()
+            except Exception:
+                pass
         for workflow in self.workflows:
             try:
                 workflow.cleanup()

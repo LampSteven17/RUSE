@@ -197,6 +197,9 @@ if [ -n "$SYSLOG" ]; then
   # Phase 3 scripted-services activity: count [scripted-svc] log lines.
   # Only meaningful when SVCS_ENABLED is non-empty.
   echo "SVC_HITS=$(grep -c '\\[scripted-svc\\]' "$SYSLOG" 2>/dev/null || echo 0)"
+  # PersistentSession daemon liveness: count [psess] open lines.
+  # Only meaningful when PSESS_ENABLED=1.
+  echo "PSESS_HITS=$(grep -c '\\[psess\\] open' "$SYSLOG" 2>/dev/null || echo 0)"
 else
   echo "WARN_COUNT=0"
   echo "INFO_COUNT=0"
@@ -205,6 +208,7 @@ else
   echo "WARN_LINES="
   echo "SEED_LINE_COUNT=0"
   echo "SVC_HITS=0"
+  echo "PSESS_HITS=0"
 fi
 # Window-mode probe (PHASE 2026-05-08, simplified). Emit WIN_STATE /
 # WIN_N / WIN_ON_MIN / WIN_TARGET / WIN_VOL_MEDIAN. PHASE consolidated
@@ -298,6 +302,10 @@ bg = (d.get("diversity") or dict()).get("background_services") or dict()
 enabled_svcs = [k.replace("_enabled","") for k, v in bg.items() if k.endswith("_enabled") and v]
 print("SVCS_ENABLED=%s" % ",".join(enabled_svcs))
 
+# ── PersistentSession daemon toggle ──────────────────────────────
+ps = (d.get("diversity") or dict()).get("persistent_sessions") or dict()
+print("PSESS_ENABLED=%d" % (1 if ps.get("enabled") else 0))
+
 # ── Phase 4: bucketed download_url_pool + behavior.download.* ────
 dl = c.get("download_url_pool")
 if isinstance(dl, dict):
@@ -333,6 +341,7 @@ else
   echo "SCHED_BLOCKS=0"
   echo "SCHED_COVERAGE=0"
   echo "SVCS_ENABLED="
+  echo "PSESS_ENABLED=0"
   echo "DL_SHAPE=n/a"
   echo "DL_BUCKETS="
   echo "DL_SIZE_MIX=0"
@@ -738,6 +747,23 @@ def _classify_vm(vm: dict, probe: dict) -> dict:
         checks["scripted_svc"] = f"FAIL (enabled: {svcs_enabled} but 0 firings)"
     else:
         checks["scripted_svc"] = f"OK ({svc_hits} hits, enabled: {svcs_enabled})"
+
+    # 15b. PersistentSession daemon. When diversity.persistent_sessions.enabled
+    # is true, systemd.log should carry [psess] open lines (opens fire across
+    # the active-hours band, incl. inter-window gaps). Zero opens with the
+    # toggle on = silent daemon failure. Benign caveat: a SUP that booted
+    # off-band (this hour's session_opens_per_hour is 0) hasn't opened yet —
+    # it self-clears when the band is reached, same spirit as scripted_svc.
+    psess_enabled = (probe.get("PSESS_ENABLED", "0") or "0") == "1"
+    psess_hits = int(probe.get("PSESS_HITS", "0") or "0")
+    if behavior in ("C0", "M0"):
+        checks["persistent_session"] = "n/a"
+    elif not psess_enabled:
+        checks["persistent_session"] = "n/a (not enabled)"
+    elif psess_hits == 0:
+        checks["persistent_session"] = "FAIL (enabled but 0 opens)"
+    else:
+        checks["persistent_session"] = f"OK ({psess_hits} opens)"
 
     # 16. Downloader (Phase 4). download_url_pool shape: dict means
     # bucketed (Phase 4 shape), list means legacy flat. PHASE must always
@@ -1314,8 +1340,8 @@ def _write_markdown(
     for (name, rid), entries in sorted(by_dep.items()):
         lines.append(f"### `{name}-{rid}`")
         lines.append("")
-        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG | Seed | Pools | Schedule | Scripted-svc | Downloader |")
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("| VM | Behavior | IP | SSH | Service | Process | Model | GPU | Logs | Cron | Feedback | Warnings | Window | BG | Seed | Pools | Schedule | Scripted-svc | Persistent-svc | Downloader |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for vm, probe, checks in sorted(entries, key=lambda e: e[0]["name"]):
             lines.append(
                 f"| `{vm['name']}` | {vm['behavior']} | {vm['ip']} | "
@@ -1327,6 +1353,7 @@ def _write_markdown(
                 f"{checks.get('window', '?')} | {checks.get('volume', '?')} | "
                 f"{checks.get('seed', '?')} | {checks.get('pools', '?')} | "
                 f"{checks.get('schedule', '?')} | {checks.get('scripted_svc', '?')} | "
+                f"{checks.get('persistent_session', '?')} | "
                 f"{checks.get('downloader', '?')} |"
             )
         lines.append("")
