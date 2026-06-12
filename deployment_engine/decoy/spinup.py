@@ -365,24 +365,20 @@ def _derive_behavior_paths(sup_behavior: str) -> tuple[str, str]:
       B0.gemma   -> ('B.gemma', 'B0.gemma')
       B2C.gemma  -> ('B.gemma', 'B0C.gemma')
       S2.gemma   -> ('S.gemma', 'S0.gemma')
-      B2R.gemma  -> ('B.gemma', 'B0.gemma')   # R-tier reuses .gemma baseline
-      S2R.gemma  -> ('S.gemma', 'S0.gemma')   # PHASE only ships .gemma; R borrows
+      B2R.gemma  -> ('B.gemma', 'B0R.gemma')  # R-tier reads its OWN baseline
+      S2R.gemma  -> ('S.gemma', 'S0R.gemma')  # PHASE now emits distinct B0R/S0R
+
+    R-tier note (2026-06-12): PHASE used to ship only .gemma content shared
+    across V100/RTX, so R was stripped (B2R -> B0). PHASE now emits per-tier
+    B0R/S0R configs that genuinely differ (seed, pools, behavior modifiers,
+    persistent_sessions on/off), so R-tier must read its OWN baseline. The
+    behavior_dir stays B.gemma (the family dir) — only the baseline_config
+    keeps its R. behavior_dir's regex [A-Z]* greedily consumes the R.
     """
     m = re.match(r'^([A-Z])\d+[A-Z]*(.*)$', sup_behavior)
     behavior_dir = m.group(1) + m.group(2) if m else sup_behavior
     baseline_version = "1" if sup_behavior[:1] == "M" else "0"
     baseline_config = re.sub(r'^([A-Z])\d+', rf"\g<1>{baseline_version}", sup_behavior)
-    # R-tier (RTX) keys reuse the V100-tier .gemma baseline because PHASE
-    # only ships .gemma feedback content. Strip the R from baseline_config
-    # so e.g. B2R.gemma -> baseline B0.gemma (not B0R.gemma which doesn't
-    # exist on disk). behavior_dir is already correct since the regex's
-    # [A-Z]* greedily consumes the R between digit and suffix.
-    if "R" in baseline_config and baseline_config not in ("R",):
-        # Only strip a SINGLE-letter R that lives between the digit and the
-        # optional `.suffix` — not any R that happens to appear elsewhere.
-        baseline_config = re.sub(r'^([A-Z]\d+)R(\.[a-z]+)?$',
-                                 lambda mm: mm.group(1) + (mm.group(2) or ''),
-                                 baseline_config)
     return behavior_dir, baseline_config
 
 
