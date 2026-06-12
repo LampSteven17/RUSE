@@ -273,16 +273,17 @@ class BaseEmulationLoop(ABC):
         has_bg_svc = self._background_svc is not None
         has_prompt_aug = bool(fc.prompt_augmentation and fc.prompt_augmentation.get("prompt_content"))
 
-        # Ablation-gated omissions are intentional, not bugs. PHASE's
-        # feedback engine runs per-feature ablation against the target
-        # detection model; sections whose knobs don't move the score are
-        # deliberately left out. Distinguish:
-        #   [INFO]    ... ablation-gated (PHASE dropped it on purpose)
-        #   [WARNING] ... DISABLED (unexpected omission, treat as bug)
-        gated = fc.is_ablation_gated() if fc else False
-        tag = "[INFO]" if gated else "[WARNING]"
-        reason_suffix = (" (ablation-gated — no behavioral lever for this model)"
-                         if gated else "")
+        # Section-absent status lines. Under the two-shapes contract (2026-05-08,
+        # commit 8f91240a) PHASE deleted _metadata.ablation_gate along with the
+        # 3-gate pipeline, so these sections (workflow_rotation, background_services,
+        # prompt_augmentation, workflow_weights) are OPTIONAL by design — PHASE
+        # legitimately omits them in the feedback/controls schema. Their absence
+        # is canonical, NOT an anomaly: a genuinely broken feedback doc is caught
+        # earlier with a hard fail (missing behavior.json / wrong mode / bad JSON).
+        # So report [INFO], not [WARNING]. Tagging [WARNING] here keyed on the now-
+        # deleted ablation_gate contract and flooded the audit with false failures.
+        tag = "[INFO]"
+        reason_suffix = " (optional — omitted by PHASE per two-shapes contract)"
 
         if min_distinct == 0:
             print(f"{tag} D2 min_distinct_per_cluster DISABLED — "
