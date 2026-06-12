@@ -161,7 +161,7 @@ class PersistentSessionDaemon:
                                   min(ka, _SEND_INTERVAL_CEILING_S))
 
         try:
-            self._duration_target = max(float(config.get("session_duration_seconds", 120)), 5.0)
+            self._duration_target = max(float(config.get("session_duration_seconds", 120)), 1.0)
         except (TypeError, ValueError):
             self._duration_target = 120.0
         try:
@@ -326,9 +326,15 @@ class PersistentSessionDaemon:
 
         # Lifetime = min(sampled duration, time-to-active-block-end). The cap makes
         # the rare long-tail session close gracefully at the workday boundary.
+        # Floor is a small absolute (2s), NOT the send interval: PHASE emits
+        # sub-10s duration targets for some datasets (e.g. summer24 ~3s), and
+        # flooring at the 10s send interval collapsed every session to an
+        # identical 10s/1-request/same-bytes shape — itself a fingerprint. The
+        # first request fires orig_bytes at open, so a 2s session is still
+        # complete; the lognormal spread is preserved down to the real target.
         sampled = self._sample_duration()
         block_end = self._active_block_end_seconds(now_utc)
-        lifetime = max(self._send_interval, min(sampled, block_end))
+        lifetime = max(2.0, min(sampled, block_end))
         end_mono = now_mono + lifetime
 
         s = _Session(sock, host, ip, now_mono, end_mono,
