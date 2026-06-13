@@ -703,7 +703,7 @@ install_system_deps() {
             # Install Geckodriver
             log "Installing Geckodriver..."
             if [[ "$(uname -m)" == "x86_64" ]]; then
-                wget -q "https://github.com/mozilla/geckodriver/releases/download/v0.34.0/geckodriver-v0.34.0-linux64.tar.gz" -O /tmp/geckodriver.tar.gz
+                wget -q "https://github.com/mozilla/geckodriver/releases/download/v0.37.0/geckodriver-v0.37.0-linux64.tar.gz" -O /tmp/geckodriver.tar.gz
                 sudo tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin/
                 sudo chmod +x /usr/local/bin/geckodriver
                 rm -f /tmp/geckodriver.tar.gz

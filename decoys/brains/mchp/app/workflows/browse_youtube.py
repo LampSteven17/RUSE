@@ -175,24 +175,33 @@ class YoutubeSearch(BaseWorkflow):
                 # 0 on a dead/private one). Short wait — the sidebar lazy-loads.
                 SUGGESTED_SELECTOR = '#secondary a[href*="watch"]'
                 try:
-                    WebDriverWait(self.driver.driver, 5).until(
+                    # 10s (matches the 10s search-path wait at L125). The
+                    # #secondary recommendations lazy-load via JS; the prior 5s
+                    # was too short on a cold/datacenter Firefox and intermittently
+                    # timed out -> 0 elements -> a misleading "empty" warning on a
+                    # perfectly live video. 10s gives the sidebar time to render.
+                    WebDriverWait(self.driver.driver, 10).until(
                         EC.presence_of_all_elements_located((By.CSS_SELECTOR, SUGGESTED_SELECTOR)))
                 except Exception:
                     pass  # empty-list check below handles a still-empty sidebar
                 suggested_videos = self.driver.driver.find_elements(By.CSS_SELECTOR, SUGGESTED_SELECTOR)
                 if not suggested_videos:
-                    # Empty sidebar = usually a dead/private video (no related
-                    # videos render) — the availability guard skips most, but a
-                    # video can die between guard-check and navigation.
+                    # Empty sidebar after the full wait is a benign, recoverable
+                    # outcome — NOT a dead-video signal (videos here are confirmed
+                    # live; the availability guard already skipped dead ones). It's
+                    # a transient lazy-load / geckodriver hiccup, or a page with no
+                    # related videos. Log INFO and end the suggested-click loop;
+                    # do not treat it as a step error (it inflates error counts and
+                    # floods the audit with false warnings).
                     msg = (
-                        f"[WARNING] BrowseYouTube suggested_videos empty — "
+                        f"[INFO] BrowseYouTube suggested_videos empty — "
                         f"selector '{SUGGESTED_SELECTOR}' returned 0 elements on "
                         f"{self.driver.driver.current_url} (pool_mode="
                         f"{'phase' if self.video_pool else 'search'})"
                     )
                     print(msg)
                     if logger:
-                        logger.step_error("click", msg)
+                        logger.info(msg)
                     break
                 suggested_videos[random.randrange(0, len(suggested_videos))].click()
                 if logger:
