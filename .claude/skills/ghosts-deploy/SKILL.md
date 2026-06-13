@@ -44,7 +44,7 @@ also work.
 
 | | |
 |---|---|
-| Inputs | `deployments/ghosts-controls/config.yaml`, `~/GHOSTS/` (clone of `cmu-sei/GHOSTS` master), `/mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/npc-{N}/timeline.json` (5 per-NPC tuned timelines; namespaced 2026-06 — feedback needs `--preset`), `~/.docker-hub-token` + `~/.docker-hub-token-user` (optional) |
+| Inputs | `deployments/ghosts-controls/config.yaml`, `~/GHOSTS/` (clone of `cmu-sei/GHOSTS`, deploys pin tag `v9.0.0`), `/mnt/AXES2U1/feedback/ghosts-controls/{preset}_v{version}/{dataset}/npc-{N}/timeline.json` (5 per-NPC tuned timelines; namespaced 2026-06 — feedback needs `--preset`), `~/.docker-hub-token` + `~/.docker-hub-token-user` (optional) |
 | Outputs | `deployments/ghosts-{controls,feedback-...}/runs/{run_id}/` (config.yaml snapshot, inventory.ini with `[ghosts_api]` + `[ghosts_clients]` host vars, ssh_config_snippet.txt, deployment_type, deploy_status.json, timelines/g-{hash}-npc-N.json) |
 | Manifest | PHASE source `manifest.json`; same loader as DECOY/RAMPART |
 | Upstream | PHASE feedback engine writes target-native per-NPC `timeline.json` directly (no translation layer) |
@@ -67,7 +67,7 @@ g-{hash}-api-0    Docker stack: ghosts-api(:5000), frontend(:4200),
 ```
 
 `ghosts-controls` baseline: 1 API + 5 NPC clients (`v1.14vcpu.28g`),
-`cmu-sei/GHOSTS` master.
+`cmu-sei/GHOSTS` pinned to tag `v9.0.0`.
 
 ## Deploy config
 
@@ -286,10 +286,21 @@ MemorySwapMax=0
 m1.medium (4 GB)** (2026-06-10; was 12G on the interim m1.xlarge/16 GB, 20G on the
 original 28 GB). When the cgroup hits the cap the kernel kills a process **inside
 its cgroup ONLY**; systemd respawns via `Restart=always` within `RestartSec=10`.
-sshd / cron / system services stay alive — VM remains usable indefinitely even
-as leak recurs. Lower RAM → faster respawn (~hourly at 12G vs ~2h at 20G); stays
-under the audit `NRestarts ≤ 50` healthy threshold. The audit reads `MemoryMax`
-live from the unit, so it tracks the cap automatically.
+sshd / cron / system services stay alive — the VM stays usable. On v9.0.0 the
+.NET client does NOT leak (flat ~160-180 MB), so what reaches the cap is
+**Firefox** accumulating under heavy browsing (ad/video-laden pages → dozens of
+content procs), not a client leak. The audit reads `MemoryMax` live from the
+unit, so it tracks the cap automatically.
+
+**m1.medium soak verdict (2026-06-12, ~half-day):** holding. Of 70 feedback NPCs,
+~27 idle near 3% (off-window), most browse at 20-57%, and a hot tail of 1-3
+(heaviest ad/video browsers, ~70 firefox procs) ride the 3G cap. The hottest
+(`fall24/npc-2`) OOM-cycled twice (`NRestarts=2`) in 12h — the memcap firing as
+designed: clean cgroup respawn, sshd safe, traffic resumes. **Tripwire:** if a
+feedback NPC's `NRestarts` climbs into the teens/twenties on re-audit, respawns
+are frequent enough to chop its traffic → bump THAT dataset to m1.large (8 GB) +
+memcap ~6G. Until then m1.medium (24 cores/dataset vs 34 at large) is the chosen
+tradeoff — graceful degradation, not failure (operator decision 2026-06-12).
 
 Scope: feedback ONLY. Controls keep pure upstream so they remain
 experimentally pristine.
@@ -304,18 +315,19 @@ Audit signal: feedback NPCs may show `NRestarts > 0` as cgroup OOM cycle
 fires — expected and healthy. Pre-cap, NPCs went SSH-fail entirely;
 post-cap they cycle gracefully and stay reachable.
 
-## Memleak hard-reboot
+## Memleak hard-reboot (legacy — leak fixed on v9.0.0)
 
-If the cap doesn't catch leak fast enough OR running a control VM:
+The unbounded .NET leak was real on `master`/.NET 9 (25 GB in hours → killed
+sshd). **v9.0.0 fixed it** (canary: client flat ~160-180 MB over 12h), so a hard
+reboot should rarely be needed now. If a VM ever does go unresponsive (e.g. an
+un-capped control whose Firefox ran away):
 
 ```bash
 source ~/vxn3kr-bot-rc
 openstack server reboot --hard g-<hash>-npc-N
 ```
 
-Not patching upstream code. If experiments hit this regularly, lower
-`MemoryMax` in the drop-in or add daily restart cron mirroring MCHP
-pattern.
+Not patching upstream code.
 
 ## Build issues (patched in playbooks)
 
@@ -367,9 +379,17 @@ API health probe: `/api/machines` (upstream removed `/api/home`).
 - `install-ghosts-api.yaml` — `set -euo pipefail` on Docker install,
   Dockerfile stat-then-sed, explicit `fail:` on API health timeout,
   docker compose stdout ERROR detection
-- `install-ghosts-clients.yaml` — `set -euo pipefail` on dotnet publish,
-  `Ghosts.Client.Universal.dll` stat assertion, `systemctl is-active`
-  (no ignore_errors)
+- `install-ghosts-clients.yaml` — `set -euo pipefail` on dotnet publish (with
+  `args.executable: /bin/bash`), `Ghosts.Client.Universal.dll` stat assertion,
+  a pinned-Firefox `firefox --version` + `libgtk-3` assert, and a **poll** for
+  the client to reach `active`. Two gotchas fixed (2026-06-10):
+  - the Firefox assert uses `set -eu`, NOT pipefail — `ldconfig | grep -q`
+    early-closes the pipe → `ldconfig` gets SIGPIPE → pipefail surfaces rc=141,
+    an intermittent (~1/5 VMs) false-fail even though Firefox was fine.
+  - the active check **polls** (`until: client_status.stdout == "active"`,
+    retries ~60s) with the conditional guarded by `| default('')` — a one-shot
+    `systemctl is-active` raced the client's startup under `strategy: free` and
+    false-failed (`'dict object' has no attribute 'stdout'`).
 
 ## SSH access
 

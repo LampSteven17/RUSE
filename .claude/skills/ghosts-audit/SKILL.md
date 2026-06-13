@@ -38,11 +38,18 @@ NPC VMs (`g-{hash}-npc-N`):
 2. `systemctl is-active ghosts-client`
 3. NRestarts within mode-aware threshold:
     - controls: 0 expected, `>0` flagged WARN
-    - feedback: 0..50 healthy (cgroup OOM cycle every ~2h from upstream
-      memleak; ~12 cycles/24h is steady-state); `>50` = cap too tight
-4. Memcap drop-in (`/etc/systemd/system/ghosts-client.service.d/memcap.conf`)
-   present iff feedback (mismatch = `is_feedback` Ansible gate fired wrong)
-5. RSS vs `MemoryMax` — informational; ≥95% on feedback = OOM imminent
+    - feedback: 0..50 healthy, `>50` = cap too tight. On v9.0.0 the .NET client
+      does NOT leak (was the cause pre-v9.0.0); cycling now is **Firefox**
+      accumulating against the 3G memcap on the tight m1.medium flavor. Soak
+      2026-06-12: most feedback NPCs cycle rarely/never; the hottest ad/video
+      browsers ~NRestarts 2/12h. OPERATOR TRIPWIRE (below the >50 fail): an NPC's
+      NRestarts climbing into the teens/twenties = respawns frequent enough to
+      chop traffic → bump that dataset to m1.large + memcap ~6G.
+4. Memcap drop-in (`/etc/systemd/system/ghosts-client.service.d/memcap.conf`,
+   `MemoryMax=3G` for m1.medium) present iff feedback (mismatch = `is_feedback`
+   Ansible gate fired wrong)
+5. RSS vs `MemoryMax` — informational; ≥95% on feedback = OOM imminent (= memcap
+   about to cgroup-cycle that NPC; designed behavior, not a VM crash)
 6. `/opt/ghosts-client/config/timeline.json`: present, parseable,
    `Status=Run` (case-insensitive), handlers > 0, top-level `Id` field
    present (the .NET client adds a registration GUID on first start;
