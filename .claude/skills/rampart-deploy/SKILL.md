@@ -223,6 +223,24 @@ Why not Ansible: Ansible's `raw` module strips PowerShell `$` variables
 Windows SSH options: `PubkeyAuthentication=no` to prevent pubkey burning
 Windows sshd's `MaxAuthTries` before password attempt.
 
+### Chrome reaper (feedback only, 2026-06-12)
+
+pyhuman browse workflows on Windows orphan chrome.exe/chromedriver.exe on
+exception paths; orphans accumulate over days until the VM wedges (sshd
+can't fork, PowerShell CLR can't start — observed: 5-day-old chrome on a
+controls endpoint, 50 stacked chrome procs on a 1.5-day-old feedback
+endpoint; 3 VMs wedged across the 06-10..06-11 expctrlsv716 fleet). Linux
+endpoints do NOT leak (verified clean).
+
+Feedback deploys (`deployment.startswith("rampart-feedback")`) get two
+extra `_setup_one` SSH steps: write `C:\tmp\chrome-reaper.ps1` (kills
+chrome/chromedriver older than 2h — age gate means live workflow browsers,
+minutes-old, are never touched) and register `RampartChromeReaper`
+(hourly repetition trigger, SYSTEM, no resident process; 3650d repetition
+window survives reboots). Controls stay pristine baseline — no reaper —
+so a controls Windows endpoint can still wedge after ~5-7 days on
+m1.small; that's accepted, reboot recovers (RampartHuman is AtStartup).
+
 ## Hour gating (4 PHASE fields, UTC-indexed)
 
 PHASE writes hour-of-day fields into per-node `user-roles.json`'s

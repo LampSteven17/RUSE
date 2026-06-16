@@ -188,7 +188,10 @@ def run_rampart_spinup(
             return 1
 
         # Windows endpoints: direct SSH (Ansible mangles PowerShell $ variables)
-        win_ok, win_total = _deploy_windows_emulation(run_dir, ent_prefix)
+        win_ok, win_total = _deploy_windows_emulation(
+            run_dir, ent_prefix,
+            chrome_reaper=deployment.startswith("rampart-feedback"),
+        )
         if win_total > 0:
             # C2: Fail deploy if too many Windows endpoints didn't deploy.
             # Threshold is 90% — below that the deploy is not usable for
@@ -651,11 +654,21 @@ def _generate_emulation_inventory(
     return count
 
 
-def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]:
+def _deploy_windows_emulation(
+    run_dir: Path, ent_prefix: str, chrome_reaper: bool = False,
+) -> tuple[int, int]:
     """Deploy emulation on Windows endpoints via direct SSH.
 
     Uses sshpass for password auth — Ansible raw module can't handle
     PowerShell $ variables without mangling them.
+
+    chrome_reaper=True (feedback deploys only — controls stay pristine
+    baseline) additionally registers an hourly RampartChromeReaper task
+    that kills chrome.exe processes older than 2 hours. pyhuman browse
+    workflows on Windows orphan their browsers on exception paths;
+    orphans accumulate over days until the VM wedges (sshd can't fork,
+    CLR can't start). The 2h age gate means a live workflow's browser
+    (minutes-old) is never touched.
 
     Returns (ok_count, total_count).
     """
@@ -822,6 +835,37 @@ def _deploy_windows_emulation(run_dir: Path, ent_prefix: str) -> tuple[int, int]
             _ssh_step(vm, "start_task",
                 'powershell -Command "Start-ScheduledTask -TaskName RampartHuman"'
             )
+
+            # 5) Feedback only: hourly reaper for orphaned chrome processes.
+            # Same $l-array technique as run-emulation.ps1 — the script file
+            # sidesteps ssh→cmd→powershell quote nesting for $_ etc.
+            if chrome_reaper:
+                reaper_script = (
+                    f'powershell -Command "'
+                    f"$l = @(); "
+                    f"$l += 'Get-Process chrome, chromedriver -ErrorAction SilentlyContinue | "
+                    f"Where-Object {{ $_.StartTime -lt (Get-Date).AddHours(-2) }} | "
+                    f"Stop-Process -Force'; "
+                    f'$l | Set-Content C:\\tmp\\chrome-reaper.ps1 -Encoding ASCII"'
+                )
+                _ssh_step(vm, "reaper_script", reaper_script)
+
+                # -Once + RepetitionInterval (not AtStartup + loop): no
+                # resident powershell.exe eating RAM on the very VMs this
+                # protects. Repetition window 3650d survives reboots.
+                reaper_task = (
+                    f'powershell -ExecutionPolicy Bypass -Command "'
+                    f"Unregister-ScheduledTask -TaskName RampartChromeReaper -Confirm:$false -ErrorAction SilentlyContinue; "
+                    f"$a = New-ScheduledTaskAction -Execute powershell.exe "
+                    f"-Argument '-ExecutionPolicy Bypass -WindowStyle Hidden -File C:\\tmp\\chrome-reaper.ps1'; "
+                    f"$t = New-ScheduledTaskTrigger -Once -At (Get-Date) "
+                    f"-RepetitionInterval (New-TimeSpan -Minutes 60) "
+                    f"-RepetitionDuration (New-TimeSpan -Days 3650); "
+                    f"$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; "
+                    f"Register-ScheduledTask -TaskName RampartChromeReaper -Action $a -Trigger $t -Settings $s "
+                    f'-User SYSTEM -RunLevel Highest -Force"'
+                )
+                _ssh_step(vm, "reaper_task", reaper_task)
 
             output.info(f"  [{ts}]    OK  {vm['name']} (Windows)")
             return True, ""
