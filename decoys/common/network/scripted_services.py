@@ -31,7 +31,6 @@ don't re-fire the same probe.
 from __future__ import annotations
 
 import logging
-import random
 import socket
 import ssl
 import time
@@ -39,6 +38,13 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import requests
+
+
+# Token-bucket ceiling for the conn_state_mix failed_conn rate actuator: the
+# most probe-budget that can accrue while maybe_run isn't being called (the main
+# loop is blocked in a slow workflow or sleeping between clusters). Bounds the
+# post-idle catch-up burst; normal operation keeps the bucket near-empty.
+_FC_BUCKET_CAP = 120.0
 
 
 # ─── Endpoints (hardcoded; PHASE only toggles on/off) ────────────────────
@@ -217,8 +223,15 @@ class ScriptedServiceScheduler:
         # carries a conn_state_mix.failed_conn target, failed_conn switches from
         # its fixed cron slot to a target-driven per-minute rate.
         self._controller = None
-        self._fc_minute_stamp: Optional[tuple] = None
-        self._fc_fired_this_minute = 0
+        # Wall-time token bucket for the failed_conn rate (Phase 1.1, 2026-06-16).
+        # The earlier rate/30 per-call probability assumed ~30 maybe_run calls/min
+        # but maybe_run is called ~1x/workflow (0.25-0.9/min) → it under-fired
+        # ~15-30x (canary-confirmed). Accruing budget against WALL TIME makes
+        # firing independent of call cadence; non-blocking SYN probes
+        # (_fire_failed_conn_fast) let a whole minute's budget flush in one call
+        # with no per-probe timeout latency.
+        self._fc_last_ts: Optional[float] = None
+        self._fc_tokens = 0.0
         self.update_config(config or {})
 
     def set_controller(self, controller) -> None:
@@ -307,10 +320,12 @@ class ScriptedServiceScheduler:
             return False
 
     def _maybe_fire_failed_conn_rate(self, now: datetime) -> int:
-        """Fire probe_failed_conn() toward the controller's per-minute target
-        rate. Probabilistic spread across the many maybe_run() calls per minute,
-        bounded by a per-minute budget so total firings track the rate regardless
-        of call cadence. Returns 1 if it fired, else 0."""
+        """Fire non-blocking failed_conn SYNs toward the controller's per-minute
+        target rate, paced by a WALL-TIME token bucket so total firings track the
+        rate no matter how often maybe_run() is called. Budget accrues at
+        rate/min since the last call and the whole accrued amount flushes here —
+        the probes are non-blocking (no timeout latency), so even a multi-minute
+        backlog fires cheaply. Returns the number fired."""
         ctrl = self._controller
         try:
             rate = float(ctrl.failed_conn_rate_per_min())
@@ -318,28 +333,44 @@ class ScriptedServiceScheduler:
             rate = 0.0
         if rate <= 0:
             return 0
-        key = (now.hour, now.minute)
-        if key != self._fc_minute_stamp:
-            self._fc_minute_stamp = key
-            self._fc_fired_this_minute = 0
-        if self._fc_fired_this_minute >= rate:
+        t = time.monotonic()
+        if self._fc_last_ts is None:
+            # First call: establish the time base, accrue from here.
+            self._fc_last_ts = t
             return 0
-        if random.random() >= rate / 30.0:
+        elapsed = t - self._fc_last_ts
+        self._fc_last_ts = t
+        self._fc_tokens = min(self._fc_tokens + rate * elapsed / 60.0,
+                              _FC_BUCKET_CAP)
+        n = int(self._fc_tokens)
+        if n <= 0:
             return 0
-        try:
-            ok, conn_state, ms = probe_failed_conn()
-        except Exception as e:
-            print(f"[WARNING] scripted_services.failed_conn(rate) raised "
-                  f"{type(e).__name__}: {str(e)[:80]}")
-            if self.logger:
-                self.logger.warning(
-                    f"scripted-svc failed_conn(rate) exception: "
-                    f"{type(e).__name__}: {e}")
-            ok, conn_state, ms = False, "S0", 0
-        self._fc_fired_this_minute += 1
-        msg = (f"[scripted-svc] failed_conn ok={ok} state={conn_state} "
-               f"latency_ms={ms} src=rate")
+        self._fc_tokens -= n
+        fired = 0
+        for _ in range(n):
+            if self._fire_failed_conn_fast():
+                fired += 1
+        msg = (f"[scripted-svc] failed_conn fired={fired} "
+               f"rate={rate:.2f}/min src=rate")
         print(msg)
         if self.logger:
             self.logger.info(msg)
-        return 1
+        return fired
+
+    @staticmethod
+    def _fire_failed_conn_fast() -> bool:
+        """Emit one failed-conn SYN without blocking. `connect_ex` on a
+        non-blocking socket sends the SYN and returns EINPROGRESS immediately;
+        Zeek records the attempt (REJ if the closed port RSTs, S0 if it drops) —
+        the outbound SYN is all that matters for the conn_state_mix fraction, and
+        we never complete the handshake so it can't be SF. No wait → the whole
+        per-minute budget can flush in one call with ~no latency, unlike the
+        blocking 5s-timeout cron probe. Returns True if the SYN was issued."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setblocking(False)
+            s.connect_ex((FAIL_CONN_HOST, FAIL_CONN_PORT))  # sends SYN, returns now
+            s.close()
+            return True
+        except OSError:
+            return False
