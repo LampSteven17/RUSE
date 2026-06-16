@@ -136,9 +136,20 @@ class PersistentSessionDaemon:
 
         self._sessions: list = []
 
+        # Closed-loop ShapeController (Phase 1, 2026-06-16), injected by the
+        # emulation loop via set_controller(). When present it owns per-connection
+        # orig_bytes/duration sampling (from the PHASE distribution, not the
+        # scalar) and receives an emit-side report on every session close. None →
+        # legacy scalar + lognormal fallback.
+        self._controller = None
+
         self.update_config(config or {}, seed=seed)
 
     # ── Public API ────────────────────────────────────────────────────
+
+    def set_controller(self, controller) -> None:
+        """Inject (or clear) the ShapeController. Idempotent across reloads."""
+        self._controller = controller
 
     def update_config(self, config: dict, seed: int = 0) -> None:
         """Hot-reload. Diffs endpoint_pool and re-resolves ONLY new hosts so the
@@ -241,6 +252,14 @@ class PersistentSessionDaemon:
     def _tick(self) -> None:
         now_mono = time.monotonic()
         now_utc = datetime.now(timezone.utc)
+        # Drive the controller's minute-roll from this reliable 1s thread (the
+        # main loop also calls maybe_tick, but on slow brains its cadence is
+        # irregular). Outside the daemon lock — the controller has its own.
+        if self._controller is not None:
+            try:
+                self._controller.maybe_tick()
+            except Exception:
+                pass
         with self._lock:
             self._roll_minute_locked(now_utc)
             self._reap_and_keepalive_locked(now_mono)
@@ -324,6 +343,26 @@ class PersistentSessionDaemon:
                        f"reason=connect:{type(e).__name__}")
             return
 
+        # Per-connection shape targets. When the ShapeController is active it
+        # owns the distribution sampling (orig_bytes + duration drawn from the
+        # PHASE percentiles, with its closed-loop bias applied) and the daemon
+        # honors the per-conn target directly — the percentile draw already
+        # carries the spread, so we do NOT re-apply the scalar lognormal. When
+        # absent, fall back to the scalar _bytes_target + the lognormal duration.
+        bytes_target = None
+        dur_sample = None
+        ctrl = self._controller
+        if ctrl is not None:
+            try:
+                bytes_target = ctrl.sample_orig_bytes()
+                dur_sample = ctrl.sample_duration()
+            except Exception:
+                bytes_target = dur_sample = None
+        if bytes_target is None:
+            bytes_target = self._bytes_target
+        if dur_sample is None:
+            dur_sample = self._sample_duration()
+
         # Lifetime = min(sampled duration, time-to-active-block-end). The cap makes
         # the rare long-tail session close gracefully at the workday boundary.
         # Floor is a small absolute (2s), NOT the send interval: PHASE emits
@@ -331,14 +370,13 @@ class PersistentSessionDaemon:
         # flooring at the 10s send interval collapsed every session to an
         # identical 10s/1-request/same-bytes shape — itself a fingerprint. The
         # first request fires orig_bytes at open, so a 2s session is still
-        # complete; the lognormal spread is preserved down to the real target.
-        sampled = self._sample_duration()
+        # complete; the spread is preserved down to the real target.
         block_end = self._active_block_end_seconds(now_utc)
-        lifetime = max(2.0, min(sampled, block_end))
+        lifetime = max(2.0, min(dur_sample, block_end))
         end_mono = now_mono + lifetime
 
         s = _Session(sock, host, ip, now_mono, end_mono,
-                     now_mono + self._send_interval, self._bytes_target)
+                     now_mono + self._send_interval, bytes_target)
         # First request establishes the keep-alive; counts toward orig_bytes.
         if not self._keepalive(s):
             try:
@@ -434,6 +472,17 @@ class PersistentSessionDaemon:
             pass
         self._info(f"close endpoint={s.host} reason={reason} "
                    f"bytes_cum={s.bytes_cum} requests={s.n_requests}")
+        # Emit-side ledger report (Phase 1). We always FIN-close above, so the
+        # connection is conn_state=SF regardless of `reason`. orig_bytes is the
+        # per-conn cumulative; duration is wall-clock since open.
+        ctrl = self._controller
+        if ctrl is not None:
+            try:
+                ctrl.observe_connection(
+                    "psess", s.bytes_cum,
+                    max(0.0, time.monotonic() - s.open_mono), "SF")
+            except Exception:
+                pass
 
     # ── Helpers ───────────────────────────────────────────────────────
 

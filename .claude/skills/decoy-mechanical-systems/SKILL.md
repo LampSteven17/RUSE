@@ -224,15 +224,33 @@ brain/workflow runs:
   `opens_in_current_minute` (`:223`, read by the main loop for D4 net-out),
   `_resolve` resolve-once IP cache → zero-DNS steady state (`:440`),
   `_build_request` keepalive padding toward `orig_bytes_per_session` (`:375`).
+  `set_controller` (Phase 1) lets the ShapeController override per-conn
+  `orig_bytes`/`duration` sampling; `_open_session` asks the controller first,
+  `_close_session` reports `(bytes_cum, wall-duration, "SF")` into its ledger.
   Own thread so it survives inter-window sleeps. Ships dormant until PHASE emits
   an enabled block (memory `project_persistent_session_daemon`).
+- **Closed-loop ShapeController** `common/network/shape_controller.py`:
+  `ShapeController`, `sample_orig_bytes`/`sample_duration` (per-conn draw from the
+  `connection_shape` percentiles × a bounded bias), `observe_connection`
+  (emit-side ledger), `maybe_tick` (minute-roll: correct bias from measured-vs-
+  target p50, recompute `failed_conn_rate_per_min` = frac × own-sampler
+  active_opens). Built in `_reload_behavioral_config` when PHASE ships
+  `connection_shape`(enabled)/`conn_state_mix`; injected into the persistent +
+  scripted channels. Actuates orig_bytes/duration + failed_conn TODAY; orig_pkts
+  (#3) / resp_* (#2) parsed-not-actuated. The measurement source is the emit-side
+  ledger, NOT `conn_sampler` per-conn (RUSE spec §B.1). Memory
+  `project_connection_shape_controller`.
 - **D3 scripted probes** `common/network/scripted_services.py`:
   `ScriptedServiceScheduler` (`:193`), `maybe_run` (`:231`) — smb/ldap/imap/doh/
   mdns/failed_conn on a cron-style schedule, in-window catch-up
-  (memory `project_scripted_services_in_window_catchup`).
+  (memory `project_scripted_services_in_window_catchup`). `set_controller` +
+  `_maybe_fire_failed_conn_rate` add the Phase-1 target-driven failed_conn rate
+  (bypasses the cron `failed_conn` slot when `conn_state_mix` ships a target).
 - **Real-traffic sampler** `common/network/conn_sampler.py`: `OutboundConnSampler`
   (`:33`), `sample` (`:97`) reads `/proc` (Tcp ActiveOpens + distinct peers);
-  D4 logs it via `logger.network_sample` on each minute roll.
+  D4 logs it via `logger.network_sample` on each minute roll. NOTE: this reads a
+  COUNT, not a per-connection byte/pkt/duration distribution — shape measurement
+  is emit-side (ShapeController ledger), not `/proc`.
 
 ## 8. Logging — `common/logging/agent_logger.py`
 

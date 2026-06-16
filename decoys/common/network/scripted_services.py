@@ -31,6 +31,7 @@ don't re-fire the same probe.
 from __future__ import annotations
 
 import logging
+import random
 import socket
 import ssl
 import time
@@ -212,7 +213,17 @@ class ScriptedServiceScheduler:
         for name in PROBE_REGISTRY:
             self.enabled[name] = False
             self._last_fire_key[name] = None
+        # Closed-loop ShapeController (Phase 1, 2026-06-16). When attached AND it
+        # carries a conn_state_mix.failed_conn target, failed_conn switches from
+        # its fixed cron slot to a target-driven per-minute rate.
+        self._controller = None
+        self._fc_minute_stamp: Optional[tuple] = None
+        self._fc_fired_this_minute = 0
         self.update_config(config or {})
+
+    def set_controller(self, controller) -> None:
+        """Inject (or clear) the ShapeController. Idempotent across reloads."""
+        self._controller = controller
 
     def update_config(self, config: dict) -> None:
         """Re-read enable booleans on PHASE hot-reload."""
@@ -235,12 +246,22 @@ class ScriptedServiceScheduler:
         times per minute — dedup on (service, hour-slot) ensures each slot
         runs at most once per hour even across repeated/late ticks.
         """
-        if not self._any_enabled():
-            return 0
         now = datetime.now(timezone.utc)
         fired = 0
+        # Rate-driven failed_conn (conn_state_mix actuator, Phase 1) runs
+        # independent of the cron *_enabled toggles — conn_state_mix may ship a
+        # failed_conn target with no scripted service toggled on.
+        rate_active = self._failed_conn_rate_active()
+        if rate_active:
+            fired += self._maybe_fire_failed_conn_rate(now)
+        if not self._any_enabled():
+            return fired
         for name, (fn, schedule) in PROBE_REGISTRY.items():
             if not self.enabled[name]:
+                continue
+            # When the controller owns failed_conn, skip its fixed cron slot so
+            # the cron and rate paths don't double-fire.
+            if name == "failed_conn" and rate_active:
                 continue
             # Catch-up semantics: fire the most recent scheduled minute at
             # or before the current minute this hour. A sleepy loop (long
@@ -273,3 +294,52 @@ class ScriptedServiceScheduler:
             if self.logger:
                 self.logger.info(msg)
         return fired
+
+    def _failed_conn_rate_active(self) -> bool:
+        """True when a ShapeController with a non-zero failed_conn target is
+        attached (so failed_conn is rate-driven, not cron-driven)."""
+        ctrl = self._controller
+        if ctrl is None:
+            return False
+        try:
+            return ctrl.has_failed_conn_target()
+        except Exception:
+            return False
+
+    def _maybe_fire_failed_conn_rate(self, now: datetime) -> int:
+        """Fire probe_failed_conn() toward the controller's per-minute target
+        rate. Probabilistic spread across the many maybe_run() calls per minute,
+        bounded by a per-minute budget so total firings track the rate regardless
+        of call cadence. Returns 1 if it fired, else 0."""
+        ctrl = self._controller
+        try:
+            rate = float(ctrl.failed_conn_rate_per_min())
+        except Exception:
+            rate = 0.0
+        if rate <= 0:
+            return 0
+        key = (now.hour, now.minute)
+        if key != self._fc_minute_stamp:
+            self._fc_minute_stamp = key
+            self._fc_fired_this_minute = 0
+        if self._fc_fired_this_minute >= rate:
+            return 0
+        if random.random() >= rate / 30.0:
+            return 0
+        try:
+            ok, conn_state, ms = probe_failed_conn()
+        except Exception as e:
+            print(f"[WARNING] scripted_services.failed_conn(rate) raised "
+                  f"{type(e).__name__}: {str(e)[:80]}")
+            if self.logger:
+                self.logger.warning(
+                    f"scripted-svc failed_conn(rate) exception: "
+                    f"{type(e).__name__}: {e}")
+            ok, conn_state, ms = False, "S0", 0
+        self._fc_fired_this_minute += 1
+        msg = (f"[scripted-svc] failed_conn ok={ok} state={conn_state} "
+               f"latency_ms={ms} src=rate")
+        print(msg)
+        if self.logger:
+            self.logger.info(msg)
+        return 1

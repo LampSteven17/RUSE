@@ -63,6 +63,12 @@ class BaseEmulationLoop(ABC):
         # can hold TLS sessions open + open new ones during the loop's inter-
         # window sleeps. Created once on first feedback reload when enabled.
         self._persistent_svc = None
+        # Closed-loop connection-shape controller (Phase 1, 2026-06-16). Owns
+        # per-connection orig_bytes/duration sampling for the persistent-session
+        # channel and the conn_state_mix failed_conn rate for scripted_services.
+        # Created on first feedback reload when PHASE ships connection_shape
+        # (enabled) or conn_state_mix; None otherwise (and always for controls).
+        self._shape_controller = None
         self._recent_workflows = []
         self._cluster_distinct = set()
         self._cluster_remaining = 0
@@ -256,6 +262,28 @@ class BaseEmulationLoop(ABC):
                     self._persistent_svc.start()
                 else:
                     self._persistent_svc.update_config(ps_config, seed=self.seed)
+
+            # Closed-loop shape controller (Phase 1, 2026-06-16). Built when
+            # PHASE ships connection_shape (enabled) or conn_state_mix; once
+            # built it stays attached and hot-reloads (a later reload that drops
+            # the blocks just disables its features — failed_conn_frac→0,
+            # scalar fallback). It owns per-conn orig_bytes/duration sampling on
+            # the persistent-session channel and the failed_conn rate for
+            # scripted_services, both injected via set_controller.
+            shape_cfg = fc.connection_shape
+            csm_cfg = fc.conn_state_mix
+            shape_on = bool(shape_cfg and shape_cfg.get("enabled")) or bool(csm_cfg)
+            if shape_on or self._shape_controller is not None:
+                if self._shape_controller is None:
+                    from common.network.shape_controller import ShapeController
+                    self._shape_controller = ShapeController(
+                        shape_cfg, csm_cfg, self.logger, seed=self.seed)
+                else:
+                    self._shape_controller.update_config(shape_cfg, csm_cfg)
+                if self._persistent_svc is not None:
+                    self._persistent_svc.set_controller(self._shape_controller)
+                if self._scripted_svc is not None:
+                    self._scripted_svc.set_controller(self._shape_controller)
 
         # Push window contract — both modes consume it identically.
         if self._phase_timing is not None:
@@ -602,6 +630,14 @@ class BaseEmulationLoop(ABC):
                 # Background service traffic
                 if self._background_svc:
                     self._background_svc.maybe_generate()
+
+                # Phase 1 shape controller — minute-roll tick. Also driven from
+                # the persistent-session daemon's 1s thread (reliable cadence);
+                # this call covers the case where the daemon isn't running but
+                # conn_state_mix still needs its failed_conn rate refreshed.
+                # maybe_tick is minute-roll-guarded → idempotent across callers.
+                if self._shape_controller:
+                    self._shape_controller.maybe_tick()
 
                 # Phase 3 — scripted protocol probes. Cron-style schedule;
                 # cheap when no service is enabled or current minute isn't

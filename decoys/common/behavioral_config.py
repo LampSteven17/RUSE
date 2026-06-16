@@ -91,6 +91,16 @@ class BehavioralConfig:
     youtube_video_pool: Optional[List[str]] = None  # content.youtube_video_pool — video IDs for browse_youtube
     google_search_pool: Optional[List[str]] = None  # content.google_search_pool — queries for web/google search
     ablation_gate: Optional[dict] = None        # informational; missing sections are deliberate when present
+    # Closed-loop connection-shape contract (Phase 1, 2026-06-16). PHASE-emitted
+    # under diversity.* — per-connection target percentile distributions and the
+    # conn_state outcome mix. Both absent by default (additive; OFF when missing).
+    # connection_shape: {enabled, orig_bytes/{p25,p50,p75,p90,max}, resp_bytes,
+    #   orig_pkts, resp_pkts, duration}. RUSE honors orig_bytes + duration on the
+    #   persistent-session channel today; orig_pkts/resp_* await later builds.
+    # conn_state_mix: {SF, failed_conn, OTH, RSTR} target fractions (FOLD: REJ+S0
+    #   collapsed into failed_conn; SF is the uncontrolled baseline, reference only).
+    connection_shape: Optional[dict] = None     # diversity.connection_shape
+    conn_state_mix: Optional[dict] = None        # diversity.conn_state_mix
 
     # CONTROLS-shape fields. Present only when mode == "controls"; None
     # otherwise. The controls runner consumes these to drive a fixed
@@ -451,6 +461,14 @@ def load_behavioral_config(config_dir: Path, config_key: str) -> BehavioralConfi
         fc.youtube_video_pool = content.get("youtube_video_pool") or None
         fc.google_search_pool = content.get("google_search_pool") or None
         fc.ablation_gate = metadata.get("ablation_gate")
+        # Closed-loop shape contract (Phase 1). Both live under diversity.* and
+        # are passed through verbatim — validation/sampling lives in the
+        # ShapeController consumer (warn-loud + fallback on malformed, never a
+        # fail-loud crash, since these are additive and a producer typo must not
+        # take down the fleet). Absent → None → controller never built.
+        diversity = data.get("diversity") or {}
+        fc.connection_shape = diversity.get("connection_shape")
+        fc.conn_state_mix = diversity.get("conn_state_mix")
     else:
         # Controls shape — hardcoded floor. Single 60-min window is already
         # parsed into active_minute_windows above. Phase 1 consolidation

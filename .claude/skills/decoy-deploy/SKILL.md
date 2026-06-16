@@ -36,10 +36,16 @@ d-{dep_id}-B0C-gemma-0   BrowserUse + gemma4:e2b on CPU
 d-{dep_id}-S0C-gemma-0   SmolAgents  + gemma4:e2b on CPU
 ```
 
-B0R/S0R baseline the RTX feedback tiers; they reuse the V100 `.gemma`
-baseline behavior.json (R stripped in `_derive_behavior_paths`, so
-`B0R.gemma → B.gemma/B0.gemma`), only runtime model (gemma4:e4b) + flavor
-differ. Added 2026-05-25; placed on the **rtx-a** pool (`rtx2080ti-A-1gpu`)
+B0R/S0R baseline the RTX feedback tiers. **R-tier reads its OWN baseline
+(2026-06-12): `B2R.gemma → B.gemma/B0R.gemma`, `S2R.gemma → S.gemma/S0R.gemma`** —
+the `behavior_dir` is `B.gemma`/`S.gemma` (family dir; the regex `[A-Z]*` consumes
+the R) but the `baseline_config` keeps its R. The old R-strip (B2R→B0) was removed
+in both `_derive_behavior_paths` (spinup.py) and distribute-behavior-configs.yaml
+because PHASE now emits **distinct** B0R/S0R configs (differ from B0/S0 by
+seed/pools/behavior-modifiers/`persistent_sessions` on-off — 59-141 leaf keys); the
+strip shipped wrong-tier V100 behavior to the RTX SUPs. The VMs are still correctly
+on RTX hardware + gemma4:e4b; only the behavior.json content was wrong pre-fix.
+Placed on the **rtx-a** pool (`rtx2080ti-A-1gpu`)
 2026-05-26 because the non-A `rtx` pool was full with sum25+vt1g feedback —
 the axyear rtx-a feedback deploy was dropped to make room (net-zero on rtx-a).
 
@@ -339,7 +345,24 @@ match the shape PHASE emits verbatim.
       "ntp_checks_per_day": 4
     },
     "workflow_rotation": {"max_consecutive_same": 2, "min_distinct_per_cluster": 3},
-    "topology_mimicry": {"inbound_smb_per_hour": ..., ...}
+    "topology_mimicry": {"inbound_smb_per_hour": ..., ...},
+    "persistent_sessions": {                          // PersistentSession daemon (2026-06-11)
+      "enabled": true,
+      "session_opens_per_hour": [24 ints, UTC],       // new ssl session opens/hr; non-zero hours = active-hours envelope (day/night gate)
+      "keepalive_interval_seconds": 45,               // PHASE upper bound; RUSE clamps actual send to <=10s
+      "session_duration_seconds": 120,                // single target (median); RUSE owns lognormal spread, floors at 2s
+      "orig_bytes_per_session": 2000,                 // FALLBACK scalar (2026-06-16) — connection_shape.orig_bytes preferred when present
+      "endpoint_pool": ["https://...", ...]           // ~8 live external https (TCP-TLS) sites
+    },
+    "connection_shape": {                             // NEW Phase 1 (2026-06-16); absent → OFF, scalar fallback
+      "enabled": true,
+      "orig_bytes": {"p25":.., "p50":.., "p75":.., "p90":.., "max":..},  // ACTUATED (persistent-session per-conn sampling)
+      "duration":   {"p25":.., "p50":.., "p75":.., "p90":.., "max":..},  // ACTUATED (per-conn lifetime)
+      "orig_pkts":  {"p25":.., "p50":.., "p75":.., "p90":.., "max":..},  // parsed, NOT actuated → packetization build #3
+      "resp_bytes": {"p25":.., "p50":.., "p75":.., "p90":.., "max":..},  // parsed, NOT actuated → response-endpoint build #2
+      "resp_pkts":  {"p25":.., "p50":.., "p75":.., "p90":.., "max":..}   // parsed, NOT actuated → build #2
+    },
+    "conn_state_mix": {"SF":.., "failed_conn":.., "OTH":.., "RSTR":..}   // NEW Phase 1; FOLD: REJ+S0→failed_conn. ACTUATED: failed_conn rate via scripted_services. SF = uncontrolled baseline (reference only)
   },
   "prompt_content": "... optional free-form prompt guidance ..."
 }
@@ -391,6 +414,15 @@ each in-character (NOT unified onto one engine). Before this, none streamed:
   currentTime advances). Suggested-video selector fixed: watch-page recommendations
   live at `#secondary a[href*="watch"]` (the old `By.ID 'video-title'` only matched
   the SEARCH page, returned 0 on watch pages).
+  - **`suggested_videos empty` warning fix (2026-06-13, M-brain incl controls M1):**
+    the warning was a FALSE ALARM — NOT pool rot (warned videos oEmbed-200 alive,
+    markup-identical to ones that succeed). Real cause = intermittent
+    **geckodriver 0.34/Firefox-151 Marionette instability**. Fixes: (1) pin
+    **geckodriver 0.34.0 → 0.37.0** in `INSTALL_SUP.sh` = THE fix (canary repro on
+    0.37: warned video renders 40 `#secondary` links at 5s); (2) suggested-sidebar
+    wait `5s → 10s` (match search path; defensive — 5s was NOT universally short);
+    (3) empty case `[WARNING] → [INFO]` + `logger.info` (was `step_error`, flooded
+    the audit). Stale "dead video" comment removed.
 - **BU / Chromium**: needed `--autoplay-policy=no-user-gesture-required`. The 4
   duplicate `BrowserSession(args=[...])` lists were dedup'd into
   `brains/browseruse/config.py::CHROMIUM_ARGS` (single source of truth) with the
@@ -411,7 +443,8 @@ emit time); this is RUSE-side defense-in-depth.
 ## Distribute flow (`distribute-behavior-configs.yaml`)
 
 1. Derive baseline config key from versioned key: `B2C.gemma → B0C.gemma`,
-   `M2 → M1`
+   `B2R.gemma → B0R.gemma`, `S2R.gemma → S0R.gemma`, `M2 → M1` (the R-strip was
+   removed 2026-06-12 — R-tier reads its own B0R/S0R, see Topology note)
 2. Resolve `{feedback_source}/{behavior_dir}/{baseline_config}/behavior.json`
 3. `python3 -m json.tool` validate on localhost — corrupt aborts before
    shipping
@@ -525,9 +558,12 @@ Loader (`load_behavioral_config`) → consumers:
 | `diversity.background_services.{name}_enabled` | (read by `ScriptedServiceScheduler`) | Phase-3 scripted protocol probes (`scripted_services.py`: smb/ldap/imap/doh/mdns/websocket/failed_conn). `maybe_run` fires from the in-window cluster loop (`emulation_loop.py:583`, same gating as D4) — **never outside an active window**. Per-probe cron slots (e.g. `failed_conn` :17/:47). **Catch-up scheduling (2026-06-05, commit `26c2489`):** fires the latest slot at/before the current minute not yet fired this hour, so a sleepy loop that misses the exact minute still fires; the prior exact-minute match fired 0× over 8.5h. `[scripted-svc] {name} ok= state= latency_ms=` → stdout/systemd.log (+ jsonl `info`); `[scripted-svc] {name}=enabled` config marker is jsonl-only. |
 | `diversity.background_services.service_mix_targets` | **NOT CONSUMED — no RUSE reader (reverted). PHASE still emits it on cptc; RUSE silently ignores it.** | **service_mix_targets v1 — ABANDONED / DEAD-END (2026-06-09). DO NOT re-chase; REVERTED out of RUSE same day (revert `bed8350` of commits `6ec6b8d`+`f53f79d`).** Note: with the service-mix precedence gone, cptc behavior.json's `smb_enabled`/`failed_conn_enabled` are honored normally again by `ScriptedServiceScheduler` (the old `covered_services()` force-disable is removed) — the scripted `smb` probe fires in-window as a plain fire-and-observe SYN (`[scripted-svc] smb ok=False state=S0` is correct; no responder exists anymore). The idea: own-thread generators (`common/network/service_mix.py`) + a sidecar responder (`common/network/service_responder.py`: TCP 445 SMB, TCP 9997 splunk, UDP echo) to emit Zeek service types `smb`/`splunk`/`udp` that no workflow produces, to close the cptc service-mix gap. **Built, deployed, validated on the live cptc9 dredge — and it CANNOT work.** Conclusive reasons: **(1) Vocabulary skew** — targets are computed from the *CPTC9-competition* Zeek (`TRAINING_DATA/CPTC9_24.parquet`: `smb`/`splunk`/`udp`/`dcerpc`), but the *AXES tap* Zeek observing our SUPs **never emits `splunk` (0/65 deploys) or bare `udp`** (it labels discovery 137/5355/5353→`dns`, 138/1900→`None`, 123→`ntp`) and labels SMB only as **`gssapi,smb`** (auth'd SMB2), not bare `smb`. Responder mechanics worked (flows completed: 445 RSTR, 9997 RSTO, udp SF, data both ways) but **all landed `service=None`** — minimal SMB1 negotiate isn't what Zeek confirms; splunk has no analyzer on this sensor. **(2) Exact-string target match** in `decoy_generator.py` (PHASE, can't edit) — `gssapi,smb`≠`smb`, and critically `quic,ssl`≠`ssl` + `http,websocket`≠`http`: a REAL bug that under-credits the *good* axes targets. **Carry-forward win → ask PHASE to normalize comma-joined Zeek labels component-wise at the target matcher** (NOT the frozen LabelEncoder). **(3) cptc structurally unreachable** — wrong network + wrong sensor. std cptc9 model (MinMax, continuous-blind, `log_transform_bytes=False`) scored ~0.50 = a *false positive* foolable via shared categorical vocab (dns/http/ssl); exp cptc9 model (quantile, 20 feat, continuous un-blinded) correctly rejects AXES browsing SUPs at ~0 because browsing-scale bytes/timing ≠ cptc9 hostile-competition scale (~185 conn/min, 3.2 MB/conn splunk). No categorical responder or PHASE knob closes "wrong activity on wrong network." **`service_mix_targets` is emitted ONLY on cptc** (axes/vt are ≤1%-skew, workflow-reachable → field omitted) → it only applies where it can't work. Full write-up: memory `project_service_mix_targets.md`. |
 | `diversity.workflow_rotation.*` | `diversity_injection` | D2 rotation in `emulation_loop` |
+| `diversity.persistent_sessions.*` | `diversity_injection` | **PersistentSession daemon (2026-06-11, `common/network/persistent_session.py`).** Brain-agnostic background **thread** (NOT a workflow — never occupies the sequential slot), unlike D4/scripted-svc which are inline. Holds long-lived TCP-TLS sessions to `endpoint_pool` during the active-hours envelope (non-zero `session_opens_per_hour` hours, read **circularly** so student bands wrap midnight), opening new sessions spread across active minutes to close PHASE's ssl-dominant-minute / duration / orig_bytes gap. **Start-minute binning** → opens not concurrency; **resolve-once + connect-by-IP** → zero steady-state dns (so ssl starts win the per-minute MODE tie vs dns); lifetime = `min(sampled_duration, time-to-block-end)` → graceful FIN/SF at workday boundary; orig_bytes front-loaded into the first request. D4 **net-out**: daemon opens are subtracted from D4's deficit-burst via `set_window_state(external_conns=)` so total volume stays at target + mix shifts to ssl. Absent block or `enabled:false` → daemon off (no loader change — rides `diversity_injection` verbatim like `topology_mimicry`). Logs `[psess] open/close/daemon started`. **Endpoint caveat:** keep-alive longevity is endpoint-dependent (Fastly-fronted hosts cnn/stackoverflow/bloomberg/reddit/cisco server-close ~2 req; github/docs.python.org/azure/wikipedia sustain) — quick-closers still give the ssl-minute + orig_bytes win, only DURATION needs sustainers; RUSE clamps send to ≤10s, PHASE curates the pool. |
+| `diversity.connection_shape.{orig_bytes,duration}` | `connection_shape` | **Closed-loop ShapeController (Phase 1, 2026-06-16, `common/network/shape_controller.py`).** Per-connection target percentile distributions `{p25,p50,p75,p90,max}`. The controller draws a per-conn target (NOT the p50 scalar) for the **persistent-session channel** and applies a bounded, damped multiplicative **bias** corrected each minute from an **emit-side ledger** (each closed session reports `bytes_cum`/wall-duration/`SF` — `/proc` can't see per-conn shape, RUSE spec §B.1) toward target p50. `max` is a HARD post-bias ceiling. When active it owns sampling and supersedes the persistent-session lognormal; absent/`enabled:false`/malformed-dist → warn-loud + fall back to scalar `orig_bytes_per_session`/`session_duration_seconds` (never crashes — additive). `orig_pkts`/`resp_bytes`/`resp_pkts` are PARSED but NOT actuated yet (packetization build #3 / response-endpoint build #2). Logs `[shape] bytes_med=.../... bias=... failed_conn_rate=...` each minute. Ships dormant until PHASE emits the block. |
+| `diversity.conn_state_mix.failed_conn` | `conn_state_mix` | **ShapeController → scripted_services failed_conn rate (Phase 1).** FOLD (2026-06-16): PHASE collapses REJ+S0 into a single `failed_conn` fraction; SF is the uncontrolled baseline (reference only). Controller computes `failed_conn_rate_per_min = failed_conn_frac × per-minute aggregate active_opens` (own `OutboundConnSampler` — a valid count use of `/proc`); `ScriptedServiceScheduler` fires `probe_failed_conn` (S0/REJ to closed port) toward that rate via a per-minute budget, **bypassing the fixed cron `failed_conn` slot** when a target is present (other cron probes unchanged). Logs `[scripted-svc] failed_conn ... src=rate`. Honored regardless of the `failed_conn_enabled` cron toggle. REJ vs S0 split deferred to the RST/responder build #6. |
 | `diversity.topology_mimicry.inbound_*_per_hour` | `diversity_injection` | Neighborhood sidecar daemon |
 | `_metadata.mode` | `mode` | Baseline short-circuit in `_reload_behavioral_config` |
-| `_metadata.ablation_gate` | `ablation_gate` | `is_ablation_gated()` → `[WARNING]` → `[INFO]` downgrade |
+| `_metadata.ablation_gate` | `ablation_gate` | **DEAD field (2026-06-12):** PHASE deleted `ablation_gate` in the two-shapes simplification (`8f91240a`, 2026-05-08), so `is_ablation_gated()` is always False. The old `[WARNING]`-vs-`[INFO]` tag logic it drove is removed — section-absent status lines now ALWAYS emit `[INFO]` (optional under two-shapes; commit `bc7aa66`). Loader still slices the field if present (forward-compat), but no live consumer depends on it. |
 | `_metadata.seed` | `seed` | `sup/__main__.py` peeks before `random.seed()`; overrides CLI `--seed`. Also propagated into `neighborhood-sups.json` top-level `seed` field for sidecar RNG anchor. `AgentLogger.session_id` derives from this via separate `Random()` instance (no global RNG consumption) |
 | `prompt_content` | `prompt_augmentation.prompt_content` | G1: BU + Smol prompt prepend |
 
