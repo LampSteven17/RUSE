@@ -120,11 +120,21 @@ are NOT queryable from OpenStack — operator knowledge baked in). `exp1`:
 | Tier | Datasets | Cards |
 |------|----------|-------|
 | v100 | 2025, axall, axyear, fall24, fall25, spr25, sum24, sum25 | 16 of 19 (controls hold 2, 1 spare) |
-| rtx | vt1g, vt10g | 4 of 4 |
+| rtx | cptc8, cptc9 | 4 of 4 |
 | rtx-a | vt50g | 2 of 4 (controls B0R/S0R hold 2) |
 
-cptc8/cptc9 deliberately excluded (structurally unreachable — see
-`project_service_mix_targets`). `--exp1` implies `--feedback`, requires
+**Rev 2026-06-16:** the two non-A `rtx` slots were swapped from `vt1g`/`vt10g`
+to `cptc8`/`cptc9` (operator decision) — same 4-card footprint. cptc now ships
+physical `connection_shape` byte/duration targets (cptc9 also `conn_state_mix`),
+so it's a real Phase-1 shape target — this supersedes the old "structurally
+unreachable" framing (`project_service_mix_targets`, service-mix era). Its high
+`target_conn_per_minute` (185–208) WILL show a red BG/volume audit column — that's
+a D4-floor measurement artifact (RUSE-fact), see `/decoy-audit`. **Open question
+(2026-06-19):** whether VOLUME matters to cptc's exp-model score is unresolved
+and PHASE-side — cptc9 is flagged coverage-limited, so do NOT assume "red BG =
+fine for the score." Resolves on PHASE's re-infer. See `/feedback-investigation`.
+`vt1g`/`vt10g` are no longer in `exp1` — deploy them via `--target` if wanted.
+`--exp1` implies `--feedback`, requires
 `--preset`, and conflicts with `--target`/`--source`/`--gpu` (each task
 carries its own `gpu_tier`, shown as `[tier]` in the task label and
 `tier=` in the plan confirm). Resolution is fail-loud per dataset; the

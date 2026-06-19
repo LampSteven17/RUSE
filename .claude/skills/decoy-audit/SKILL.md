@@ -103,16 +103,23 @@ same SUP. Thresholds are deliberately loose because workflows dominate
 the actual emitted traffic; this column only flags "D4 isn't running
 at all." If `Win=OK` but `BG=FAIL`, the SUP is almost certainly fine.
 
-**cptc datasets always FAIL BG/volume — by design (2026-06-09).** cptc8/cptc9
-behavior.json carry a competition-scale `target_conn_per_minute_during_active`
-(~185 — cptc9 hostile-competition rate), which D4's ~16/min ceiling (see
-`feedback_d4_throughput_ceiling`) + browsing workflows structurally cannot
-reach. So `BG=0/N` and `volume=FAIL (≈9/185, ratio ≈0.05)` are PERMANENT and
-EXPECTED on every cptc deploy — same structural unreachability that scores cptc
-~0 on the model. NOT a fault, NOT fixable RUSE-side. Confirmed on the
-`decoy-feedback-expctrlsv716-cptc9-all` smoke test. (The real total-outbound
-signal — BU browsers hitting `active_opens` 150-170/min — is healthy; it's only
-the D4-floor-vs-185 ratio that reads red.)
+**cptc datasets read BG/volume=FAIL — RUSE-mechanism fact, NOT a deploy fault.**
+cptc8/cptc9 behavior.json carry a competition-scale
+`target_conn_per_minute_during_active` (185 cptc9 / 208 cptc8), which D4's
+~16/min ceiling (`feedback_d4_throughput_ceiling`) structurally cannot reach —
+and the BG column only measures the **D4 floor** (`conns=` field, `audit.py:361`),
+NOT total outbound. So `BG=0/N` and `volume=FAIL (≈8/208, ratio ≈0.04)` are
+PERMANENT and EXPECTED on every cptc deploy. The real total-outbound signal
+(`active_opens`, BU browsers 150-170/min) is healthy. Confirmed on
+`decoy-feedback-expctrlsv716-cptc{8,9}-all-rtx` (2026-06-17 fleet audit).
+**CAUTION (2026-06-19) — do NOT extend this to "so cptc scores ~0 on the
+model."** That was an OVERSTATEMENT. Whether cptc's exp-model score depends on
+connection VOLUME/rate is an OPEN PHASE QUESTION, not RUSE-verifiable: PHASE's
+own `dataset_realism_keys` flags cptc9 as *"genuinely coverage-limited"* (unlike
+the AXES datasets, where volume is a disproven lever, and where spring25 even had
+a VOLUME-group win). The BG=FAIL is a measurement artifact of a capped minor
+channel vs a large target — it is NOT evidence about the score. The score
+question resolves only via PHASE's dredge/re-infer. See `/feedback-investigation`.
 
 **Future column (not wired):** the `network_sample` jsonl event (2026-06-01,
 `active_opens`/`distinct_hosts` from `OutboundConnSampler`) and the new

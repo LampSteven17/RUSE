@@ -314,3 +314,7 @@ traffic → logging → augmentation → where-do-I-change-X) is the template fo
 `/rampart-mechanical-systems` (pyhuman engine) and `/ghosts-mechanical-systems`
 (.NET NPC engine) when those are written. Keep the three plus their deploy/audit
 siblings in sync when an engine changes.
+
+For the *why* behind the shape channels (the realism contract, what the
+ShapeController actuates vs defers, and the RUSE-fact vs PHASE-model-claim
+boundary), see `/feedback-investigation`.

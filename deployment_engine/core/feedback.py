@@ -627,15 +627,21 @@ DATASET_TARGETS = {
 # (gpu_tier, [dataset targets]) — targets use the same aliases as --target
 # (resolved through DATASET_TARGETS).
 #
-# exp1 (2026-06-10): V100 pool holds 19 cards, controls eat 2 → 8 feedback
-# deploys (16 cards); non-A rtx pool fits 2 deploys; rtx-a fits 1 next to
-# controls' B0R/S0R. cptc8/cptc9 are deliberately EXCLUDED — structurally
-# unreachable (see project_service_mix_targets), not worth GPU quota.
+# exp1 (2026-06-10; rev 2026-06-16): V100 pool holds 19 cards, controls eat 2
+# → 8 feedback deploys (16 cards); non-A rtx pool fits 2 deploys; rtx-a fits 1
+# next to controls' B0R/S0R. 2026-06-16: the two non-A rtx slots were swapped
+# from vt1g/vt10g to cptc8/cptc9 (operator decision; same 4-card footprint).
+# cptc now carries physical connection_shape byte/duration targets — the
+# Phase-1 shape lever — so it is a real shape target now, NOT the structurally
+# -hopeless case the old service_mix_targets era assumed. Its volume target
+# stays high (185-208/min) so the audit BG column (a loose D4-floor check) may
+# still read red, but volume is the DEAD lever — the model scores on
+# per-connection shape, which is reachable. vt1g/vt10g now deploy via --target.
 TIER_PLANS = {
     "exp1": [
         ("v100", ["2025", "axall", "axyear", "fall24", "fall25",
                   "spr25", "sum24", "sum25"]),
-        ("rtx", ["vt1g", "vt10g"]),
+        ("rtx", ["cptc8", "cptc9"]),
         ("rtx-a", ["vt50g"]),
     ],
 }
