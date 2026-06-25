@@ -94,13 +94,14 @@ examples:
                    help="Dataset target(s). Single (--target sum24) OR comma-"
                         "separated list (--target sum24,axyear,vt50g) for a "
                         "multi-dataset batch on one GPU tier.")
-    p.add_argument("--gpu", type=str, choices=["v100", "rtx", "rtx-a"], default=None,
+    p.add_argument("--gpu", type=str, choices=["v100", "rtx", "rtx-a", "cpu"], default=None,
                    help="GPU tier for feedback B2/S2 VMs (default: v100). "
                         "rtx = rtx2080ti-1gpu (PCI alias rtx2080ti:1) w/ "
                         "B2R.gemma+S2R.gemma (gemma4:e4b, fits 11GB VRAM). "
                         "rtx-a = rtx2080ti-A-1gpu (PCI alias 2080ti-rtx-a:1) "
                         "— same SUPs, separate physical card pool; use when "
-                        "the rtx pool is exhausted.")
+                        "the rtx pool is exhausted. cpu = card-free 3-VM "
+                        "(M2+B2C+S2C, gemma4:e2b) for when no GPU is available.")
     p.add_argument("--exp1", action="store_true",
                    help="Static tier plan exp1 (DECOY feedback only): 8 axes "
                         "datasets on v100, vt1g+vt10g on rtx, vt50g on rtx-a; "

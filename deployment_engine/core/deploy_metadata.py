@@ -12,7 +12,9 @@ teardown explicitly.
 """
 
 # Known gpu_tier suffixes, longest-first so '-rtx-a' matches before '-rtx'.
-_GPU_TIER_SUFFIXES = ("-rtx-a", "-rtx")
+# 'cpu' is a card-free tier (no GPU brains); the suffix just keeps its
+# deploy name distinct from the un-suffixed v100 default.
+_GPU_TIER_SUFFIXES = ("-rtx-a", "-rtx", "-cpu")
 
 
 def derive_metadata(deployment_name: str, gpu_tier_hint: str | None = None) -> dict:

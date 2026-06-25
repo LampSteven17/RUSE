@@ -264,6 +264,20 @@ FEEDBACK_TEMPLATE_RTX_A = [
     {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g",                 "count": 1},
 ]
 
+# CPU-only variant — NO GPU cards. Drops the two GPU brains (B2/S2 or
+# B2R/S2R) entirely, leaving M2 (MCHP, no LLM) + the two CPU brains
+# (B2C/S2C on gemma4:e2b). For datasets we want "at least running" when
+# the GPU pools are full and no card is available — e.g. vt1g/vt10g, which
+# were swapped out of exp1's rtx slots for cptc8/cptc9 (2026-06-16). The
+# CPU brains already appear in every GPU tier, so the behavior.json source
+# (B.gemma/B0C.gemma, S.gemma/S0C.gemma, M1) is the same one PHASE ships —
+# no new feedback content needed.
+FEEDBACK_TEMPLATE_CPU = [
+    {"behavior": "M2",        "flavor": "v1.14vcpu.28g", "count": 1},
+    {"behavior": "B2C.gemma", "flavor": "v1.14vcpu.28g", "count": 1},
+    {"behavior": "S2C.gemma", "flavor": "v1.14vcpu.28g", "count": 1},
+]
+
 # Map gpu_tier name → template + flavor_capacity dict. Used by
 # generate_feedback_config to pick the right shape based on --gpu CLI flag.
 FEEDBACK_TEMPLATES_BY_TIER = {
@@ -272,6 +286,12 @@ FEEDBACK_TEMPLATES_BY_TIER = {
         "flavor_capacity": {
             "v1.14vcpu.28g": 3,
             "v100-1gpu.14vcpu.28g": 2,
+        },
+    },
+    "cpu": {
+        "template": FEEDBACK_TEMPLATE_CPU,
+        "flavor_capacity": {
+            "v1.14vcpu.28g": 3,
         },
     },
     "rtx": {
@@ -643,6 +663,9 @@ TIER_PLANS = {
                   "spr25", "sum24", "sum25"]),
         ("rtx", ["cptc8", "cptc9"]),
         ("rtx-a", ["vt50g"]),
+        # CPU-only (no card) — vt1g/vt10g lost their rtx slots to cptc8/cptc9
+        # (2026-06-16); run them card-free so they're at least emitting.
+        ("cpu", ["vt1g", "vt10g"]),
     ],
 }
 
