@@ -238,8 +238,21 @@ brain/workflow runs:
   `connection_shape`(enabled)/`conn_state_mix`; injected into the persistent +
   scripted channels. Actuates orig_bytes/duration + failed_conn TODAY; orig_pkts
   (#3) / resp_* (#2) parsed-not-actuated. The measurement source is the emit-side
-  ledger, NOT `conn_sampler` per-conn (RUSE spec §B.1). Memory
-  `project_connection_shape_controller`.
+  ledger, NOT `conn_sampler` per-conn (RUSE spec §B.1). Now also computes the
+  shape-floor coverage deficit (`floor_opens_target_per_min`) + a per-minute
+  `note_workflow` completion ratio + estimated aggregate p50s, all in the `[shape]`
+  log. Memory `project_connection_shape_controller`.
+- **Universal shape-floor channel** `common/network/shape_floor.py` (Build #5,
+  2026-06-25): `ShapeFloorDaemon` — own-thread twin of the persistent daemon, but
+  the open RATE is coverage-driven (`controller.floor_opens_target_per_min()`,
+  `T=0.82` shaped-share) instead of a fixed schedule, and it samples the FULL
+  `connection_shape` distribution (not just the p75–p90 tail). Opens synthetic
+  shaped TLS fillers → holds for the sampled duration → FIN→SF → reports to the
+  controller's emit-side ledger as channel `"floor"` (the "2nd emit-side reporter").
+  Closes the ~30%→majority coverage gap that held the aggregate median below target
+  (duration is the binding feature). Built in `_reload_behavioral_config` when
+  `connection_shape.enabled`; reuses the `persistent_sessions` endpoint_pool; opens
+  net out of D4. Ships dormant until PHASE emits the block; controls never get it.
 - **D3 scripted probes** `common/network/scripted_services.py`:
   `ScriptedServiceScheduler` (`:193`), `maybe_run` (`:231`) — smb/ldap/imap/doh/
   mdns/failed_conn on a cron-style schedule, in-window catch-up

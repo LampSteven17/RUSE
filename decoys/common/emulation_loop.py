@@ -69,6 +69,14 @@ class BaseEmulationLoop(ABC):
         # Created on first feedback reload when PHASE ships connection_shape
         # (enabled) or conn_state_mix; None otherwise (and always for controls).
         self._shape_controller = None
+        # Universal shape-floor channel (Build #5, 2026-06-25). Own-thread twin of
+        # the persistent-session daemon: opens coverage-driven synthetic shaped
+        # connections (count from the controller) so the SHAPED conns become a
+        # super-majority of the per-conn mass and drag the aggregate orig_bytes/
+        # duration median up to the human target. Created on first feedback reload
+        # when connection_shape is enabled; reuses the persistent_sessions
+        # endpoint_pool. None for controls / when not shaping.
+        self._floor_svc = None
         self._recent_workflows = []
         self._cluster_distinct = set()
         self._cluster_remaining = 0
@@ -284,6 +292,31 @@ class BaseEmulationLoop(ABC):
                     self._persistent_svc.set_controller(self._shape_controller)
                 if self._scripted_svc is not None:
                     self._scripted_svc.set_controller(self._shape_controller)
+
+            # Universal shape-floor channel (Build #5, 2026-06-25). Own-thread
+            # twin of the persistent daemon — opens coverage-driven shaped fillers
+            # (count from the controller) so shaped conns become a super-majority
+            # of the per-conn mass and drag the aggregate orig_bytes/duration
+            # median to the human target. Gated on connection_shape.enabled (so it
+            # ships dormant until PHASE emits the block, never on controls);
+            # reuses the persistent_sessions endpoint_pool — no new PHASE field.
+            shape_enabled = bool(shape_cfg and shape_cfg.get("enabled"))
+            if shape_enabled and self._shape_controller is not None:
+                floor_cfg = {
+                    "enabled": True,
+                    "endpoint_pool": (ps_config or {}).get("endpoint_pool", []),
+                    "keepalive_interval_seconds":
+                        (ps_config or {}).get("keepalive_interval_seconds"),
+                }
+                if self._floor_svc is None:
+                    from common.network.shape_floor import ShapeFloorDaemon
+                    self._floor_svc = ShapeFloorDaemon(
+                        floor_cfg, self.logger, seed=self.seed)
+                    self._floor_svc.set_controller(self._shape_controller)
+                    self._floor_svc.start()
+                else:
+                    self._floor_svc.update_config(floor_cfg, seed=self.seed)
+                    self._floor_svc.set_controller(self._shape_controller)
 
         # Push window contract — both modes consume it identically.
         if self._phase_timing is not None:
@@ -568,6 +601,11 @@ class BaseEmulationLoop(ABC):
                 # an int on the main thread → race-free (D4 stays passive).
                 external = (self._persistent_svc.opens_in_current_minute()
                             if self._persistent_svc is not None else 0)
+                # Build #5: floor opens also count as already-emitted external
+                # conns so D4 tops up to target MINUS (psess + floor) — total
+                # volume stays near target while the mix shifts to shaped ssl.
+                external += (self._floor_svc.opens_in_current_minute()
+                             if self._floor_svc is not None else 0)
                 self._background_svc.set_window_state(
                     in_window=self._cluster_deadline_ts is not None,
                     volume_target=self._volume_target,
@@ -696,6 +734,13 @@ class BaseEmulationLoop(ABC):
 
                 success = self._execute_workflow(workflow)
 
+                # Build #5 instrument: report the outcome so the controller can
+                # log a per-minute completion ratio next to the shape p50s — a
+                # drop is the signal the floor is starving browse-workflows of
+                # connections (T too aggressive).
+                if self._shape_controller is not None:
+                    self._shape_controller.note_workflow(bool(success))
+
                 if success:
                     self._tasks_completed += 1
                     if self._phase_timing:
@@ -759,11 +804,16 @@ class BaseEmulationLoop(ABC):
         print(f"\nTerminating {label}...")
         if self.logger:
             self.logger.info(f"{label} terminating")
-        # Stop the persistent-session thread first so its sockets FIN-close
-        # cleanly (-> Zeek conn_state=SF) before the process exits.
+        # Stop the persistent-session + shape-floor threads first so their sockets
+        # FIN-close cleanly (-> Zeek conn_state=SF) before the process exits.
         if self._persistent_svc is not None:
             try:
                 self._persistent_svc.stop()
+            except Exception:
+                pass
+        if self._floor_svc is not None:
+            try:
+                self._floor_svc.stop()
             except Exception:
                 pass
         for workflow in self.workflows:

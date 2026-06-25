@@ -1,6 +1,6 @@
 ---
 name: decoy-deploy
-description: DECOY SUP deployment — running ./deploy --decoy [scope flags], 5-phase spinup, behavior.json plumbing, audit semantics, hot-patch path. Three GPU tiers via --gpu {v100,rtx,rtx-a} (V100 → gemma4:26b, RTX 2080 Ti non-A pool → gemma4:e4b on B2R/S2R, RTX 2080 Ti A-pool → same model, separate physical cards). Inputs deployments/decoy-controls/config.yaml + /mnt/AXES2U1/feedback/decoy-controls/{controls (un-namespaced), {preset}_v{version}/{dataset} (feedback, needs --preset)}/. Outputs deployments/decoy-{controls,feedback-...}/runs/{run_id}/. Does NOT cover RAMPART AD enterprise (see /rampart-deploy) or GHOSTS NPC clients (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
+description: DECOY SUP deployment — running ./deploy --decoy [scope flags], 5-phase spinup, behavior.json plumbing, audit semantics, hot-patch path. Four tiers via --gpu {v100,rtx,rtx-a,cpu} (V100 → gemma4:26b, RTX 2080 Ti non-A pool → gemma4:e4b on B2R/S2R, RTX 2080 Ti A-pool → same model, separate physical cards, cpu → card-free M2+B2C+S2C on gemma4:e2b). Inputs deployments/decoy-controls/config.yaml + /mnt/AXES2U1/feedback/decoy-controls/{controls (un-namespaced), {preset}_v{version}/{dataset} (feedback, needs --preset)}/. Outputs deployments/decoy-{controls,feedback-...}/runs/{run_id}/. Does NOT cover RAMPART AD enterprise (see /rampart-deploy) or GHOSTS NPC clients (see /ghosts-deploy). Cross-type CLI shape, fail-loud contract, and SSH key matrix live in CLAUDE.md.
 type: skill
 ---
 
@@ -122,6 +122,7 @@ are NOT queryable from OpenStack — operator knowledge baked in). `exp1`:
 | v100 | 2025, axall, axyear, fall24, fall25, spr25, sum24, sum25 | 16 of 19 (controls hold 2, 1 spare) |
 | rtx | cptc8, cptc9 | 4 of 4 |
 | rtx-a | vt50g | 2 of 4 (controls B0R/S0R hold 2) |
+| cpu | vt1g, vt10g | 0 (card-free) |
 
 **Rev 2026-06-16:** the two non-A `rtx` slots were swapped from `vt1g`/`vt10g`
 to `cptc8`/`cptc9` (operator decision) — same 4-card footprint. cptc now ships
@@ -133,7 +134,13 @@ a D4-floor measurement artifact (RUSE-fact), see `/decoy-audit`. **Open question
 (2026-06-19):** whether VOLUME matters to cptc's exp-model score is unresolved
 and PHASE-side — cptc9 is flagged coverage-limited, so do NOT assume "red BG =
 fine for the score." Resolves on PHASE's re-infer. See `/feedback-investigation`.
-`vt1g`/`vt10g` are no longer in `exp1` — deploy them via `--target` if wanted.
+**Rev 2026-06-23:** `vt1g`/`vt10g` rejoin `exp1` on a new **card-free `cpu`
+tier** (`FEEDBACK_TEMPLATE_CPU`: M2 + B2C.gemma + S2C.gemma, all
+`v1.14vcpu.28g`, gemma4:e2b, NO GPU brains) so they at least emit traffic
+without holding a card. `--gpu cpu` also works for ad-hoc single-dataset
+deploys. Name suffix `-cpu` (registered in `_GPU_TIER_SUFFIXES`); the cpu
+tier's CPU brains read the same `B.gemma/B0C.gemma` + `S.gemma/S0C.gemma` +
+`M1` baseline PHASE already ships, so no new feedback content is needed.
 `--exp1` implies `--feedback`, requires
 `--preset`, and conflicts with `--target`/`--source`/`--gpu` (each task
 carries its own `gpu_tier`, shown as `[tier]` in the task label and
@@ -180,14 +187,17 @@ NEW:  /mnt/AXES2U1/feedback/{type}-controls/{preset}_v{version}/{dataset}/...
   manifest.json placement (RUSE assumes per-dataset `{ns}/{dataset}/manifest.json`),
   and that `ablation/` is a `_metadata` field, not a directory RUSE reads.
 
-GPU tier selection via `--gpu {v100,rtx,rtx-a}` (default v100). RTX
+GPU tier selection via `--gpu {v100,rtx,rtx-a,cpu}` (default v100). RTX
 tiers swap B2.gemma/S2.gemma → B2R.gemma/S2R.gemma and the V100 flavor
 → RTX 2080 Ti flavor; M2 + B2C.gemma + S2C.gemma stay identical across
 tiers. The two RTX tiers target distinct physical card pools — when
 one pool is exhausted (`No valid host was found` on B2R/S2R provision),
-switch to the other. PHASE feedback is portable across gemma4 variants
-so the same `.gemma/` source ships behavior.json for V100, RTX, and
-RTX-A deploys with no re-roll.
+switch to the other. The **`cpu`** tier (2026-06-23) is card-free: it
+DROPS the GPU brains entirely, leaving just M2 + B2C.gemma + S2C.gemma
+(3 VMs, gemma4:e2b) — for datasets you want "at least running" when no
+card is free. PHASE feedback is portable across gemma4 variants so the
+same `.gemma/` source ships behavior.json for V100, RTX, RTX-A, and CPU
+deploys with no re-roll.
 
 Granular per-config-file flags (`--timing`, `--workflow`, `--modifiers`,
 `--sites`, `--prompts`, `--activity`, `--diversity`, `--variance`,
@@ -196,10 +206,11 @@ Granular per-config-file flags (`--timing`, `--workflow`, `--modifiers`,
 
 Batch is the default when `--feedback` is given without a single-target
 selector. CLI scans `/mnt/AXES2U1/feedback/decoy-controls/`, prompts
-confirmation, then deploys each task sequentially. No cross-deploy
-parallel fan-out — `--parallel` was removed 2026-05-11 (operator
-preference: clean inline output and easier debugging beat the
-wall-time win).
+confirmation, then deploys each task sequentially within one invocation
+(the in-CLI `--parallel` batch flag was removed 2026-05-11). Running
+SEPARATE `./deploy` invocations concurrently (e.g. backgrounded) is fine
+and expected — the old "no cross-deploy parallel fan-out" operator
+preference was RETRACTED 2026-06-23.
 
 Dataset target aliases (`core/feedback.py::DATASET_TARGETS`): `sum24` →
 `summer24`, `spr25` → `spring25`, `vt1g` → `vt-fall22-1gb`, `vt50g` →
@@ -569,7 +580,7 @@ Loader (`load_behavioral_config`) → consumers:
 | `diversity.background_services.service_mix_targets` | **NOT CONSUMED — no RUSE reader (reverted). PHASE still emits it on cptc; RUSE silently ignores it.** | **service_mix_targets v1 — ABANDONED / DEAD-END (2026-06-09). DO NOT re-chase; REVERTED out of RUSE same day (revert `bed8350` of commits `6ec6b8d`+`f53f79d`).** Note: with the service-mix precedence gone, cptc behavior.json's `smb_enabled`/`failed_conn_enabled` are honored normally again by `ScriptedServiceScheduler` (the old `covered_services()` force-disable is removed) — the scripted `smb` probe fires in-window as a plain fire-and-observe SYN (`[scripted-svc] smb ok=False state=S0` is correct; no responder exists anymore). The idea: own-thread generators (`common/network/service_mix.py`) + a sidecar responder (`common/network/service_responder.py`: TCP 445 SMB, TCP 9997 splunk, UDP echo) to emit Zeek service types `smb`/`splunk`/`udp` that no workflow produces, to close the cptc service-mix gap. **Built, deployed, validated on the live cptc9 dredge — and it CANNOT work.** Conclusive reasons: **(1) Vocabulary skew** — targets are computed from the *CPTC9-competition* Zeek (`TRAINING_DATA/CPTC9_24.parquet`: `smb`/`splunk`/`udp`/`dcerpc`), but the *AXES tap* Zeek observing our SUPs **never emits `splunk` (0/65 deploys) or bare `udp`** (it labels discovery 137/5355/5353→`dns`, 138/1900→`None`, 123→`ntp`) and labels SMB only as **`gssapi,smb`** (auth'd SMB2), not bare `smb`. Responder mechanics worked (flows completed: 445 RSTR, 9997 RSTO, udp SF, data both ways) but **all landed `service=None`** — minimal SMB1 negotiate isn't what Zeek confirms; splunk has no analyzer on this sensor. **(2) Exact-string target match** in `decoy_generator.py` (PHASE, can't edit) — `gssapi,smb`≠`smb`, and critically `quic,ssl`≠`ssl` + `http,websocket`≠`http`: a REAL bug that under-credits the *good* axes targets. **Carry-forward win → ask PHASE to normalize comma-joined Zeek labels component-wise at the target matcher** (NOT the frozen LabelEncoder). **(3) cptc structurally unreachable** — wrong network + wrong sensor. std cptc9 model (MinMax, continuous-blind, `log_transform_bytes=False`) scored ~0.50 = a *false positive* foolable via shared categorical vocab (dns/http/ssl); exp cptc9 model (quantile, 20 feat, continuous un-blinded) correctly rejects AXES browsing SUPs at ~0 because browsing-scale bytes/timing ≠ cptc9 hostile-competition scale (~185 conn/min, 3.2 MB/conn splunk). No categorical responder or PHASE knob closes "wrong activity on wrong network." **`service_mix_targets` is emitted ONLY on cptc** (axes/vt are ≤1%-skew, workflow-reachable → field omitted) → it only applies where it can't work. Full write-up: memory `project_service_mix_targets.md`. |
 | `diversity.workflow_rotation.*` | `diversity_injection` | D2 rotation in `emulation_loop` |
 | `diversity.persistent_sessions.*` | `diversity_injection` | **PersistentSession daemon (2026-06-11, `common/network/persistent_session.py`).** Brain-agnostic background **thread** (NOT a workflow — never occupies the sequential slot), unlike D4/scripted-svc which are inline. Holds long-lived TCP-TLS sessions to `endpoint_pool` during the active-hours envelope (non-zero `session_opens_per_hour` hours, read **circularly** so student bands wrap midnight), opening new sessions spread across active minutes to close PHASE's ssl-dominant-minute / duration / orig_bytes gap. **Start-minute binning** → opens not concurrency; **resolve-once + connect-by-IP** → zero steady-state dns (so ssl starts win the per-minute MODE tie vs dns); lifetime = `min(sampled_duration, time-to-block-end)` → graceful FIN/SF at workday boundary; orig_bytes front-loaded into the first request. D4 **net-out**: daemon opens are subtracted from D4's deficit-burst via `set_window_state(external_conns=)` so total volume stays at target + mix shifts to ssl. Absent block or `enabled:false` → daemon off (no loader change — rides `diversity_injection` verbatim like `topology_mimicry`). Logs `[psess] open/close/daemon started`. **Endpoint caveat:** keep-alive longevity is endpoint-dependent (Fastly-fronted hosts cnn/stackoverflow/bloomberg/reddit/cisco server-close ~2 req; github/docs.python.org/azure/wikipedia sustain) — quick-closers still give the ssl-minute + orig_bytes win, only DURATION needs sustainers; RUSE clamps send to ≤10s, PHASE curates the pool. |
-| `diversity.connection_shape.{orig_bytes,duration}` | `connection_shape` | **Closed-loop ShapeController (Phase 1, 2026-06-16, `common/network/shape_controller.py`).** Per-connection target percentile distributions `{p25,p50,p75,p90,max}`. The controller draws a per-conn target (NOT the p50 scalar) for the **persistent-session channel** and applies a bounded, damped multiplicative **bias** corrected each minute from an **emit-side ledger** (each closed session reports `bytes_cum`/wall-duration/`SF` — `/proc` can't see per-conn shape, RUSE spec §B.1) toward target p50. `max` is a HARD post-bias ceiling. When active it owns sampling and supersedes the persistent-session lognormal; absent/`enabled:false`/malformed-dist → warn-loud + fall back to scalar `orig_bytes_per_session`/`session_duration_seconds` (never crashes — additive). `orig_pkts`/`resp_bytes`/`resp_pkts` are PARSED but NOT actuated yet (packetization build #3 / response-endpoint build #2). Logs `[shape] bytes_med=.../... bias=... failed_conn_rate=...` each minute. Ships dormant until PHASE emits the block. |
+| `diversity.connection_shape.{orig_bytes,duration}` | `connection_shape` | **Closed-loop ShapeController (Phase 1, 2026-06-16, `common/network/shape_controller.py`).** Per-connection target percentile distributions `{p25,p50,p75,p90,max}`. The controller draws a per-conn target (NOT the p50 scalar) for the **persistent-session channel** and applies a bounded, damped multiplicative **bias** corrected each minute from an **emit-side ledger** (each closed session reports `bytes_cum`/wall-duration/`SF` — `/proc` can't see per-conn shape, RUSE spec §B.1) toward target p50. `max` is a HARD post-bias ceiling. When active it owns sampling and supersedes the persistent-session lognormal; absent/`enabled:false`/malformed-dist → warn-loud + fall back to scalar `orig_bytes_per_session`/`session_duration_seconds` (never crashes — additive). `orig_pkts`/`resp_bytes`/`resp_pkts` are PARSED but NOT actuated yet (packetization build #3 / response-endpoint build #2). **Build #5 (2026-06-25): the persistent-session channel is no longer the ONLY shaped channel** — `common/network/shape_floor.py::ShapeFloorDaemon` (own-thread twin, reuses the `persistent_sessions` endpoint_pool) opens coverage-driven synthetic shaped fillers (count from `controller.floor_opens_target_per_min()`, `T=0.82` shaped-share) sampling the FULL `connection_shape` dist, reports to the same emit-side ledger as channel `"floor"` — closing the ~30%→majority coverage gap so the AGGREGATE per-conn median (not just the shaped tail) reaches the human target. Built when `connection_shape.enabled`; opens net out of D4. Logs `[shape] bytes_med=.../... agg_bytes_p50=.../tgt agg_dur_p50=.../tgt shaped_share=N% floor_target=K wf_complete=c/s failed_conn_rate=...` each minute (`agg_*_p50` = estimated aggregate, acceptance ≥ ~0.6× target p50; `wf_complete` drop = floor too aggressive, lower T). Ships dormant until PHASE emits the block. |
 | `diversity.conn_state_mix.failed_conn` | `conn_state_mix` | **ShapeController → scripted_services failed_conn rate (Phase 1).** FOLD (2026-06-16): PHASE collapses REJ+S0 into a single `failed_conn` fraction; SF is the uncontrolled baseline (reference only). Controller computes `failed_conn_rate_per_min = failed_conn_frac × per-minute aggregate active_opens` (own `OutboundConnSampler` — a valid count use of `/proc`); `ScriptedServiceScheduler` fires `probe_failed_conn` (S0/REJ to closed port) toward that rate via a per-minute budget, **bypassing the fixed cron `failed_conn` slot** when a target is present (other cron probes unchanged). Logs `[scripted-svc] failed_conn ... src=rate`. Honored regardless of the `failed_conn_enabled` cron toggle. REJ vs S0 split deferred to the RST/responder build #6. |
 | `diversity.topology_mimicry.inbound_*_per_hour` | `diversity_injection` | Neighborhood sidecar daemon |
 | `_metadata.mode` | `mode` | Baseline short-circuit in `_reload_behavioral_config` |

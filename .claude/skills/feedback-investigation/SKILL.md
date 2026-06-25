@@ -1,6 +1,6 @@
 ---
 name: feedback-investigation
-description: RUSE-side feedback-investigation reference (pinned) — how PHASE realism feedback drives DECOY behavior, what the runtime actuates, and (critically) the RUSE-fact vs PHASE-model-claim boundary. Covers the realism contract (exp model scores SUP-day near-binary on per-connection byte/packet/duration SHAPE + conn_state mix, NOT volume/coverage — a PHASE finding), the behavior.json shape contract (diversity.connection_shape + conn_state_mix), the Phase-1 closed-loop ShapeController (common/network/shape_controller.py), the build backlog (#1 done, #2 response-endpoints, #3 packetization, #5 floor-channel, #6 internal-responders), how to verify shape on the wire (canary methodology: [shape]/[psess]/[scripted-svc src=rate] logs + tcpdump SYN ground-truth + emit-side ledger), what the audit's volume column actually measures (D4 floor, not total), and the open questions that must be routed to PHASE (e.g. is cptc's score volume-sensitive). Use when investigating realism feedback, reasoning about whether a deploy will move the model score, or deciding RUSE-side vs PHASE-side ownership of a question. Does NOT cover deploy mechanics (/decoy-deploy), audit columns (/decoy-audit), or runtime call-graph (/decoy-mechanical-systems); PHASE feedback generation is read-only upstream (~/PHASE/).
+description: RUSE-side feedback-investigation reference (pinned) — how PHASE realism feedback drives DECOY behavior, what the runtime actuates, and (critically) the RUSE-fact vs PHASE-model-claim boundary. Covers the realism contract (exp model scores SUP-day near-binary on per-connection byte/packet/duration SHAPE + conn_state mix, NOT volume/coverage — a PHASE finding), the behavior.json shape contract (diversity.connection_shape + conn_state_mix), the Phase-1 closed-loop ShapeController (common/network/shape_controller.py), the build backlog (#1+#5 done, #2 response-endpoints, #3 packetization, #6 internal-responders), how to verify shape on the wire (canary methodology: [shape]/[psess]/[scripted-svc src=rate] logs + tcpdump SYN ground-truth + emit-side ledger), what the audit's volume column actually measures (D4 floor, not total), and the open questions that must be routed to PHASE (e.g. is cptc's score volume-sensitive). Use when investigating realism feedback, reasoning about whether a deploy will move the model score, or deciding RUSE-side vs PHASE-side ownership of a question. Does NOT cover deploy mechanics (/decoy-deploy), audit columns (/decoy-audit), or runtime call-graph (/decoy-mechanical-systems); PHASE feedback generation is read-only upstream (~/PHASE/).
 ---
 
 # feedback-investigation
@@ -126,9 +126,21 @@ per-connection byte/pkt/duration distribution, and conn_state is invisible to
    the other `requests`-based channels (download/whois/controls). NOTE browser
    workflow bytes are NOT paddable (Selenium/Playwright) without a proxy — that's
    what #5 substitutes for.
-5. **Deterministic shape-floor channel** — brain-independent generator that
-   guarantees the byte/packet/conn_state shape every day regardless of LLM-brain
-   non-determinism (the variance root cause). Registers as a 2nd emit-side reporter.
+5. **Universal shape-floor channel** — ✅ DONE (2026-06-25, `common/network/shape_floor.py`).
+   Was the coverage bottleneck: PHASE found only ~30% of conns shaped (psess = the
+   on-target p75–p90 tail); ~52% are unpaddable instant browser GETs (≤200B/~0s) that
+   dominated the median (emitted orig_bytes p50 ~128B vs ~1022B; dur p50 ~0s vs ~14.5s).
+   `ShapeFloorDaemon` is the persistent daemon's own-thread twin but **coverage-driven**:
+   `ShapeController.floor_opens_target_per_min()` computes `T/(1−T)×unshaped` synthetic
+   shaped opens (sampling the SAME `connection_shape` dist, full range not just the tail)
+   so SHAPED becomes share **T=0.82** (`_FLOOR_SHARE_TARGET`) of per-conn mass — drags the
+   aggregate median to target. **Duration is the binding constraint** (PHASE sim: bytes
+   clears ~0.69, dur needs ~0.80, since human dur p25 0.3s/p50 14.5s is far right-skewed).
+   2nd emit-side reporter (channel `"floor"`); opens net out of D4. `[shape]` log now carries
+   `agg_bytes_p50`/`agg_dur_p50` (estimated aggregate, acceptance ≥ ~0.6× target p50) +
+   `shaped_share` + `wf_complete` (over-aggression signal — if completion sags the floor is
+   starving browse-workflows, lower T). T is a module constant; first deploy is the
+   calibration run. **NOT pushed yet.**
 6. **Internal decoy-intranet responders** — hosts answering enterprise ports on
    internal IPs → `local_resp=T` + real `service`/`conn_state` (incl. reliable
    REJ, which lets PHASE split REJ back out of `failed_conn`). The only path for

@@ -77,6 +77,28 @@ _BIAS_MIN = 0.5
 _BIAS_MAX = 4.0
 _BIAS_DAMP = 0.3  # fraction of the log-ratio applied per minute
 
+# Shape-floor coverage (Build #5, 2026-06-25). The floor channel opens enough
+# synthetic shaped connections that the SHAPED conns are this share of the per-conn
+# mass — which drags the aggregate median up toward the human target. PHASE sim
+# 2026-06-25: duration is the binding constraint (human duration p25 0.3s / p50
+# 14.5s is far more right-skewed than bytes), so duration p50 doesn't clear until
+# share ~0.80 while bytes clears ~0.69 — hence 0.82 with margin. Tunable; the
+# [shape] minute log + workflow-completion instrument make the first deploy the
+# calibration run (drop toward 0.75 if completion sags, nudge 0.85 if duration p50
+# lands short).
+_FLOOR_SHARE_TARGET = 0.82
+# Don't synthesize floor coverage for pure-background minutes (DNS/NTP only) — only
+# when there's real unshaped browsing to cover.
+_FLOOR_MIN_ACTIVE = 3
+# Per-minute open backstop (the daemon's max_concurrent reaps the live set; this
+# bounds the open RATE so a spike in active_opens can't request thousands).
+_FLOOR_MAX_OPENS = 120
+# Nominal unshaped browser-GET shape, for the AGGREGATE-p50 estimate logged each
+# minute (instrument only — the ledger sees shaped conns; the unshaped residual is
+# modelled as these). Pessimistic (real residual includes some large downloads).
+_TINY_BYTES = 128.0
+_TINY_DUR = 0.2
+
 _LOG_PREFIX = "[shape]"
 
 
@@ -132,6 +154,19 @@ class ShapeController:
         self._obs_dur: list = []
         # Per-minute failed-conn probe rate handed to scripted_services.
         self._failed_conn_rate = 0.0
+
+        # Shape-floor coverage (Build #5). _floor_target = synthetic shaped opens
+        # the floor channel should fire this minute to reach _FLOOR_SHARE_TARGET.
+        self._floor_target = 0
+        # Workflow-completion instrument — the signal that the floor is starving
+        # browse-workflows of connections (over-aggressive T), per PHASE 2026-06-25.
+        self._wf_started = 0
+        self._wf_completed = 0
+        # Estimated aggregate (all-channel) medians, logged for the per-target
+        # acceptance check (>= ~0.6x the human-target p50). Instrument only.
+        self._agg_bytes_p50 = None
+        self._agg_dur_p50 = None
+        self._shaped_share = None
 
         self._minute_stamp = self._utc_minute()
         try:
@@ -231,6 +266,27 @@ class ShapeController:
         with self._lock:
             return self._failed_conn_frac > 0
 
+    # ── Read by the shape-floor daemon (Build #5) ──────────────────────
+
+    def floor_opens_target_per_min(self) -> int:
+        """Synthetic shaped opens the floor channel should fire this minute to
+        bring the SHAPED share to _FLOOR_SHARE_TARGET. 0 when not shaping bytes or
+        there's no real unshaped traffic to cover (recomputed each maybe_tick)."""
+        with self._lock:
+            return self._floor_target
+
+    def note_workflow(self, completed: bool) -> None:
+        """Main loop reports each workflow's outcome. The per-minute completion
+        ratio is logged next to the shape p50s — a drop is the signal the floor is
+        starving browse-workflows of connections (T too aggressive), NOT the p50s."""
+        try:
+            with self._lock:
+                self._wf_started += 1
+                if completed:
+                    self._wf_completed += 1
+        except Exception:
+            pass
+
     # ── Per-minute closed-loop tick ────────────────────────────────────
 
     def maybe_tick(self) -> None:
@@ -260,9 +316,44 @@ class ShapeController:
             else:
                 self._failed_conn_rate = 0.0
 
+            # Shape-floor coverage (Build #5). shaped_count = conns the shaped
+            # channels (psess + floor) reported this past minute; the rest of
+            # active_opens is the unshapeable residual (browser GETs + background).
+            # Open enough floor conns next minute that shaped reaches the target
+            # share. Excludes last-minute shaped from the residual → stable (no
+            # self-feedback). Only bytes-shaping gates it (floor carries the
+            # distribution; duration rides the same conns).
+            shaped_count = len(self._obs_bytes)
+            ao = int(active_opens) if active_opens else 0
+            unshaped = max(0, ao - shaped_count)
+            if (self._bytes_dist is not None and ao >= _FLOOR_MIN_ACTIVE
+                    and unshaped > 0):
+                ratio = _FLOOR_SHARE_TARGET / (1.0 - _FLOOR_SHARE_TARGET)
+                self._floor_target = max(0, min(int(round(ratio * unshaped)),
+                                                _FLOOR_MAX_OPENS))
+            else:
+                self._floor_target = 0
+
+            # Estimated aggregate (all-channel) medians for the per-target
+            # acceptance check (ledger shaped values + the unshaped residual modelled
+            # as _TINY_*). Pessimistic; instrument only, never actuated.
+            self._shaped_share = (shaped_count / ao) if ao else None
+            if self._bytes_dist is not None and (self._obs_bytes or unshaped):
+                self._agg_bytes_p50 = self._median(
+                    self._obs_bytes + [_TINY_BYTES] * unshaped)
+            else:
+                self._agg_bytes_p50 = None
+            if self._dur_dist is not None and (self._obs_dur or unshaped):
+                self._agg_dur_p50 = self._median(
+                    self._obs_dur + [_TINY_DUR] * unshaped)
+            else:
+                self._agg_dur_p50 = None
+
             self._log_locked(active_opens)
             self._obs_bytes = []
             self._obs_dur = []
+            self._wf_started = 0
+            self._wf_completed = 0
 
     def _corrected_bias(self, bias: float, obs: list,
                         dist: Optional[dict]) -> float:
@@ -296,11 +387,22 @@ class ShapeController:
         d_med = self._median(self._obs_dur) if self._obs_dur else None
         b_tgt = self._bytes_dist["p50"] if self._bytes_dist else None
         d_tgt = self._dur_dist["p50"] if self._dur_dist else None
+        # Build #5 instrument: agg_*_p50 are the ESTIMATED aggregate (all-channel)
+        # medians the exp model reads (acceptance: >= ~0.6x the /target shown).
+        # wf_complete is the over-aggression signal (a drop ⇒ floor is starving
+        # browse-workflows of connections; lower T, NOT raise it).
+        wf = f"{self._wf_completed}/{self._wf_started}" if self._wf_started else "-"
+        share = (f"{self._shaped_share * 100:.0f}%"
+                 if self._shaped_share is not None else "-")
         msg = (f"{_LOG_PREFIX} "
                f"bytes_med={self._fmt(b_med)}/{self._fmt(b_tgt)} "
                f"bias={self._bytes_bias:.2f} "
                f"dur_med={self._fmt(d_med)}/{self._fmt(d_tgt)} "
                f"bias={self._dur_bias:.2f} "
+               f"agg_bytes_p50={self._fmt(self._agg_bytes_p50)}/{self._fmt(b_tgt)} "
+               f"agg_dur_p50={self._fmt(self._agg_dur_p50)}/{self._fmt(d_tgt)} "
+               f"shaped_share={share} floor_target={self._floor_target} "
+               f"wf_complete={wf} "
                f"failed_conn_rate={self._failed_conn_rate:.2f} "
                f"active_opens={active_opens if active_opens is not None else '-'} "
                f"n_obs={len(self._obs_bytes)}")
