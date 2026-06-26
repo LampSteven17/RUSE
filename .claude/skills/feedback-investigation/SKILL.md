@@ -153,10 +153,17 @@ caught the failed_conn under-fire bug (a unit test could not):
 
 1. **On-disk:** `connection_shape`(enabled)+`conn_state_mix` present, `_valid_dist`
    passes, 0 `[WARNING] [shape]`.
-2. **Controller live (logs):** `[shape] bytes_med=<emitted>/<target> bias=… dur_med=…/… failed_conn_rate=… active_opens=… n_obs=…`
-   each minute — bias should track measured→target; `n_obs>0` means the emit-side
-   ledger is receiving closes.
-3. **Channels firing (logs):** `[psess] open … bytes_cum≈target` (byte/dur lever);
+2. **Controller live (logs):** `[shape] bytes_med=<emitted>/<target> bias=… dur_med=…/…`
+   `agg_bytes_p50=<est>/<target> agg_dur_p50=<est>/<target> shaped_share=N% floor_target=K`
+   `wf_complete=c/s failed_conn_rate=… active_opens=… n_obs=…` each minute — bias should
+   track measured→target; `n_obs>0` means the emit-side ledger is receiving closes.
+   **`agg_*_p50` = ESTIMATED aggregate (the model-read median); acceptance is per-target,
+   `agg_*_p50 ≥ ~0.6× the /target shown` (NOT a literal 800B/8s — those were spring25).**
+3. **Channels firing (logs):** `[psess] open … bytes_cum≈target` (byte/dur tail);
+   `[shape-floor] daemon started endpoints=N max_concurrent=80` (Build #5 floor channel up —
+   note floor opens have **no** per-open log by design; confirm it's working via concurrent
+   `ESTABLISHED :443` conns (`ss`) or `n_obs>0`, NOT a `grep open` — and `grep floor` matches
+   `floor_target=` in every `[shape]` line, so it's NOT evidence of floor conns);
    `[scripted-svc] failed_conn fired=N rate=R src=rate` (conn_state lever).
 4. **Ground-truth (tcpdump):** `sudo tcpdump -ni any 'dst host 1.1.1.1 and dst port 1 and tcp[tcpflags] & tcp-syn != 0'`
    while firing — confirms the non-blocking SYNs actually hit the wire (Zeek-visible).
@@ -177,6 +184,35 @@ caught the failed_conn under-fire bug (a unit test could not):
 - **Slow-brain cadence.** BU blocks the main loop in `agent.run()` for minutes, so
   main-loop-driven channels look sparse; the persistent daemon (own thread) and the
   token-bucket actuator are cadence-independent by design.
+
+**Shape-floor (Build #5) — canary watch-points (validated 2026-06-25, `exp-ctrls-all_v7.1.7`
+axes-2025 CPU canary):**
+- **Per-minute `shaped_share`/`agg_*_p50` are NOISY — do NOT over-read them.** `shaped_share`
+  = closes-this-minute (`n_obs`) ÷ opens-this-minute (`active_opens`), offset by the 13–70s
+  hold times → swings 0→150%+ minute-to-minute, brutal at low (CPU) volume. **The SUP-DAY
+  aggregate the model reads converges (closes≈opens over a day); the minute log is
+  observability only.** Read the TREND across high-volume minutes, not any single line.
+- **`agg_dur_p50=0` in lean minutes is benign** (a conn opened this minute with a 40s hold
+  isn't in `n_obs` yet — biases the minute down, not the day). The real signal: `agg_dur_p50`
+  **clears ~0.6× target in high-share (≥~70%) minutes** (canary hit 13–14s at 95–103% share,
+  target 13s). "Flat near 0 across ALL minutes incl high-share" = floor not holding → real.
+- **`wf_complete` is the over-aggression gate, but distinguish floor-starvation from
+  brain-LLM slowness.** A low/0 `wf_complete` only means "T too aggressive" if accompanied by
+  **socket errors** — grep the SUP log: `too many open files|connection refused|EMFILE`
+  present ⇒ floor starving conns ⇒ drop `_FLOOR_SHARE_TARGET` toward 0.75. If instead
+  `llm_error|timeout|cancel` is high with **0** socket errors ⇒ it's the brain (BrowserUse on
+  CPU/`gemma4:e2b` times out on big prompts) — NOT the floor. Decisive cross-check: on the
+  canary B2C/BU read 0/2 (30 LLM timeouts, 0 socket errs) while S2C/Smol read 5/6 under the
+  SAME floor load → floor is innocent. **CPU-tier canaries will always show BU low-completion;
+  fleet V100 brains (gemma4:26b) won't** — don't gate the fleet on a CPU-BU `wf_complete`.
+- **`floor_target` hitting the `_FLOOR_MAX_OPENS=120` cap at high volume is benign** — it's a
+  guardrail, and the floor's own opens inflate `active_opens` → inflate the apparent unshaped
+  residual (mild feedback). System still converges to 95–103% share. Raise the cap only if you
+  want the highest-volume V100 minutes to push past it.
+- **Single-peer/endpoint concentration: sample over a WINDOW, not one `ss` snapshot.** A single
+  instant can falsely show 1 peer; over ~40s (several samples) the floor spreads across the
+  pool via `rng.choice` (canary: 6 hosts). A host listed twice in `endpoint_pool` (PHASE pool
+  quirk) gives a mild ~2× skew — cosmetic, no dest-host-diversity feature in the 20.
 
 ## 6. The volume question — a worked example of §0
 

@@ -129,6 +129,46 @@ A future Vol column should prefer `active_opens` for an actual-traffic check
 rather than the D4 floor. Not implemented yet — `WIN_VOL_MEDIAN` still reads
 the `conns=` field.
 
+## Shape-floor / connection-shape — what to watch (Build #5, 2026-06-25)
+
+NOT a wired audit column yet — you read the `[shape]` minute log + `[shape-floor]`
+line by hand (`tail .../systemd.log | grep '\[shape'`). Fires only on the **exp**
+lineage (`connection_shape.enabled`); std/controls never emit it. Validated on the
+`exp-ctrls-all_v7.1.7` axes-2025 CPU canary (2026-06-25). What's benign vs a real fault:
+
+| Signal (in `[shape]` / `[shape-floor]`) | Healthy | Real fault → action |
+|---|---|---|
+| `[shape-floor] daemon started endpoints=N max_concurrent=80` | present once when `connection_shape.enabled` | absent → floor not wired / empty `endpoint_pool` |
+| `shaped_share` | reaches ~70–103% in steady minutes; **bouncing 0→150% min-to-min is NORMAL** (closes÷opens offset) | stuck <30% across MANY high-`active_opens` minutes → floor not opening |
+| `agg_dur_p50` (binding feature) | clears ~0.6× the `/target` in high-share minutes (canary 13–14s @ target 13); **=0 in lean minutes is benign** (offset) | flat ~0 across ALL minutes incl high-share → floor not holding conns |
+| `agg_bytes_p50` | ~target in shaped-heavy minutes | persistently ~128 (TINY) even at high share → sampler dead |
+| `floor_target` | tracks ~4.56×unshaped; **hitting the 120 cap at high volume is benign** (guardrail + mild self-inflation) | always 0 despite low share + real browsing → deficit calc broken |
+| `wf_complete=c/s` | see the rule below | sag **with socket errors** → T too aggressive |
+| `[WARNING] [shape]` | 0 | present → malformed dist (counts in the Warn column) |
+
+**`wf_complete` — the over-aggression gate, but DON'T misread it.** A low/0 `wf_complete`
+means "T too aggressive / floor starving workflows" **only if** the SUP log also shows
+`too many open files|connection refused|EMFILE`. If instead it shows `llm_error|timeout|
+cancel` high with **0** socket errors, it's the brain's LLM, not the floor —
+**BrowserUse on CPU (`gemma4:e2b`) times out on big prompts**, so CPU-tier `B2C` will
+read low completion regardless of the floor. Decisive cross-check: if one brain completes
+healthily under the same floor load and another doesn't, the floor is innocent (canary:
+S2C 5/6 vs B2C 0/2, B2C = 30 LLM timeouts / 0 socket errs). **Fleet V100 brains
+(gemma4:26b) don't have this — never gate the fleet on a CPU-BU `wf_complete`.** If it IS
+real starvation, the fix is the one-line `_FLOOR_SHARE_TARGET` (shape_controller.py, 0.82
+→ 0.75).
+
+**Don't over-read per-minute.** `shaped_share`/`agg_*_p50` swing because they compare
+closes-this-minute vs opens-this-minute, offset by the 13–70s holds — worst at low (CPU)
+volume. The **SUP-day aggregate the model reads converges**; the minute log is
+observability only. Read the trend across high-`active_opens` minutes.
+
+**Endpoint concentration:** if checking held-conn spread (`ss -tn state established '( dport
+= :443 )'`), sample over a ~40s WINDOW (several snapshots) — one instant can falsely show a
+single peer; over a window the floor spreads across the pool. Floor opens have **no**
+per-open log; `grep floor` matches `floor_target=` in every `[shape]` line (not evidence of
+conns) — confirm opening via concurrent `ESTABLISHED :443` or `n_obs>0`.
+
 ## Neighborhood sidecar probe (post 2026-05-11)
 
 Each feedback deploy has one neighborhood VM (`d-{dep_id}-neighborhood-0`)
