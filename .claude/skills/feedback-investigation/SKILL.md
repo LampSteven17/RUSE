@@ -34,6 +34,17 @@ only PHASE's dredge → re-infer → pass-rate can. When you catch yourself asse
 that an on-wire fact *causes* a score outcome, stop: that's a PHASE question.
 Verify the mechanism, state it as fact; route the score implication to PHASE.
 
+**Steering tier — don't false-flag absent shape as a defect (2026-06-27, the lesson
+re-learned).** PHASE `decoy_generator._steering_tier` is a do-no-harm guard keyed on
+`baseline_score` (invisible to RUSE): **full** (<0.50) gets `connection_shape`+pool+psess;
+**cautious** (0.50–0.60) gets NO shape, psess on, pool=8; **hold** (≥0.60) gets NO shape,
+**psess off, pool=[]**. So absent `connection_shape` / empty `endpoint_pool` on a
+high-baseline SUP is BY DESIGN (the floor would be pure footprint-downside). When auditing a
+feedback gen's shape coverage, **do NOT require "all 7 configs shaped"** — verify only the
+tier-agnostic invariants RUSE CAN check: (1) `enabled=true` ⇒ non-empty pool, (2) `enabled=true`
+⇒ monotonic percentiles, (3) empty pool ⇒ `psess.enabled=false`. Those three failing are the
+only real defects; everything else is steering. Memory `project_phase_steering_tier`.
+
 ## 1. The realism contract (PHASE finding — relayed, not RUSE-proven)
 
 From PHASE's investigation (`~/PHASE/feedback_engine/knob_investigation/`):
