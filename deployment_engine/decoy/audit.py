@@ -922,7 +922,13 @@ fi
         "-o", "IdentitiesOnly=yes",
         "-o", "BatchMode=yes",
         "-o", "LogLevel=ERROR",
-        name, bash,
+        # Target the inventory IP (ubuntu@<ip>), NOT the hostname. Sidecars live
+        # only in neighborhood-inventory.ini — their hostnames are absent from
+        # ~/.ssh/config and not reliably in internal DNS, so SSHing by `name`
+        # intermittently fails "Could not resolve hostname" (a recurring audit
+        # false-positive; the VM is ACTIVE). mlserv reaches VMs directly by IP,
+        # matching the SUP probe (`ubuntu@{ip}` at _ssh_probe).
+        f"ubuntu@{ip}", bash,
     ]
     env = {**os.environ, "SSH_AUTH_SOCK": ""}
     try:
