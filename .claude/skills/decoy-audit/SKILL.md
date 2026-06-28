@@ -173,7 +173,11 @@ conns) — confirm opening via concurrent `ESTABLISHED :443` or `n_obs>0`.
 
 Each feedback deploy has one neighborhood VM (`d-{dep_id}-neighborhood-0`)
 listed in `runs/{rid}/neighborhood-inventory.ini` — separate from
-sup_hosts. `_neighborhood_probe()` SSHes the sidecar and emits:
+sup_hosts. `_neighborhood_probe()` SSHes the sidecar (**by inventory IP,
+`ubuntu@{ip}` — fixed 2026-06-28; previously SSHed the hostname, which is
+absent from `~/.ssh/config` and not reliably in internal DNS → intermittent
+`FAIL (Could not resolve hostname)` false-positives on ACTIVE sidecars, e.g.
+vt50g-rtx-a**) and emits:
 
 | key | meaning |
 |---|---|
