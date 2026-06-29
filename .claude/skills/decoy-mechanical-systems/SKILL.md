@@ -245,7 +245,7 @@ brain/workflow runs:
 - **Universal shape-floor channel** `common/network/shape_floor.py` (Build #5,
   2026-06-25): `ShapeFloorDaemon` — own-thread twin of the persistent daemon, but
   the open RATE is coverage-driven (`controller.floor_opens_target_per_min()`,
-  `T=0.82` shaped-share) instead of a fixed schedule, and it samples the FULL
+  `T=0.55` shaped-share, recalibrated from 0.82 on 2026-06-29) instead of a fixed schedule, and it samples the FULL
   `connection_shape` distribution (not just the p75–p90 tail). Opens synthetic
   shaped TLS fillers → holds for the sampled duration → FIN→SF → reports to the
   controller's emit-side ledger as channel `"floor"` (the "2nd emit-side reporter").

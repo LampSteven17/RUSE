@@ -144,7 +144,13 @@ per-connection byte/pkt/duration distribution, and conn_state is invisible to
    `ShapeFloorDaemon` is the persistent daemon's own-thread twin but **coverage-driven**:
    `ShapeController.floor_opens_target_per_min()` computes `T/(1−T)×unshaped` synthetic
    shaped opens (sampling the SAME `connection_shape` dist, full range not just the tail)
-   so SHAPED becomes share **T=0.82** (`_FLOOR_SHARE_TARGET`) of per-conn mass — drags the
+   so SHAPED becomes share **T=0.55** (`_FLOOR_SHARE_TARGET`; **recalibrated 0.82→0.55 on
+   2026-06-29** — the sim's 0.82 OVERSHOT the human shape on the live deploy: orig_bytes
+   1.35×/orig_pkts 2.18×/resp_bytes 1.6×, which crashed axes-2025 −0.15; PHASE T-sweep on
+   the deployed conns put 0.55 on target for both bytes 0.96× and packets 1.01×. Residual:
+   packets stay ~1.0–1.3× regardless of T — each floor conn is a real TLS conn with fixed
+   packet overhead; lighter floor conns are a follow-up build, not a T tweak) of per-conn
+   mass — drags the
    aggregate median to target. **Duration is the binding constraint** (PHASE sim: bytes
    clears ~0.69, dur needs ~0.80, since human dur p25 0.3s/p50 14.5s is far right-skewed).
    2nd emit-side reporter (channel `"floor"`); opens net out of D4. `[shape]` log now carries
@@ -210,7 +216,7 @@ axes-2025 CPU canary):**
 - **`wf_complete` is the over-aggression gate, but distinguish floor-starvation from
   brain-LLM slowness.** A low/0 `wf_complete` only means "T too aggressive" if accompanied by
   **socket errors** — grep the SUP log: `too many open files|connection refused|EMFILE`
-  present ⇒ floor starving conns ⇒ drop `_FLOOR_SHARE_TARGET` toward 0.75. If instead
+  present ⇒ floor starving conns ⇒ drop `_FLOOR_SHARE_TARGET` further (now 0.55). If instead
   `llm_error|timeout|cancel` is high with **0** socket errors ⇒ it's the brain (BrowserUse on
   CPU/`gemma4:e2b` times out on big prompts) — NOT the floor. Decisive cross-check: on the
   canary B2C/BU read 0/2 (30 LLM timeouts, 0 socket errs) while S2C/Smol read 5/6 under the

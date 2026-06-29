@@ -79,14 +79,21 @@ _BIAS_DAMP = 0.3  # fraction of the log-ratio applied per minute
 
 # Shape-floor coverage (Build #5, 2026-06-25). The floor channel opens enough
 # synthetic shaped connections that the SHAPED conns are this share of the per-conn
-# mass — which drags the aggregate median up toward the human target. PHASE sim
-# 2026-06-25: duration is the binding constraint (human duration p25 0.3s / p50
-# 14.5s is far more right-skewed than bytes), so duration p50 doesn't clear until
-# share ~0.80 while bytes clears ~0.69 — hence 0.82 with margin. Tunable; the
-# [shape] minute log + workflow-completion instrument make the first deploy the
-# calibration run (drop toward 0.75 if completion sags, nudge 0.85 if duration p50
-# lands short).
-_FLOOR_SHARE_TARGET = 0.82
+# mass — which drags the aggregate median up toward the human target. Tunable; the
+# first deploy was the calibration run as designed:
+#   • PHASE sim 2026-06-25 predicted 0.82 (duration was modelled as the binding
+#     constraint; human dur is right-skewed so dur p50 needs ~0.80 share).
+#   • PHASE MEASUREMENT of the first clean deploy (exp-ctrls-all_v7.1.7, 2026-06-29)
+#     superseded the sim: at 0.82 the floor OVERSHOOTS the human shape — orig_bytes
+#     1.35×, orig_pkts 2.18×, resp_bytes 1.6× — which crashed axes-2025 (−0.15) and
+#     the broad datasets. A T-sweep on the deployed conns: 0.55 lands BOTH bytes
+#     (0.96×) and packets (1.01×) on target; 0.60 nails bytes but packets step to
+#     1.34×. → 0.55 (minimizes the worse, structural packet overshoot).
+# Residual caveat: even at the best T, packets stay ~1.0–1.3× because each floor
+# conn is a real TLS connection with fixed per-conn packet overhead — fully removing
+# that needs a follow-up build making floor conns LIGHTER (fewer round-trips /
+# smaller responses), NOT a further T tweak.
+_FLOOR_SHARE_TARGET = 0.55
 # Don't synthesize floor coverage for pure-background minutes (DNS/NTP only) — only
 # when there's real unshaped browsing to cover.
 _FLOOR_MIN_ACTIVE = 3

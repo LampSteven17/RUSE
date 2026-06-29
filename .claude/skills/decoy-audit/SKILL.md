@@ -155,8 +155,9 @@ read low completion regardless of the floor. Decisive cross-check: if one brain 
 healthily under the same floor load and another doesn't, the floor is innocent (canary:
 S2C 5/6 vs B2C 0/2, B2C = 30 LLM timeouts / 0 socket errs). **Fleet V100 brains
 (gemma4:26b) don't have this — never gate the fleet on a CPU-BU `wf_complete`.** If it IS
-real starvation, the fix is the one-line `_FLOOR_SHARE_TARGET` (shape_controller.py, 0.82
-→ 0.75).
+real starvation, the fix is the one-line `_FLOOR_SHARE_TARGET` (shape_controller.py — now
+**0.55**, recalibrated from 0.82 on 2026-06-29 after the live deploy overshot the human
+byte/packet shape; lower further if starvation appears).
 
 **Don't over-read per-minute.** `shaped_share`/`agg_*_p50` swing because they compare
 closes-this-minute vs opens-this-minute, offset by the 13–70s holds — worst at low (CPU)
