@@ -162,6 +162,14 @@ per-connection byte/pkt/duration distribution, and conn_state is invisible to
    internal IPs → `local_resp=T` + real `service`/`conn_state` (incl. reliable
    REJ, which lets PHASE split REJ back out of `failed_conn`). The only path for
    topology-bound / cptc-class network features. Big infra.
+7. **Lighter floor connections** (NEW, surfaced by the 2026-06-29 T-recalibration) —
+   each shape-floor conn is a real TLS connection with FIXED per-conn packet overhead, so
+   `orig_pkts`/`resp_pkts` stay ~1.0–1.3× the human target at ANY `_FLOOR_SHARE_TARGET`
+   (the packet overshoot is structural, not a coverage-share knob). Make floor conns
+   lighter — fewer round-trips per conn, smaller responses (e.g. drop/trim the response
+   drain, single-request lifetimes, `Range:` tighter) — to pull packets onto target without
+   sacrificing the byte/duration coverage T buys. Required before the floor's packet shape
+   is clean; T can only fix bytes.
 
 ## 5. How to verify shape ON THE WIRE (canary methodology)
 
