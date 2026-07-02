@@ -219,8 +219,10 @@ axes-2025 CPU canary):**
   observability only.** Read the TREND across high-volume minutes, not any single line.
 - **`agg_dur_p50=0` in lean minutes is benign** (a conn opened this minute with a 40s hold
   isn't in `n_obs` yet — biases the minute down, not the day). The real signal: `agg_dur_p50`
-  **clears ~0.6× target in high-share (≥~70%) minutes** (canary hit 13–14s at 95–103% share,
-  target 13s). "Flat near 0 across ALL minutes incl high-share" = floor not holding → real.
+  **clears ~0.6× target in shaped-heavy minutes**. "Flat near 0 across ALL minutes incl
+  shaped-heavy" = floor not holding → real. (Historical: the T=0.82 canary hit dur 13–14s at
+  95–103% share; at the recalibrated **T=0.55** steady share is **~50–65%**, so the on-target
+  minutes cluster at lower share — judge against ~55%, not the old canary's 95%.)
 - **`wf_complete` is the over-aggression gate, but distinguish floor-starvation from
   brain-LLM slowness.** A low/0 `wf_complete` only means "T too aggressive" if accompanied by
   **socket errors** — grep the SUP log: `too many open files|connection refused|EMFILE`
@@ -232,8 +234,9 @@ axes-2025 CPU canary):**
   fleet V100 brains (gemma4:26b) won't** — don't gate the fleet on a CPU-BU `wf_complete`.
 - **`floor_target` hitting the `_FLOOR_MAX_OPENS=120` cap at high volume is benign** — it's a
   guardrail, and the floor's own opens inflate `active_opens` → inflate the apparent unshaped
-  residual (mild feedback). System still converges to 95–103% share. Raise the cap only if you
-  want the highest-volume V100 minutes to push past it.
+  residual (mild feedback). At **T=0.55 the cap rarely binds** (multiplier 1.22× vs 4.56× at
+  0.82); the system converges to **~50–65% share** (not the old 95–103%). Raise the cap only if
+  the highest-volume V100 minutes ever need to push past it.
 - **Single-peer/endpoint concentration: sample over a WINDOW, not one `ss` snapshot.** A single
   instant can falsely show 1 peer; over ~40s (several samples) the floor spreads across the
   pool via `rng.choice` (canary: 6 hosts). A host listed twice in `endpoint_pool` (PHASE pool

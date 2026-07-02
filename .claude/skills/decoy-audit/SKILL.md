@@ -139,10 +139,10 @@ lineage (`connection_shape.enabled`); std/controls never emit it. Validated on t
 | Signal (in `[shape]` / `[shape-floor]`) | Healthy | Real fault → action |
 |---|---|---|
 | `[shape-floor] daemon started endpoints=N max_concurrent=80` | present once when `connection_shape.enabled` | absent → floor not wired / empty `endpoint_pool` |
-| `shaped_share` | reaches ~70–103% in steady minutes; **bouncing 0→150% min-to-min is NORMAL** (closes÷opens offset) | stuck <30% across MANY high-`active_opens` minutes → floor not opening |
+| `shaped_share` | settles **~50–65% at T=0.55** (recalibrated 2026-06-29; was ~70–103% at the old T=0.82) in steady minutes; **bouncing 0→150% min-to-min is NORMAL** (closes÷opens offset) | stuck well <40% across MANY high-`active_opens` minutes → floor not opening |
 | `agg_dur_p50` (binding feature) | clears ~0.6× the `/target` in high-share minutes (canary 13–14s @ target 13); **=0 in lean minutes is benign** (offset) | flat ~0 across ALL minutes incl high-share → floor not holding conns |
 | `agg_bytes_p50` | ~target in shaped-heavy minutes | persistently ~128 (TINY) even at high share → sampler dead |
-| `floor_target` | tracks ~4.56×unshaped; **hitting the 120 cap at high volume is benign** (guardrail + mild self-inflation) | always 0 despite low share + real browsing → deficit calc broken |
+| `floor_target` | tracks **~1.22×unshaped at T=0.55** (was ~4.56× at T=0.82 — verified on the 06-29 redeploy: active_opens 74→floor_target 75, 21→7); rarely hits the 120 cap now, and doing so is benign (guardrail) | always 0 despite low share + real browsing → deficit calc broken |
 | `wf_complete=c/s` | see the rule below | sag **with socket errors** → T too aggressive |
 | `[WARNING] [shape]` | 0 | present → malformed dist (counts in the Warn column) |
 
