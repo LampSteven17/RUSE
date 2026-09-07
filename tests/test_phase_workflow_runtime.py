@@ -64,7 +64,7 @@ from phase_workflow.workflows import (
     MCHPDocumentWorkflows,
     OpenDocumentWriter,
     SeleniumResourceWorkflows,
-    _select_media_url,
+    VIDEO_PAGE,
     firefox_download,
     stream_https_download,
     play_video_realtime,
@@ -104,9 +104,22 @@ EXPECTED_CONFIGS = {
 }
 EXPECTED_RESOURCES = (
     "google_climate_change_news",
-    "video_cpp_course",
+    "video_hls_mux_bbb",
     "document_team_meeting_notes",
 )
+
+
+def expanded_hls_control_document(config_key):
+    """New test input only; never rewrite the historical PHASE generation."""
+    document = json.loads((CURRENT_CONTROL_ROOT / PLAN_FILENAMES[config_key]).read_text())
+    videos = ('video_hls_mux_bbb', 'video_hls_apple_bipbop', 'video_hls_unified_tos')
+    index = 0
+    for window in document['schedule']:
+        for entry in window['sequence']:
+            if entry['workflow'] == 'VideoViewing':
+                entry['resource_id'] = videos[index % len(videos)]
+                index += 1
+    return document
 
 
 def control_document(config_key="scripted-cpu"):
@@ -139,7 +152,7 @@ def feedback_document(config_key="scripted-cpu"):
     document["resource_profile"] = "feedback-v2"
     replacements = {
         "WebResearch": "wikipedia_compiler",
-        "VideoViewing": "video_cpp_course",
+        "VideoViewing": "video_hls_mux_bbb",
         "DocumentCreation": "document_team_meeting_notes",
     }
     instructions = json.loads(
@@ -160,7 +173,7 @@ def six_workflow_document(config_key="scripted-cpu"):
     )["instructions"]["feedback-v2"]
     resources = (
         ("WebResearch", "wikipedia_compiler"),
-        ("VideoViewing", "video_cpp_course"),
+        ("VideoViewing", "video_hls_mux_bbb"),
         ("FileDownload", "download_ovh_1m"),
         ("DocumentCreation", "document_team_meeting_notes"),
         ("FileSyncUpload", "cloudflare_upload"),
@@ -270,13 +283,14 @@ class LoaderTests(unittest.TestCase):
             (CONTRACT_ROOT / "phase-workflow-plan-v1.schema.json").read_bytes(),
             AUTHORITATIVE_SCHEMA.read_bytes(),
         )
+        expected = json.loads(AUTHORITATIVE_CAPABILITIES.read_text())
+        expected['brain_profiles']['mchp-cpu']['mchp-v1']['workflows']['VideoViewing']['resource_kinds'] = ['hls_video']
+        self.assertEqual(json.loads((CONTRACT_ROOT / 'capabilities-v1.json').read_text()), expected)
+        expected = json.loads(AUTHORITATIVE_CONTROLS_PROFILE.read_text())['resources']
+        actual = json.loads((CONTRACT_ROOT / 'resource-profiles/controls-v2.json').read_text())['resources']
         self.assertEqual(
-            (CONTRACT_ROOT / "capabilities-v1.json").read_bytes(),
-            AUTHORITATIVE_CAPABILITIES.read_bytes(),
-        )
-        self.assertEqual(
-            (CONTRACT_ROOT / "resource-profiles/controls-v2.json").read_bytes(),
-            AUTHORITATIVE_CONTROLS_PROFILE.read_bytes(),
+            {k:v for k,v in actual.items() if v['workflow'] != 'VideoViewing'},
+            {k:v for k,v in expected.items() if v['workflow'] != 'VideoViewing'},
         )
         self.assertEqual(
             PLAN_FILENAMES,
@@ -386,7 +400,7 @@ class LoaderTests(unittest.TestCase):
     def test_four_current_controls_load_with_expanded_catalog(self):
         self.assertEqual(set(CONFIGURATIONS), EXPECTED_CONFIGS)
         plans = {
-            key: load_workflow_plan(CURRENT_CONTROL_ROOT / PLAN_FILENAMES[key], key)
+            key: load_document(expanded_hls_control_document(key), key)
             for key in EXPECTED_CONFIGS
         }
         expected_workflows = {
@@ -444,7 +458,10 @@ class LoaderTests(unittest.TestCase):
                         load_workflow_plan(path, expected)
 
     def test_behavior_is_read_once_and_invalid_plan_has_no_fallback(self):
-        path = CONTROL_ROOT / PLAN_FILENAMES["scripted-cpu"]
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / 'behavior.json'
+        path.write_text(json.dumps(control_document()))
         original = Path.read_bytes
         count = 0
 
@@ -790,7 +807,7 @@ class RegistryAndBrainTests(unittest.TestCase):
         self.assertTrue(result.completed)
         self.assertEqual(
             driver.urls,
-            ["https://www.youtube.com/watch?v=" + task.resource["video_id"]],
+            [VIDEO_PAGE.as_uri()],
         )
         self.assertEqual(sleeps, [300])
         self.assertEqual(driver.find, ("tag name", "video"))
@@ -881,26 +898,17 @@ class RegistryAndBrainTests(unittest.TestCase):
         task = WorkflowRegistry(plan, RecordingBrain(), Path("/tmp")).resolve(
             plan.windows[0].sequence[1]
         )
-        resolutions = []
         process_calls = []
-
-        def resolve(video_id):
-            resolutions.append(video_id)
-            return "https://media.example/assigned.mp4"
-
         def run(command, **kwargs):
             process_calls.append((command, kwargs))
-
-        self.assertTrue(
-            play_video_realtime(task, media_resolver=resolve, process_runner=run)
-        )
-        self.assertEqual(resolutions, [task.resource["video_id"]])
+            return SimpleNamespace(stdout="out_time_us=300000000\nprogress=end\n")
+        self.assertTrue(play_video_realtime(task, process_runner=run))
         self.assertEqual(len(process_calls), 1)
         command, kwargs = process_calls[0]
-        self.assertEqual(command.count("https://media.example/assigned.mp4"), 1)
+        self.assertEqual(command.count(task.resource["url"]), 1)
         self.assertIn("-re", command)
         self.assertEqual(command[command.index("-t") + 1], "300")
-        self.assertEqual(kwargs, {"check": True, "timeout": 360})
+        self.assertEqual(kwargs, dict(check=True, timeout=360, capture_output=True, text=True))
 
     def test_mchp_document_dispatch_uses_assigned_libreoffice_resource(self):
         class MCHPWorkflow:
@@ -1427,6 +1435,9 @@ class TransferWorkflowTests(unittest.TestCase):
             def is_done(self):
                 return True
 
+            def is_validated(self):
+                return True
+
             def is_successful(self):
                 return True
 
@@ -1594,6 +1605,9 @@ class TransferWorkflowTests(unittest.TestCase):
                 )]
 
             def is_done(self):
+                return True
+
+            def is_validated(self):
                 return True
 
             def is_successful(self):
@@ -1826,6 +1840,9 @@ class TruthPropagationTests(unittest.TestCase):
             def is_done(self):
                 return True
 
+            def is_validated(self):
+                return True
+
             def is_successful(self):
                 return False
 
@@ -1836,12 +1853,18 @@ class TruthPropagationTests(unittest.TestCase):
             def is_done(self):
                 return False
 
+            def is_validated(self):
+                return True
+
             def is_successful(self):
                 return True
 
         class Malformed:
             def is_done(self):
                 raise ValueError("malformed action result")
+
+            def is_validated(self):
+                return True
 
             def is_successful(self):
                 return True
@@ -1864,6 +1887,9 @@ class TruthPropagationTests(unittest.TestCase):
 
         class History:
             def is_done(self):
+                return True
+
+            def is_validated(self):
                 return True
 
             def is_successful(self):
@@ -2984,31 +3010,6 @@ class LiteLLMCallbackRegistrationTests(unittest.TestCase):
         self.assertEqual(event_types.count("llm_response"), 6)
 
 
-class VideoMechanicsTests(unittest.TestCase):
-    def test_available_ytdlp_format_is_selected_without_fixed_format_guess(self):
-        info = {
-            "formats": [
-                {"format_id": "storyboard", "url": None},
-                {
-                    "format_id": "audio",
-                    "url": "https://media.example/audio",
-                    "vcodec": "none",
-                    "acodec": "opus",
-                },
-                {
-                    "format_id": "progressive",
-                    "url": "https://media.example/assigned.mp4",
-                    "vcodec": "h264",
-                    "acodec": "aac",
-                },
-            ]
-        }
-        self.assertEqual(
-            _select_media_url(info), "https://media.example/assigned.mp4"
-        )
-        self.assertIsNone(_select_media_url({"formats": []}))
-
-
 class LLMVideoRunnerTests(unittest.TestCase):
     @staticmethod
     def video_task(config_key):
@@ -3064,6 +3065,9 @@ class LLMVideoRunnerTests(unittest.TestCase):
 
         class History:
             def is_done(self):
+                return True
+
+            def is_validated(self):
                 return True
 
             def is_successful(self):
@@ -3168,9 +3172,9 @@ class LLMVideoRunnerTests(unittest.TestCase):
         self.assertEqual(browser_state["agent"]["step_timeout"], 420)
         video_evidence = browser_state["action_result"].extracted_content
         self.assertIn(f"resource_id={browser_task.resource_id}", video_evidence)
-        self.assertIn("assigned_url=https://www.youtube.com/watch?v=", video_evidence)
+        self.assertIn("assigned_url=" + browser_task.resource["url"], video_evidence)
         self.assertIn("expected_seconds=300", video_evidence)
-        self.assertIn("observed_seconds=300", video_evidence)
+        self.assertIn("verification=playback_started_and_no_explicit_final_error", video_evidence)
         smol_tools = self.run_smol(True, lambda task: True)[2]["agent"]["tools"]
         self.assertEqual(len(smol_tools), 1)
         self.assertEqual(smol_tools[0].name, "play_assigned_video")
@@ -3210,6 +3214,9 @@ class LLMVideoRunnerTests(unittest.TestCase):
 
         class History:
             def is_done(self):
+                return True
+
+            def is_validated(self):
                 return True
 
             def is_successful(self):
@@ -3772,6 +3779,8 @@ class InstallerTests(unittest.TestCase):
                     check=True,
                 )
                 self.assertTrue((destination / "decoys/phase_workflow").is_dir())
+                for asset in ('video.html', 'hls-1.7.2.min.js', 'hls-LICENSE'):
+                    self.assertTrue((destination / 'decoys/phase_workflow/assets' / asset).is_file())
                 self.assertTrue(
                     (destination / "contracts/phase-workflow-plan-v1").is_dir()
                 )

@@ -29,6 +29,34 @@ CANARY = ROOT / "deployments" / "decoy-runtime-canary"
 
 
 class DecoyRuntimeCanaryTests(unittest.TestCase):
+    def setUp(self):
+        # Fresh HLS test inputs; never edit historical canary plans or run files.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        for name in ('decoy-runtime-canary', 'decoy-mchp-canary', 'decoy-gpu-canary'):
+            source = ROOT / 'deployments' / name
+            if not source.exists():
+                continue
+            target = root / 'deployments' / name
+            target.mkdir(parents=True)
+            shutil.copy2(source / 'config.yaml', target / 'config.yaml')
+            (target / 'plans').mkdir()
+            for path in (source / 'plans').glob('*.json'):
+                document = json.loads(path.read_text())
+                for window in document['schedule']:
+                    for entry in window['sequence']:
+                        if entry['workflow'] == 'VideoViewing':
+                            entry['resource_id'] = 'video_hls_mux_bbb'
+                (target / 'plans' / path.name).write_text(json.dumps(document))
+        for patcher in (
+            mock.patch(__name__ + '.ROOT', root),
+            mock.patch(__name__ + '.CANARY', root / 'deployments/decoy-runtime-canary'),
+            mock.patch.object(deployment_cli, 'DEPLOY_DIR', root / 'deployments'),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_four_plans_share_schedule_and_cover_qualification_matrix(self):
         plans = validate_decoy_canary_generation(CANARY / "plans")
         self.assertEqual(tuple(plans), DECOY_FEEDBACK_SUP_CONFIGS)

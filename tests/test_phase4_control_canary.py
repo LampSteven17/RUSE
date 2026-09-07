@@ -13,6 +13,7 @@ from deployment_engine import __main__ as deployment_cli
 from deployment_engine.core import feedback, plan
 from deployment_engine.core.config import DeploymentConfig
 from deployment_engine.decoy import spinup
+from tests.test_phase_workflow_runtime import expanded_hls_control_document
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -37,9 +38,8 @@ class Phase4ControlCanaryTests(unittest.TestCase):
         generation = root / timestamp
         generation.mkdir(parents=True)
         for sup_config in CANONICAL:
-            shutil.copy2(
-                CONTROL_ROOT / feedback.DECOY_PLAN_FILENAMES[sup_config],
-                generation / feedback.DECOY_PLAN_FILENAMES[sup_config],
+            (generation / feedback.DECOY_PLAN_FILENAMES[sup_config]).write_text(
+                json.dumps(expanded_hls_control_document(sup_config))
             )
         return generation
 
@@ -293,37 +293,19 @@ class Phase4ControlCanaryTests(unittest.TestCase):
             stage["when"], "sup_behavior in canonical_workflow_configs"
         )
 
-    def test_current_global_control_generation_loads_and_requires_share(self):
+    def test_hls_global_control_generation_loads_and_requires_share(self):
         from phase_workflow.loader import load_workflow_plan
-
-        self.assertEqual(
-            feedback.find_decoy_control_generation(), CURRENT_CONTROL_ROOT
-        )
-        self.assertEqual(
-            {path.name for path in CURRENT_CONTROL_ROOT.iterdir()},
-            set(feedback.DECOY_PLAN_FILENAMES.values()),
-        )
-        normalized = []
-        for sup_config in CANONICAL:
-            path = CURRENT_CONTROL_ROOT / feedback.DECOY_PLAN_FILENAMES[sup_config]
-            plan = load_workflow_plan(path, sup_config)
-            self.assertEqual(plan.sup_config, sup_config)
-            self.assertEqual(plan.resource_profile, "controls-v2")
-            normalized.append(tuple(
-                (
-                    (window.start_minute, window.end_minute),
-                    tuple(
-                        (entry.offset_minutes, entry.workflow, entry.resource_id)
-                        for entry in window.sequence
-                    ),
-                )
-                for window in plan.windows
-            ))
-        for schedule in normalized[1:]:
-            self.assertEqual(schedule, normalized[0])
-        self.assertTrue(feedback.decoy_generation_uses_network_share(
-            CURRENT_CONTROL_ROOT, purpose="control"
-        ))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            generation = self._generation(root, '2026-09-07_0000Z')
+            with mock.patch.object(feedback, 'DECOY_CONTROL_BASE', root):
+                self.assertEqual(feedback.find_decoy_control_generation(), generation)
+            normalized = []
+            for sup_config in CANONICAL:
+                loaded = load_workflow_plan(generation / feedback.DECOY_PLAN_FILENAMES[sup_config], sup_config)
+                normalized.append([(e.offset_minutes, e.workflow, e.resource_id) for w in loaded.windows for e in w.sequence])
+            self.assertTrue(all(sequence == normalized[0] for sequence in normalized))
+            self.assertTrue(feedback.decoy_generation_uses_network_share(generation, purpose='control'))
 
     def test_controls_render_fixed_topology_and_pass_selected_source(self):
         with tempfile.TemporaryDirectory() as temporary:

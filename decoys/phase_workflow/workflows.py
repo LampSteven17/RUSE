@@ -417,29 +417,22 @@ class KerberosShareAccess:
         return completed.stdout or ""
 
 
+VIDEO_PAGE = Path(__file__).with_name("assets") / "video.html"
+
 _VIDEO_STATE = """video => ({
     ready: video.readyState >= 2,
     time: video.currentTime,
     paused: video.paused,
     ended: video.ended,
-    error: video.error ? video.error.code : null
+    error: video.error ? video.error.code : window.ruseVideoError
 })"""
 
 _VIDEO_FINAL_STATE = """() => {
     const video = document.querySelector('video');
-    const overlay = Array.from(document.querySelectorAll(
-        '#movie_player .ytp-error-content-wrap'
-    )).find(node => {
-        const style = getComputedStyle(node);
-        return node.getClientRects().length > 0 &&
-            style.visibility !== 'hidden' && style.visibility !== 'collapse' &&
-            style.display !== 'none';
-    });
     return {
         video_present: video !== null,
         error: video && video.error ? video.error.code : null,
-        player_error: overlay ? (overlay.innerText.trim().slice(0, 240) ||
-            'visible YouTube player-error overlay') : null,
+        player_error: window.ruseVideoError,
         time: video ? video.currentTime : null,
         paused: video ? video.paused : null
     };
@@ -533,13 +526,12 @@ class SeleniumResourceWorkflows:
             cleanup()
 
     def video_viewing(self, task: ResolvedTask) -> WorkflowResult:
-        if task.resource["kind"] != "youtube_video":
-            raise RuntimeError("VideoViewing requires a youtube_video resource")
+        if task.resource["kind"] != "hls_video":
+            raise RuntimeError("VideoViewing requires an hls_video resource")
         driver, cleanup = self._open_driver()
         try:
-            driver.get(
-                "https://www.youtube.com/watch?v=" + task.resource["video_id"]
-            )
+            driver.get(VIDEO_PAGE.as_uri())
+            driver.execute_script("window.loadAssignedHls(arguments[0]);", task.resource["url"])
             video = driver.find_element("tag name", "video")
             _confirm_video_start(
                 lambda: driver.execute_script(
@@ -727,8 +719,8 @@ def structured_llm_task(task: ResolvedTask) -> str:
 
 def play_video_with_chromium(task: ResolvedTask) -> bool:
     """Play only the assigned video for its fixed duration in Chromium."""
-    if task.resource["kind"] != "youtube_video":
-        raise RuntimeError("VideoViewing requires a youtube_video resource")
+    if task.resource["kind"] != "hls_video":
+        raise RuntimeError("VideoViewing requires an hls_video resource")
     from playwright.sync_api import sync_playwright
     from brains.browseruse.config import CHROMIUM_ARGS
 
@@ -737,9 +729,10 @@ def play_video_with_chromium(task: ResolvedTask) -> bool:
         try:
             page = browser.new_page()
             page.goto(
-                "https://www.youtube.com/watch?v=" + task.resource["video_id"],
+                VIDEO_PAGE.as_uri(),
                 wait_until="domcontentloaded",
             )
+            page.evaluate("url => window.loadAssignedHls(url)", task.resource["url"])
             video = page.wait_for_selector("video")
             _confirm_video_start(
                 lambda: video.evaluate(_VIDEO_STATE),
@@ -759,77 +752,32 @@ def play_video_with_chromium(task: ResolvedTask) -> bool:
 
 def play_video_realtime(
     task: ResolvedTask,
-    media_resolver=None,
     process_runner=subprocess.run,
 ) -> bool:
     """Consume one assigned media stream at playback pace for its fixed duration."""
-    if task.resource["kind"] != "youtube_video":
-        raise RuntimeError("VideoViewing requires a youtube_video resource")
-    video_id = task.resource["video_id"]
+    if task.resource["kind"] != "hls_video":
+        raise RuntimeError("VideoViewing requires an hls_video resource")
     duration = task.resource["play_seconds"]
-    resolver = media_resolver or _resolve_media_url
-    media_url = resolver(video_id)
     process_runner(
         [
             "ffmpeg",
             "-nostdin",
             "-loglevel", "error",
             "-re",
-            "-i", media_url,
+            "-i", task.resource["url"],
             "-t", str(duration),
+            "-progress", "pipe:1",
             "-f", "null",
             "-",
         ],
         check=True,
         timeout=duration + 60,
+        capture_output=True,
+        text=True,
     )
+    # FFmpeg's progress time is a packet timestamp, not packet end time. Keep
+    # the existing checked -re/-t execution; do not invent a rounding tolerance.
     return True
-
-
-def _resolve_media_url(video_id: str) -> str:
-    import yt_dlp
-
-    with yt_dlp.YoutubeDL({
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-    }) as downloader:
-        info = downloader.extract_info(
-            "https://www.youtube.com/watch?v=" + video_id,
-            download=False,
-        )
-    media_url = _select_media_url(info)
-    if not media_url:
-        raise RuntimeError(f"no media URL for assigned video {video_id}")
-    return media_url
-
-
-def _select_media_url(info) -> str | None:
-    """Select one actually advertised HTTP media stream, without a format guess."""
-    candidates = []
-    if isinstance(info, dict):
-        candidates.append(info)
-        for key in ("requested_downloads", "requested_formats", "formats"):
-            values = info.get(key) or []
-            if isinstance(values, list):
-                candidates.extend(value for value in values if isinstance(value, dict))
-
-    def usable(candidate, *, require_audio):
-        url = candidate.get("url")
-        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-            return None
-        if candidate.get("vcodec") == "none":
-            return None
-        if require_audio and candidate.get("acodec") == "none":
-            return None
-        return url
-
-    for require_audio in (True, False):
-        for candidate in candidates:
-            url = usable(candidate, require_audio=require_audio)
-            if url:
-                return url
-    return None
 
 
 _TABLE_NS = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"

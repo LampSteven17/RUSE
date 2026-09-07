@@ -12,6 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
@@ -97,8 +98,14 @@ def _validate_resource_profile(profile: dict[str, Any], profile_id: str) -> None
             valid = bool(resource.get("url"))
         elif workflow == "WebResearch" and kind == "search_query":
             valid = resource.get("provider") == "google" and bool(resource.get("query"))
-        elif workflow == "VideoViewing" and kind == "youtube_video":
-            valid = bool(resource.get("video_id")) and resource.get("play_seconds") == 300
+        elif workflow == "VideoViewing" and kind == "hls_video":
+            url = urlsplit(str(resource.get("url", "")))
+            valid = (
+                set(resource) == {"workflow", "kind", "url", "play_seconds"}
+                and url.scheme == "https" and bool(url.hostname)
+                and not url.username and not url.password
+                and resource.get("play_seconds") == 300
+            )
         elif workflow == "DocumentCreation" and kind == "document":
             valid = (
                 str(resource.get("filename", "")).endswith(".odt")

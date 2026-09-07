@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Assigned HLS video</title>
+<video id="assigned-video" controls playsinline width="960" height="540"></video>
+<script src="hls-1.7.2.min.js"></script>
+<script>
+// One local page per owned browser. No autoplay, loop, CDN script or recovery.
+window.ruseVideoError = null;
+window.loadAssignedHls = function (url) {
+    const video = document.querySelector('video');
+    if (window.ruseVideoAssigned) throw new Error('video already assigned');
+    window.ruseVideoAssigned = url;
+    if (new URL(url).protocol !== 'https:') throw new Error('HTTPS HLS required');
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = url;
+    } else if (Hls.isSupported()) {
+        const config = {};
+        for (const name of ['manifestLoadPolicy', 'playlistLoadPolicy',
+                            'fragLoadPolicy', 'keyLoadPolicy', 'certLoadPolicy',
+                            'steeringManifestLoadPolicy', 'interstitialAssetListLoadPolicy']) {
+            config[name] = {default: {...Hls.DefaultConfig[name].default,
+                                     timeoutRetry: null, errorRetry: null}};
+        }
+        const hls = new Hls(config);
+        hls.on(Hls.Events.ERROR, (_, data) => {
+            if (data.fatal) {
+                window.ruseVideoError = `${data.type}: ${data.details}`;
+                hls.stopLoad();
+            }
+        });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        window.addEventListener('pagehide', () => hls.destroy(), {once: true});
+    } else {
+        window.ruseVideoError = 'HLS is unsupported by this browser';
+    }
+};
+</script>

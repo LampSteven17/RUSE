@@ -58,7 +58,7 @@
             "resource_kinds": ["direct_url", "search_query"]
           },
           "VideoViewing": {
-            "resource_kinds": ["youtube_video"]
+            "resource_kinds": ["hls_video"]
           },
           "DocumentCreation": {
             "resource_kinds": ["document", "spreadsheet"]

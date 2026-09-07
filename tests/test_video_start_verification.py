@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from phase_workflow.workflows import (
     SeleniumResourceWorkflows,
+    VIDEO_PAGE,
     _confirm_video_start,
     _inspect_video_end,
     play_video_with_chromium,
@@ -87,7 +88,7 @@ class PlaybackInitiationTests(unittest.TestCase):
 class BrowserVideoWiringTests(unittest.TestCase):
     def setUp(self):
         self.task = SimpleNamespace(resource={
-            "kind": "youtube_video", "video_id": "assigned-video", "play_seconds": 300,
+            "kind": "hls_video", "url": "https://example.test/assigned.m3u8", "play_seconds": 300,
         })
 
     def test_selenium_success_and_failures_always_close_owned_driver(self):
@@ -96,7 +97,7 @@ class BrowserVideoWiringTests(unittest.TestCase):
                 driver = Mock(spec=["timeouts", "get", "find_element",
                                     "execute_script", "execute_async_script", "quit"])
                 driver.timeouts.script = 30
-                driver.execute_script.side_effect = [state(), state(.1), state(300)]
+                driver.execute_script.side_effect = [None, state(), state(.1), state(300)]
                 if isinstance(failure, Exception):
                     driver.execute_async_script.side_effect = failure
                 else:
@@ -111,9 +112,10 @@ class BrowserVideoWiringTests(unittest.TestCase):
                         workflow.video_viewing(self.task)
                     sleep.assert_not_called()
                 driver.get.assert_called_once_with(
-                    "https://www.youtube.com/watch?v=assigned-video"
+                    VIDEO_PAGE.as_uri()
                 )
                 driver.execute_async_script.assert_called_once()
+                driver.execute_script.assert_any_call('window.loadAssignedHls(arguments[0]);', self.task.resource['url'])
                 driver.quit.assert_called_once()
 
     def test_chromium_success_and_failures_preserve_duration_and_cleanup(self):
@@ -148,10 +150,11 @@ class BrowserVideoWiringTests(unittest.TestCase):
                             play_video_with_chromium(self.task)
                         page.wait_for_timeout.assert_not_called()
                 page.goto.assert_called_once_with(
-                    "https://www.youtube.com/watch?v=assigned-video",
+                    VIDEO_PAGE.as_uri(),
                     wait_until="domcontentloaded",
                 )
                 page.wait_for_selector.assert_called_once_with("video")
+                page.evaluate.assert_any_call('url => window.loadAssignedHls(url)', self.task.resource['url'])
                 browser.close.assert_called_once()
 
 
@@ -181,6 +184,7 @@ class FinalVideoInspectionTests(unittest.TestCase):
                 driver.timeouts.script = 30
                 samples = iter((state(), state(.1), result))
                 def read(*args):
+                    if "loadAssignedHls" in args[0]: return None
                     value = next(samples)
                     if value is result:
                         trace.append('final inspection')
@@ -194,7 +198,7 @@ class FinalVideoInspectionTests(unittest.TestCase):
                     self.assertEqual(seconds, 300)
                     trace.append('assigned wait')
                 workflow = SeleniumResourceWorkflows(lambda: driver, sleeper=wait)
-                task = SimpleNamespace(resource=dict(kind='youtube_video', video_id='assigned', play_seconds=300))
+                task = SimpleNamespace(resource=dict(kind='hls_video', url='https://example.test/assigned.m3u8', play_seconds=300))
                 if result == state(300):
                     self.assertTrue(workflow.video_viewing(task).completed)
                 else:
@@ -202,8 +206,8 @@ class FinalVideoInspectionTests(unittest.TestCase):
                         workflow.video_viewing(task)
                 self.assertEqual(trace, ['assigned wait', 'final inspection', 'cleanup'])
                 driver.execute_async_script.assert_called_once()
-                self.assertEqual(driver.execute_script.call_count, 3)
-                driver.get.assert_called_once_with('https://www.youtube.com/watch?v=assigned')
+                self.assertEqual(driver.execute_script.call_count, 4)
+                driver.get.assert_called_once_with(VIDEO_PAGE.as_uri())
 
     def test_playwright_final_check_follows_wait_and_failure_keeps_cleanup(self):
         for result in (state(300), state(error=3),
@@ -214,7 +218,8 @@ class FinalVideoInspectionTests(unittest.TestCase):
                 page, browser, playwright = Mock(), Mock(), Mock()
                 video = page.wait_for_selector.return_value
                 video.evaluate.side_effect = [state(), None, state(.1)]
-                def inspect(script):
+                def inspect(script, *args):
+                    if "loadAssignedHls" in script: return None
                     trace.append('final inspection')
                     if isinstance(result, Exception):
                         raise result
@@ -229,7 +234,7 @@ class FinalVideoInspectionTests(unittest.TestCase):
                 api.sync_playwright = Mock(return_value=context)
                 config = ModuleType('brains.browseruse.config')
                 config.CHROMIUM_ARGS = []
-                task = SimpleNamespace(resource=dict(kind='youtube_video', video_id='assigned', play_seconds=300))
+                task = SimpleNamespace(resource=dict(kind='hls_video', url='https://example.test/assigned.m3u8', play_seconds=300))
                 with patch.dict('sys.modules', {'playwright': ModuleType('playwright'),
                         'playwright.sync_api': api, 'brains.browseruse.config': config}):
                     if result == state(300):
@@ -238,9 +243,9 @@ class FinalVideoInspectionTests(unittest.TestCase):
                         with self.assertRaises((RuntimeError, OSError)):
                             play_video_with_chromium(task)
                 self.assertEqual(trace, [('assigned wait', 300000), 'final inspection', 'cleanup'])
-                page.evaluate.assert_called_once()
+                self.assertEqual(page.evaluate.call_count, 2)
                 self.assertEqual(video.evaluate.call_count, 3)
-                page.goto.assert_called_once_with('https://www.youtube.com/watch?v=assigned', wait_until='domcontentloaded')
+                page.goto.assert_called_once_with(VIDEO_PAGE.as_uri(), wait_until='domcontentloaded')
 
 
 if __name__ == "__main__":

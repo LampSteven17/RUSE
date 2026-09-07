@@ -38,7 +38,7 @@ def write_generation(root: Path, *, include_share: bool) -> Path:
     instructions = capabilities["instructions"]["feedback-v2"]
     replacements = {
         "WebResearch": "wikipedia_compiler",
-        "VideoViewing": "video_cpp_course",
+        "VideoViewing": "video_hls_mux_bbb",
         "DocumentCreation": "document_team_meeting_notes",
     }
     for sup_config, filename in feedback.DECOY_PLAN_FILENAMES.items():
@@ -96,9 +96,11 @@ class ShareSidecarTests(unittest.TestCase):
             self.assertTrue(feedback.decoy_generation_uses_network_share(
                 present, purpose="feedback"
             ))
-        self.assertTrue(feedback.decoy_generation_uses_network_share(
-            CURRENT_CONTROL_ROOT, purpose="control"
-        ))
+        # The HLS catalog transition does not change share detection.
+        with tempfile.TemporaryDirectory() as temporary:
+            from tests.test_phase4_control_canary import Phase4ControlCanaryTests
+            generation = Phase4ControlCanaryTests()._generation(Path(temporary), '2026-09-07_0000Z')
+            self.assertTrue(feedback.decoy_generation_uses_network_share(generation, purpose='control'))
 
     def test_provision_uses_exact_prefixed_name_flavor_defaults_and_assigned_ip(self):
         class Cloud:

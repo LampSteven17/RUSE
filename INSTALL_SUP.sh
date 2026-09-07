@@ -778,6 +778,8 @@ install_system_deps() {
             ;;
         mchp)
             sudo apt-get install -y xvfb openbox xdg-utils libxml2-dev libxslt-dev python3-tk scrot libreoffice
+            # Firefox uses the system decoder for the assigned H.264/AAC HLS streams.
+            sudo apt-get install -y --no-install-recommends libavcodec60
             # Install Firefox from Mozilla deb repo (not snap)
             install_firefox_deb
             # Install Geckodriver

@@ -27,58 +27,22 @@
       "kind": "direct_url",
       "url": "https://en.wikipedia.org/wiki/Python_(programming_language)"
     },
-    "video_cpp_course": {
+    "video_hls_mux_bbb": {
       "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "8jLOx1hD3_o",
+      "kind": "hls_video",
+      "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
       "play_seconds": 300
     },
-    "video_ai_mistake": {
+    "video_hls_apple_bipbop": {
       "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "wlMgNtBipe4",
+      "kind": "hls_video",
+      "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
       "play_seconds": 300
     },
-    "video_vpn_dragnet": {
+    "video_hls_unified_tos": {
       "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "hV9QEVf6CgI",
-      "play_seconds": 300
-    },
-    "video_cronie_jobs": {
-      "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "FPVQ_w0wxCI",
-      "play_seconds": 300
-    },
-    "video_wrote_book": {
-      "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "owMQZX862Ms",
-      "play_seconds": 300
-    },
-    "video_ps5_linux": {
-      "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "rctl18VlUJk",
-      "play_seconds": 300
-    },
-    "video_python_beginner": {
-      "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "kqtD5dpn9C8",
-      "play_seconds": 300
-    },
-    "video_embedded_player": {
-      "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "M7lc1UVf-VE",
-      "play_seconds": 300
-    },
-    "video_epic_sax": {
-      "workflow": "VideoViewing",
-      "kind": "youtube_video",
-      "video_id": "kxopViU98Xo",
+      "kind": "hls_video",
+      "url": "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
       "play_seconds": 300
     },
     "document_team_meeting_notes": {

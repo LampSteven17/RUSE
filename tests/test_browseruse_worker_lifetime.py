@@ -82,6 +82,9 @@ class BrowserUseWorkerLifetimeTests(unittest.TestCase):
             def is_done(self):
                 return True
 
+            def is_validated(self):
+                return True
+
             def is_successful(self):
                 # Deliberately claim success after swallowed cancellation too.
                 # The owned action must still force a truthful failure.

@@ -51,7 +51,7 @@ class CanonicalFeedbackDeploymentTests(unittest.TestCase):
         generation.mkdir(parents=True, exist_ok=True)
         feedback_resources = {
             "WebResearch": "wikipedia_compiler",
-            "VideoViewing": "video_cpp_course",
+            "VideoViewing": "video_hls_mux_bbb",
             "DocumentCreation": "document_team_meeting_notes",
         }
         feedback_instructions = json.loads(

@@ -141,7 +141,7 @@ class AssignedVideoPlayback:
         if task.workflow != "VideoViewing":
             raise RuntimeError("assigned playback requires VideoViewing")
         if (
-            task.resource["kind"] != "youtube_video"
+            task.resource["kind"] != "hls_video"
             or task.resource["play_seconds"] != 300
         ):
             raise RuntimeError("assigned playback requires one 300-second video")
@@ -411,8 +411,11 @@ def _browseruse_completed(result) -> bool:
             result
             and callable(getattr(result, "is_done", None))
             and callable(getattr(result, "is_successful", None))
+            and callable(getattr(result, "is_validated", None))
             and result.is_done() is True
             and result.is_successful() is True
+            # is_successful() is the action's claim, not the framework judge.
+            and result.is_validated() is True
         )
     except Exception:
         return False
@@ -460,11 +463,6 @@ def _browseruse_action_evidence(
     resource = task.resource
     if resource.get("url"):
         fields.append(f"assigned_url={resource['url']}")
-    elif resource.get("video_id"):
-        fields.append(
-            "assigned_url=https://www.youtube.com/watch?v="
-            + str(resource["video_id"])
-        )
     if task.workflow == "NetworkShareAccess":
         fields.append(f"share={SHARE_UNC}/{resource['path']}")
     if artifact is not None:
@@ -477,7 +475,7 @@ def _browseruse_action_evidence(
     if resource.get("play_seconds") is not None:
         fields.extend((
             f"expected_seconds={resource['play_seconds']}",
-            f"observed_seconds={resource['play_seconds']}",
+            "verification=playback_started_and_no_explicit_final_error",
         ))
     if resource.get("kind") in {"document", "spreadsheet"}:
         fields.append(f"format={resource['kind']}")
