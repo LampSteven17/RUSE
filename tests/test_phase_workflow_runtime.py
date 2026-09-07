@@ -757,6 +757,8 @@ class RegistryAndBrainTests(unittest.TestCase):
                 self.urls = []
                 self.scripts = []
                 self.closed = False
+                self.timeouts = SimpleNamespace(script=30)
+                self.played = False
 
             def get(self, url):
                 self.urls.append(url)
@@ -765,8 +767,13 @@ class RegistryAndBrainTests(unittest.TestCase):
                 self.find = (by, value)
                 return object()
 
-            def execute_script(self, script, video):
+            def execute_script(self, script, video=None):
                 self.scripts.append((script, video))
+                return dict(ready=True, time=int(self.played), paused=False,
+                            ended=False, error=None, video_present=True, player_error=None)
+
+            def execute_async_script(self, *_args):
+                self.played = True
 
             def quit(self):
                 self.closed = True
@@ -2279,11 +2286,8 @@ class OpenDocumentValidationTests(unittest.TestCase):
         self.assertTrue(result.completed)
         self.assertEqual(Path(result.artifact).name, task.resource["filename"])
         self.assertEqual(typed_content[0], task.resource["title"])
-        self.assertEqual(state["clicks"], [(640, 512)])
-        self.assertLess(
-            state["hotkeys"].index(("ctrl", "f6")),
-            state["hotkeys"].index(("ctrl", "home")),
-        )
+        self.assertEqual(state["clicks"], [])
+        self.assertIsNotNone(ready.call_args.kwargs["editor_pipe"])
         self.assertIn(("ctrl", "shift", "s"), state["hotkeys"])
         self.assertIn(("ctrl", "a"), state["hotkeys"])
         ready.assert_called_once()
@@ -2314,6 +2318,10 @@ class OpenDocumentValidationTests(unittest.TestCase):
             "hotkeys": [],
             "pressed": [],
             "clicks": [],
+            "text_format": False,
+            "category": None,
+            "category_search": False,
+            "format_closed": False,
         }
         pyautogui = ModuleType("pyautogui")
 
@@ -2324,6 +2332,14 @@ class OpenDocumentValidationTests(unittest.TestCase):
                 state["column"] = 0
             elif keys == ("ctrl", "shift", "s"):
                 state["mode"] = "save"
+            elif keys == ("ctrl", "1"):
+                state["mode"] = "format"
+            elif keys == ("alt", "o"):
+                self.assertEqual(state["mode"], "format")
+                self.assertFalse(state["category_search"])
+                state["text_format"] = True
+                state["format_closed"] = True
+                state["mode"] = None
             elif keys == ("ctrl", "a") and state["mode"] == "save":
                 state["save_path"].clear()
 
@@ -2331,7 +2347,13 @@ class OpenDocumentValidationTests(unittest.TestCase):
             self.assertEqual(interval, 0.01)
             if state["mode"] == "save":
                 state["save_path"].append(str(value))
+            elif state["mode"] == "format":
+                self.assertEqual(value, "Text", "worksheet input reached the open dialog")
+                state["category"] = value
+                state["category_search"] = True
             else:
+                self.assertTrue(state["text_format"])
+                self.assertTrue(state["format_closed"])
                 coordinate = (
                     f"{chr(ord('A') + state['column'])}{state['row']}"
                 )
@@ -2339,7 +2361,12 @@ class OpenDocumentValidationTests(unittest.TestCase):
 
         def press(key, presses=1):
             state["pressed"].append(key)
-            if key == "enter" and state["mode"] == "save":
+            if key == "enter" and state["mode"] == "format":
+                self.assertEqual(state["category"], "Text")
+                state["category_search"] = False
+                self.assertFalse(state["format_closed"])
+                self.assertEqual(state["cells"], {})
+            elif key == "enter" and state["mode"] == "save":
                 artifact = Path("".join(state["save_path"]))
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 rows = [task.resource["columns"], *task.resource["rows"]]
@@ -2430,19 +2457,26 @@ class OpenDocumentValidationTests(unittest.TestCase):
                     f"{chr(ord('A') + column_index)}{row_index}"
                 ] = str(value)
         self.assertEqual(state["cells"], expected_cells)
-        self.assertEqual(state["clicks"], [(640, 512)])
-        self.assertLess(
-            state["hotkeys"].index(("ctrl", "f6")),
-            state["hotkeys"].index(("ctrl", "home")),
-        )
+        self.assertEqual(state["cells"]["D3"], "18.0")
+        self.assertEqual(state["hotkeys"].count(("shift", "down")), 4)
+        self.assertEqual(state["hotkeys"].count(("shift", "right")), 3)
+        self.assertEqual(state["hotkeys"].count(("ctrl", "1")), 1)
+        self.assertEqual(state["hotkeys"].count(("alt", "o")), 1)
+        self.assertEqual(state["clicks"], [])
+        self.assertIsNotNone(ready.call_args_list[0].kwargs["editor_pipe"])
         self.assertIn(("ctrl", "shift", "s"), state["hotkeys"])
-        ready.assert_called_once()
-        self.assertEqual(ready.call_args.args, ("LibreOffice Calc",))
-        self.assertEqual(ready.call_args.kwargs["process"], process)
+        self.assertEqual([call.args for call in ready.call_args_list],
+                         [("LibreOffice Calc",), ("Format Cells",), ("LibreOffice Calc",)])
+        self.assertEqual(ready.call_args_list[1].kwargs["deadline"],
+                         ready.call_args_list[2].kwargs["deadline"])
+        self.assertEqual(ready.call_args_list[2].kwargs["absent_dialog"], "Format Cells")
+        self.assertEqual(ready.call_args_list[0].kwargs["editor_pipe"],
+                         ready.call_args_list[2].kwargs["editor_pipe"])
+        self.assertEqual(ready.call_args_list[0].kwargs["process"], process)
         self.assertEqual(
-            ready.call_args.kwargs["artifact"], Path(result.artifact)
+            ready.call_args_list[0].kwargs["artifact"], Path(result.artifact)
         )
-        ready.call_args.kwargs["blocking_dialog_action"]()
+        ready.call_args_list[0].kwargs["blocking_dialog_action"]()
         self.assertIn("esc", state["pressed"])
         launch = popen.call_args.args[0]
         self.assertIn("--calc", launch)
@@ -2784,6 +2818,8 @@ class MCHPDriverLifecycleTests(unittest.TestCase):
             def __init__(self, download_dir):
                 self.download_dir = Path(download_dir) if download_dir else None
                 self.closed = False
+                self.timeouts = SimpleNamespace(script=30)
+                self.played = False
 
             def get(self, _url):
                 barrier.wait(timeout=2)
@@ -2793,11 +2829,15 @@ class MCHPDriverLifecycleTests(unittest.TestCase):
 
             def execute_script(self, *_args):
                 if self.download_dir is None:
-                    return
+                    return dict(ready=True, time=int(self.played), paused=False,
+                                ended=False, error=None, video_present=True, player_error=None)
                 barrier.wait(timeout=2)
                 expected = tasks["FileDownload"].resource["expected_bytes"]
                 name = tasks["FileDownload"].resource["url"].rsplit("/", 1)[-1]
                 (self.download_dir / name).write_bytes(b"x" * expected)
+
+            def execute_async_script(self, *_args):
+                self.played = True
 
             def quit(self):
                 self.closed = True
@@ -2858,6 +2898,8 @@ class MCHPDriverLifecycleTests(unittest.TestCase):
             def __init__(self):
                 self.urls = []
                 self.closed = False
+                self.timeouts = SimpleNamespace(script=30)
+                self.played = False
 
             def get(self, url):
                 self.urls.append(url)
@@ -2869,7 +2911,11 @@ class MCHPDriverLifecycleTests(unittest.TestCase):
                 return object()
 
             def execute_script(self, *_args):
-                pass
+                return dict(ready=True, time=int(self.played), paused=False,
+                            ended=False, error=None, video_present=True, player_error=None)
+
+            def execute_async_script(self, *_args):
+                self.played = True
 
             def quit(self):
                 self.closed = True

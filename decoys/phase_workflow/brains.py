@@ -608,6 +608,21 @@ def browseruse_runner(
         from brains.browseruse.config import CHROMIUM_ARGS
         chromium_args = CHROMIUM_ARGS
 
+    owned_workers = []
+    action_cancelled = False
+
+    async def invoke_owned(action):
+        nonlocal action_cancelled
+        # Cancelling the await cannot terminate a thread. Retain the task so
+        # runner finalization can join this invocation, including its cleanup.
+        worker = asyncio.create_task(asyncio.to_thread(action))
+        owned_workers.append(worker)
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            action_cancelled = True
+            raise
+
     playback = None
     document = None
     assigned_download = None
@@ -633,7 +648,7 @@ def browseruse_runner(
             terminates_sequence=True,
         )
         async def play_assigned_video():
-            message = await asyncio.to_thread(playback.invoke)
+            message = await invoke_owned(playback.invoke)
             if playback.completed:
                 message = _browseruse_action_evidence(task)
             return ActionResult(
@@ -657,7 +672,7 @@ def browseruse_runner(
             terminates_sequence=True,
         )
         async def create_assigned_document():
-            message = await asyncio.to_thread(document.invoke)
+            message = await invoke_owned(document.invoke)
             if document.completed:
                 message = _browseruse_action_evidence(
                     task, artifact=document.artifact
@@ -681,7 +696,7 @@ def browseruse_runner(
             terminates_sequence=True,
         )
         async def download_assigned_file():
-            message = await asyncio.to_thread(assigned_download.invoke)
+            message = await invoke_owned(assigned_download.invoke)
             if assigned_download.completed:
                 message = _browseruse_action_evidence(
                     task, artifact=assigned_download.artifact
@@ -713,7 +728,7 @@ def browseruse_runner(
                 terminates_sequence=True,
             )
             async def sync_assigned_document():
-                message = await asyncio.to_thread(assigned_transfer.invoke)
+                message = await invoke_owned(assigned_transfer.invoke)
                 if assigned_transfer.completed:
                     message = _browseruse_action_evidence(
                         task, artifact=assigned_transfer.artifact
@@ -731,7 +746,7 @@ def browseruse_runner(
                 terminates_sequence=True,
             )
             async def access_assigned_share():
-                message = await asyncio.to_thread(assigned_transfer.invoke)
+                message = await invoke_owned(assigned_transfer.invoke)
                 if assigned_transfer.completed:
                     message = _browseruse_action_evidence(
                         task, artifact=assigned_transfer.artifact
@@ -801,7 +816,31 @@ def browseruse_runner(
                 )
             return WorkflowResult(completed=framework_completed)
         finally:
-            await _close_browseruse_resources(agent, browser_session)
+            async def finish_owned_work():
+                try:
+                    results = await asyncio.gather(
+                        *owned_workers, return_exceptions=True
+                    )
+                    for result in results:
+                        if isinstance(result, BaseException):
+                            raise result
+                finally:
+                    await _close_browseruse_resources(agent, browser_session)
+
+            cleanup = asyncio.create_task(finish_owned_work())
+            cleanup_cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    # Repeated cancellation must not abandon the worker or
+                    # resource cleanup. Awaiting yields to unrelated workflows.
+                    cleanup_cancelled = True
+            cleanup.result()
+            if action_cancelled or cleanup_cancelled:
+                # A late worker success cannot erase cancellation, even if the
+                # framework swallowed it and returned a successful history.
+                raise asyncio.CancelledError
 
     if async_executor is not None:
         return async_executor(run())

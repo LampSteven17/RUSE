@@ -6,10 +6,12 @@ import tempfile
 import pyautogui
 from lorem.text import TextLorem
 from pathlib import Path
-from time import sleep
+from time import sleep, monotonic
 from ..utility.base_workflow import BaseWorkflow
+from ..utility.libreoffice_editor import prepare_editor_profile
 from ..utility.libreoffice_gui import (
     focus_editor_canvas,
+    WINDOW_TIMEOUT_S,
     remove_profile,
     remove_artifact_sidecars,
     terminate_owned_process_group,
@@ -87,7 +89,8 @@ class SpreadsheetEditor(BaseWorkflow):
                 "open_application", category="office", message="LibreOffice Calc"
             )
         self._new_spreadsheet(artifact)
-        focus_editor_canvas(pyautogui, sleeper=sleep)
+        if not IS_LINUX:
+            focus_editor_canvas(pyautogui, sleeper=sleep)
         pyautogui.hotkey("ctrl", "home")
         if logger:
             logger.step_success("open_application")
@@ -97,6 +100,7 @@ class SpreadsheetEditor(BaseWorkflow):
                 "edit_content", category="office", message="Typing assigned table"
             )
         rows = [resource["columns"], *resource["rows"]]
+        self._format_assigned_range_as_text(rows)
         self._write_assigned_table(rows)
         if logger:
             logger.step_success("edit_content")
@@ -175,6 +179,7 @@ class SpreadsheetEditor(BaseWorkflow):
     def _new_spreadsheet(self, artifact=None):
         if IS_LINUX:
             self._profile_dir = Path(tempfile.mkdtemp(prefix="ruse-lo-calc-"))
+            editor_pipe = prepare_editor_profile(self._profile_dir) if artifact is not None else None
             self._process = subprocess.Popen(
                 [
                     LIBREOFFICE_CMD,
@@ -182,6 +187,7 @@ class SpreadsheetEditor(BaseWorkflow):
                     "--calc",
                     "--norestore",
                     "--nofirststartwizard",
+                    *([f"--accept=pipe,name={editor_pipe};urp;StarOffice.ServiceManager"] if editor_pipe else []),
                     "private:factory/scalc",
                 ],
                 stdout=subprocess.DEVNULL,
@@ -193,6 +199,7 @@ class SpreadsheetEditor(BaseWorkflow):
                 process=self._process,
                 artifact=artifact,
                 blocking_dialog_action=self._dismiss_tip_dialog,
+                editor_pipe=editor_pipe,
             )
         else:
             # Windows: Use OpenOffice start menu
@@ -230,6 +237,28 @@ class SpreadsheetEditor(BaseWorkflow):
         pyautogui.hotkey("ctrl", "a")
         pyautogui.write(str(value), interval=0.01)
         pyautogui.press("enter")
+
+    def _format_assigned_range_as_text(self, rows):
+        """Format only the assigned rectangle via Calc's Format Cells dialog."""
+        pyautogui.hotkey("ctrl", "home")
+        for _ in range(len(rows) - 1):
+            pyautogui.hotkey("shift", "down")
+        for _ in range(len(rows[0]) - 1):
+            pyautogui.hotkey("shift", "right")
+        deadline = monotonic() + WINDOW_TIMEOUT_S
+        pyautogui.hotkey("ctrl", "1")
+        wait_for_focused_window("Format Cells", deadline=deadline)
+        # The Numbers page labels its category list C_ategory (Alt+A).
+        pyautogui.hotkey("alt", "a")
+        pyautogui.write("Text", interval=0.01)
+        # Enter closes category type-ahead, not the Format Cells dialog.
+        pyautogui.press("enter")
+        pyautogui.hotkey("alt", "o")  # Activate the dialog's _OK button.
+        wait_for_focused_window(
+            "LibreOffice Calc", absent_dialog="Format Cells", deadline=deadline,
+            editor_pipe=self._profile_dir.name if IS_LINUX else None,
+        )
+        pyautogui.hotkey("ctrl", "home")
 
     @staticmethod
     def _write_assigned_table(rows):

@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -114,12 +115,16 @@ def wait_for_focused_window(
     sleeper=time.sleep,
     monotonic=time.monotonic,
     blocking_dialog_action=None,
+    editor_pipe=None,
+    absent_dialog=None,
+    deadline=None,
 ) -> None:
     """Wait for the assigned LibreOffice window with bounded diagnostics."""
     from Xlib import X, display as xdisplay
 
     started_at = monotonic()
-    deadline = monotonic() + timeout_s
+    if deadline is None:
+        deadline = monotonic() + timeout_s
     display = xdisplay.Display()
     observed_titles: set[str] = set()
     observed_classes: set[str] = set()
@@ -137,6 +142,13 @@ def wait_for_focused_window(
                     artifact,
                 ))
             windows = _window_tree(display.screen().root)
+            if absent_dialog is not None and any(
+                name == absent_dialog and window.get_attributes().map_state == X.IsViewable
+                for window, name, _classes in windows
+            ):
+                observed_titles.add(absent_dialog)
+                sleeper(min(POLL_INTERVAL_S, max(0, deadline - monotonic())))
+                continue
             observed_titles.update(
                 name for _window, name, _classes in windows
                 if "libreoffice" in name.lower()
@@ -174,6 +186,23 @@ def wait_for_focused_window(
             )
             if window is not None:
                 if _focus_window(display, window, X):
+                    if editor_pipe is not None:
+                        kind = {"LibreOffice Writer": "writer", "LibreOffice Calc": "calc"}[title]
+                        remaining = deadline - monotonic()
+                        if remaining <= 0:
+                            break
+                        try:
+                            subprocess.run(
+                                ["/usr/bin/python3", str(Path(__file__).with_name("libreoffice_editor.py")),
+                                 editor_pipe, kind, str(deadline)],
+                                check=True, capture_output=True, text=True, timeout=remaining,
+                            )
+                        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                            raise RuntimeError(
+                                _readiness_error(title, process, observed_titles, observed_classes,
+                                                 monotonic() - started_at, artifact)
+                                + f" editor_readiness={exc} detail={exc.stderr!r}"
+                            ) from exc
                     return
             sleeper(POLL_INTERVAL_S)
     finally:

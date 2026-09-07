@@ -417,6 +417,88 @@ class KerberosShareAccess:
         return completed.stdout or ""
 
 
+_VIDEO_STATE = """video => ({
+    ready: video.readyState >= 2,
+    time: video.currentTime,
+    paused: video.paused,
+    ended: video.ended,
+    error: video.error ? video.error.code : null
+})"""
+
+_VIDEO_FINAL_STATE = """() => {
+    const video = document.querySelector('video');
+    const overlay = Array.from(document.querySelectorAll(
+        '#movie_player .ytp-error-content-wrap'
+    )).find(node => {
+        const style = getComputedStyle(node);
+        return node.getClientRects().length > 0 &&
+            style.visibility !== 'hidden' && style.visibility !== 'collapse' &&
+            style.display !== 'none';
+    });
+    return {
+        video_present: video !== null,
+        error: video && video.error ? video.error.code : null,
+        player_error: overlay ? (overlay.innerText.trim().slice(0, 240) ||
+            'visible YouTube player-error overlay') : null,
+        time: video ? video.currentTime : null,
+        paused: video ? video.paused : null
+    };
+}"""
+
+
+def _inspect_video_end(read_state):
+    """One final error inspection; not proof of uninterrupted playback."""
+    state = read_state()
+    if state['error'] is not None:
+        raise RuntimeError(f"video final inspection: media error {state['error']}")
+    if state['player_error'] is not None:
+        raise RuntimeError(
+            f"video final inspection: {str(state['player_error'])[:240]}"
+        )
+    if not state['video_present']:
+        raise RuntimeError('video final inspection: video element is absent')
+    return state
+
+# Bound the play promise as well: a blocked media request can leave it pending.
+_VIDEO_PLAY = """([video, timeoutMs]) => new Promise(resolve => {
+    const timer = setTimeout(() => resolve('play() timed out'), timeoutMs);
+    const finish = error => { clearTimeout(timer); resolve(error); };
+    try {
+        Promise.resolve(video.play()).then(
+            () => finish(null), () => finish('play() rejected')
+        );
+    } catch (_) { finish('play() rejected'); }
+})"""
+
+
+def _confirm_video_start(read_state, play, timeout, *, sleeper=time.sleep,
+                         monotonic=time.monotonic):
+    """Check readiness and first advancement only, within one setup budget."""
+    deadline = monotonic() + timeout
+    initial_time = None
+    while True:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise RuntimeError("video playback did not begin within setup timeout")
+        state = read_state()
+        if state["error"] is not None or state["ended"]:
+            raise RuntimeError("video media error or ended before playback began")
+        if initial_time is None and state["ready"]:
+            initial_time = state["time"]
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise RuntimeError("video readiness exceeded setup timeout")
+            error = play(remaining)
+            if error is not None:
+                raise RuntimeError(f"video playback initiation failed: {error}")
+            continue
+        if (initial_time is not None and not state["paused"]
+                and state["time"] > initial_time and monotonic() < deadline):
+            return
+        # Standard WebDriver wait cadence, used only during initiation.
+        sleeper(min(0.5, max(0.0, deadline - monotonic())))
+
+
 class SeleniumResourceWorkflows:
     """Execute fixed web/video resources with an injected WebDriver factory."""
 
@@ -459,10 +541,22 @@ class SeleniumResourceWorkflows:
                 "https://www.youtube.com/watch?v=" + task.resource["video_id"]
             )
             video = driver.find_element("tag name", "video")
-            driver.execute_script(
-                "arguments[0].play();", video
+            _confirm_video_start(
+                lambda: driver.execute_script(
+                    "return (" + _VIDEO_STATE + ")(arguments[0]);", video
+                ),
+                lambda remaining: driver.execute_async_script(
+                    "const done = arguments[arguments.length - 1];"
+                    "(" + _VIDEO_PLAY + ")([arguments[0], arguments[1]]).then(done);",
+                    video, remaining * 1000,
+                ),
+                driver.timeouts.script,
+                sleeper=self._sleep,
             )
             self._sleep(task.resource["play_seconds"])
+            _inspect_video_end(
+                lambda: driver.execute_script("return (" + _VIDEO_FINAL_STATE + ")();")
+            )
             return WorkflowResult(completed=True)
         finally:
             cleanup()
@@ -646,11 +740,18 @@ def play_video_with_chromium(task: ResolvedTask) -> bool:
                 "https://www.youtube.com/watch?v=" + task.resource["video_id"],
                 wait_until="domcontentloaded",
             )
-            page.wait_for_selector("video")
-            page.evaluate(
-                "document.querySelector('video').play()"
+            video = page.wait_for_selector("video")
+            _confirm_video_start(
+                lambda: video.evaluate(_VIDEO_STATE),
+                lambda remaining: video.evaluate(
+                    "(video, timeoutMs) => (" + _VIDEO_PLAY + ")([video, timeoutMs])",
+                    remaining * 1000,
+                ),
+                # Match Playwright's existing default setup/action timeout.
+                30.0,
             )
             page.wait_for_timeout(task.resource["play_seconds"] * 1000)
+            _inspect_video_end(lambda: page.evaluate(_VIDEO_FINAL_STATE))
         finally:
             browser.close()
     return True

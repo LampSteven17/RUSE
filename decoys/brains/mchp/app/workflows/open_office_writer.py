@@ -8,6 +8,7 @@ from lorem.text import TextLorem
 from pathlib import Path
 from time import sleep
 from ..utility.base_workflow import BaseWorkflow
+from ..utility.libreoffice_editor import prepare_editor_profile
 from ..utility.libreoffice_gui import (
     focus_editor_canvas,
     remove_profile,
@@ -95,7 +96,8 @@ class DocumentEditor(BaseWorkflow):
                 "open_application", category="office", message="LibreOffice Writer"
             )
         self._new_document(artifact)
-        focus_editor_canvas(pyautogui, sleeper=sleep)
+        if not IS_LINUX:
+            focus_editor_canvas(pyautogui, sleeper=sleep)
         pyautogui.hotkey("ctrl", "home")
         pyautogui.hotkey("ctrl", "a")
         pyautogui.press("backspace")
@@ -244,6 +246,7 @@ class DocumentEditor(BaseWorkflow):
     def _new_document(self, artifact=None):
         if IS_LINUX:
             self._profile_dir = Path(tempfile.mkdtemp(prefix="ruse-lo-writer-"))
+            editor_pipe = prepare_editor_profile(self._profile_dir) if artifact is not None else None
             self._process = subprocess.Popen(
                 [
                     LIBREOFFICE_CMD,
@@ -251,6 +254,7 @@ class DocumentEditor(BaseWorkflow):
                     "--writer",
                     "--norestore",
                     "--nofirststartwizard",
+                    *([f"--accept=pipe,name={editor_pipe};urp;StarOffice.ServiceManager"] if editor_pipe else []),
                     "private:factory/swriter",
                 ],
                 stdout=subprocess.DEVNULL,
@@ -262,6 +266,7 @@ class DocumentEditor(BaseWorkflow):
                 process=self._process,
                 artifact=artifact,
                 blocking_dialog_action=self._dismiss_tip_dialog,
+                editor_pipe=editor_pipe,
             )
         else:
             # Windows: Use OpenOffice start menu
