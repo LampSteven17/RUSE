@@ -1,0 +1,12 @@
+deployment_name: decoy-gpu-canary
+purpose: other
+target: null
+capture_interface: eno2
+
+flavor_capacity:
+  v100-1gpu.14vcpu.28g: 1
+
+deployments:
+  - behavior: browseruse-gpu
+    flavor: v100-1gpu.14vcpu.28g
+    count: 1

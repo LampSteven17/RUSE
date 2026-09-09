@@ -57,6 +57,41 @@ class DecoyRuntimeCanaryTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_single_gpu_observation_plan_is_one_v100_without_share(self):
+        tasks = plan.build_decoy_canary_plan(ROOT / "deployments", sup_config="browseruse-gpu")
+        self.assertEqual(len(tasks), 1)
+        task = tasks[0]
+        self.assertEqual(task["config_name"], "decoy-gpu-canary")
+        self.assertEqual(task["deployments"], [{"behavior": "browseruse-gpu", "flavor": "v100-1gpu.14vcpu.28g", "count": 1}])
+        self.assertFalse(spinup.decoy_generation_uses_network_share(task["behavior_source"], purpose="other"))
+        from deployment_engine.core.config import DeploymentConfig
+        config = DeploymentConfig.load(ROOT / "deployments/decoy-gpu-canary/config.yaml")
+        self.assertEqual(spinup._validate_behavior_source(str(task["behavior_source"]), config), [])
+        self.assertEqual(config.purpose, "other")
+        self.assertIsNone(config.target)
+        with mock.patch.object(plan.output, "confirm", return_value=False), mock.patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(deployment_cli._cmd_deploy(["--decoy", "--canary", "--canary-sup", "browseruse-gpu"]), 0)
+            execute.assert_not_called()
+
+    def test_single_mchp_observation_plan_is_cpu_only_without_share(self):
+        tasks = plan.build_decoy_canary_plan(ROOT / "deployments", sup_config="mchp-cpu")
+        self.assertEqual(len(tasks), 1)
+        task = tasks[0]
+        self.assertEqual(task["config_name"], "decoy-mchp-canary")
+        self.assertEqual(task["deployments"], [{"behavior": "mchp-cpu", "flavor": "v1.14vcpu.28g", "count": 1}])
+        self.assertFalse(spinup.decoy_generation_uses_network_share(task["behavior_source"], purpose="other"))
+        from deployment_engine.core.config import DeploymentConfig
+        config = DeploymentConfig.load(ROOT / "deployments/decoy-mchp-canary/config.yaml")
+        self.assertEqual(spinup._validate_behavior_source(str(task["behavior_source"]), config), [])
+        self.assertEqual(config.purpose, "other")
+        self.assertIsNone(config.target)
+        with mock.patch.object(plan.output, "confirm", return_value=False), mock.patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(deployment_cli._cmd_deploy(["--decoy", "--canary", "--canary-sup", "mchp-cpu"]), 0)
+            execute.assert_not_called()
+        with mock.patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(deployment_cli._cmd_deploy(["--canary-sup", "mchp-cpu"]), 1)
+            execute.assert_not_called()
+
     def test_four_plans_share_schedule_and_cover_qualification_matrix(self):
         plans = validate_decoy_canary_generation(CANARY / "plans")
         self.assertEqual(tuple(plans), DECOY_FEEDBACK_SUP_CONFIGS)

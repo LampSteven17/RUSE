@@ -1,0 +1,28 @@
+{
+  "schema": "phase-workflow-plan-v1",
+  "sup_config": "mchp-cpu",
+  "brain_profile": "mchp-v1",
+  "resource_profile": "feedback-v2",
+  "timezone": "America/New_York",
+  "max_parallel": 1,
+  "schedule": [
+    {
+      "window_local": [
+        0,
+        2
+      ],
+      "sequence": [
+        {
+          "offset_minutes": 0,
+          "workflow": "DocumentCreation",
+          "resource_id": "document_team_meeting_notes"
+        },
+        {
+          "offset_minutes": 1,
+          "workflow": "DocumentCreation",
+          "resource_id": "spreadsheet_expense_tracker"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+deployment_name: decoy-mchp-canary
+purpose: other
+target: null
+capture_interface: eno2
+flavor_capacity:
+  v1.14vcpu.28g: 1
+deployments:
+  - behavior: mchp-cpu
+    flavor: v1.14vcpu.28g
+    count: 1

@@ -128,24 +128,35 @@ def _build_controls_task(deploy_type: str, deploy_dir: Path) -> dict:
     }
 
 
-def build_decoy_canary_plan(deploy_dir: Path) -> list[dict]:
+def build_decoy_canary_plan(deploy_dir: Path, *, sup_config=None) -> list[dict]:
     """Build and validate the one explicit RUSE-owned runtime canary."""
-    config_dir = Path(deploy_dir) / DECOY_CANARY_CONFIG
+    if sup_config not in {None, "mchp-cpu", "browseruse-gpu"}:
+        raise FeedbackSourceError("canary SUP selection must be mchp-cpu or browseruse-gpu")
+    config_name = ({"mchp-cpu": "decoy-mchp-canary", "browseruse-gpu": "decoy-gpu-canary"}
+                   .get(sup_config, DECOY_CANARY_CONFIG))
+    config_dir = Path(deploy_dir) / config_name
     config = DeploymentConfig.load(config_dir / "config.yaml")
     source = config_dir / "plans"
-    validate_decoy_canary_generation(source)
+    plans = validate_decoy_canary_generation(source)
+    if sup_config:
+        flavor = "v1.14vcpu.28g" if sup_config == "mchp-cpu" else "v100-1gpu.14vcpu.28g"
+        if config.deployments != [{"behavior": sup_config, "flavor": flavor, "count": 1}]:
+            raise FeedbackSourceError("single-SUP observation canary requires exactly the selected VM")
+        if any(entry.workflow != "DocumentCreation" for plan in plans.values()
+               for window in plan.windows for entry in window.sequence):
+            raise FeedbackSourceError("MCHP observation plans must contain only DocumentCreation")
     if config.purpose != "other" or config.target is not None:
         raise FeedbackSourceError(
             "Decoy runtime canary must use purpose=other and target=null"
         )
     return [{
-        "label": "decoy-runtime-canary (RUSE-only canary)",
+        "label": f"{config_name} (RUSE-only canary)",
         "behavior_source": source,
         "configs_spec": None,
         "manifest": None,
         "is_controls": False,
         "is_canary": True,
-        "config_name": DECOY_CANARY_CONFIG,
+        "config_name": config_name,
         "deployments": config.deployments,
         "gpu_tier": "v100",
     }]
@@ -344,7 +355,9 @@ def show_plan_and_confirm(
             output.info("      target:      —")
             output.info(f"      source:      {source}")
             output.info("")
-            output.info("      VMs to provision (4), tier=v100:")
+            count = sum(item.get("count", 1) for item in task["deployments"])
+            tier = "cpu-only" if task["config_name"] == "decoy-mchp-canary" else "v100"
+            output.info(f"      VMs to provision ({count}), tier={tier}:")
             for line in config_vm_table_lines(
                 task["deployments"], indent="        ", gpu_tier="v100"
             ):

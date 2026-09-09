@@ -94,6 +94,8 @@ examples:
         help="Deploy the isolated RUSE-only Decoy runtime canary",
     )
 
+    p.add_argument("--canary-sup", choices=["mchp-cpu", "browseruse-gpu"],
+                   help="With --canary, select one isolated CPU MCHP or V100 BrowserUse VM")
     p.add_argument("--preset", type=str,
                    help="PHASE feedback preset (for canonical Decoy feedback: "
                         "/data/axes-mirror/feedback/{preset}/{target}/). Required "
@@ -263,6 +265,9 @@ def _cmd_deploy(argv: list[str]) -> int:
     # --- Resolve deploy type ---
     deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "decoy")
 
+    if args.canary_sup and not args.canary:
+        output.error("ERROR: --canary-sup requires --canary")
+        return 1
     if args.canary:
         incompatible = (
             deploy_type != "decoy" or args.controls or args.feedback
@@ -280,7 +285,7 @@ def _cmd_deploy(argv: list[str]) -> int:
             build_decoy_canary_plan, execute_plan, show_plan_and_confirm,
         )
         try:
-            plan = build_decoy_canary_plan(DEPLOY_DIR)
+            plan = build_decoy_canary_plan(DEPLOY_DIR, sup_config=args.canary_sup)
         except (ValueError, OSError, feedback.FeedbackSourceError) as exc:
             output.error(f"ERROR: {exc}")
             return 1

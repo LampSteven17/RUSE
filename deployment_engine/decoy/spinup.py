@@ -601,6 +601,12 @@ def _validate_behavior_source(
         except FeedbackSourceError as exc:
             return [str(exc)]
         configured = tuple(dep.get("behavior") for dep in config.deployments)
+        if (purpose == "other" and getattr(config, "deployment_name", None) == "decoy-mchp-canary"
+                and config.deployments == [{"behavior": "mchp-cpu", "flavor": "v1.14vcpu.28g", "count": 1}]):
+            return []
+        if (purpose == "other" and getattr(config, "deployment_name", None) == "decoy-gpu-canary"
+                and config.deployments == [{"behavior": "browseruse-gpu", "flavor": "v100-1gpu.14vcpu.28g", "count": 1}]):
+            return []
         if configured != DECOY_FEEDBACK_SUP_CONFIGS:
             return [
                 f"canonical {purpose} deployments must be ordered exactly as "

@@ -1,0 +1,30 @@
+{
+  "schema": "phase-workflow-plan-v1",
+  "sup_config": "smolagents-gpu",
+  "brain_profile": "smolagents-v1",
+  "resource_profile": "feedback-v2",
+  "timezone": "America/New_York",
+  "max_parallel": 1,
+  "schedule": [
+    {
+      "window_local": [
+        0,
+        2
+      ],
+      "sequence": [
+        {
+          "offset_minutes": 0,
+          "workflow": "DocumentCreation",
+          "resource_id": "document_team_meeting_notes",
+          "instruction": "Create and save the assigned document or spreadsheet using the provided template and sample content."
+        },
+        {
+          "offset_minutes": 1,
+          "workflow": "DocumentCreation",
+          "resource_id": "spreadsheet_expense_tracker",
+          "instruction": "Create and save the assigned document or spreadsheet using the provided template and sample content."
+        }
+      ]
+    }
+  ]
+}
