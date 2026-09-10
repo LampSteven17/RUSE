@@ -6,7 +6,9 @@ from .core.vm_naming import (
     make_ent_vm_prefix, make_ghosts_vm_prefix, make_run_dep_id, make_vm_prefix,
 )
 import re
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .core import output
 from .core.config import DeploymentConfig
@@ -115,7 +117,7 @@ def run_list(deploy_dir: Path) -> int:
     }
 
     # Compute global column widths across all groups for alignment
-    headers = ["Target", "VMs", "Active", "Status", "Date"]
+    headers = ["Target", "VMs", "Active", "Status", "Date (America/New_York)"]
     all_rows = [row for rows in groups.values() for row in rows]
     col_widths = [len(h) for h in headers]
     for row in all_rows:
@@ -332,5 +334,6 @@ def _get_enterprise_vm_count(run_dir: Path) -> str:
 
 
 def _format_run_date(rid: str) -> str:
-    """Format a validated Phase 3 UTC run ID for the table."""
-    return f"{rid[5:7]}/{rid[8:10]} {rid[11:13]}:{rid[13:15]}"
+    """Display a validated UTC run ID in New York local time, including DST."""
+    started = datetime.strptime(rid, "%Y-%m-%d_%H%M%SZ").replace(tzinfo=timezone.utc)
+    return started.astimezone(ZoneInfo("America/New_York")).strftime("%m/%d %H:%M")

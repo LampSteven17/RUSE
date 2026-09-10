@@ -98,6 +98,16 @@ class _Cloud:
 
 
 class OperatorCommandTests(unittest.TestCase):
+    def test_list_date_uses_new_york_time_with_day_rollover_and_dst(self):
+        for run_id, expected in (
+            ("2026-09-10_021244Z", "09/09 22:12"),
+            ("2026-01-10_021244Z", "01/09 21:12"),
+            ("2026-03-08_065900Z", "03/08 01:59"),
+            ("2026-03-08_070000Z", "03/08 03:00"),
+        ):
+            with self.subTest(run_id=run_id):
+                self.assertEqual(deployment_list._format_run_date(run_id), expected)
+
     def test_list_omits_legacy_and_valid_zero_vm_runs_without_deleting_them(self):
         with tempfile.TemporaryDirectory() as temporary:
             deploy_dir = Path(temporary)
@@ -166,6 +176,8 @@ class OperatorCommandTests(unittest.TestCase):
                 deployment_list.run_list(deploy_dir)
             rendered = stderr.getvalue()
             self.assertIn(f"decoy-controls-{CURRENT_RUN}", rendered)
+            self.assertIn("Date (America/New_York)", rendered)
+            self.assertIn("08/20 09:05", rendered)
             self.assertIn("1 BUILD", rendered)
 
     def test_list_marks_exact_resources_without_phase_record_unregistered(self):
