@@ -290,7 +290,7 @@ class Phase4ControlCanaryTests(unittest.TestCase):
             "{{ behavior_source }}/{{ canonical_plan_filenames[sup_behavior] }}",
         )
         self.assertEqual(
-            stage["when"], "sup_behavior in canonical_workflow_configs"
+            stage["when"], "sup_behavior in canonical_workflow_configs and not probe_install"
         )
 
     def test_hls_global_control_generation_loads_and_requires_share(self):

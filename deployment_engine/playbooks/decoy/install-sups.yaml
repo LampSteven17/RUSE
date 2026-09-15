@@ -23,6 +23,9 @@
     ruse_repo: "https://github.com/LampSteven17/RUSE.git"
     ruse_revision: ""
     workflow_gpu_tier: "v100"
+    probe_install: false
+    probe_started_at: ""
+    staged_probe_plans: "/tmp/ruse-probe-plans"
     ruse_path: "/opt/ruse"
     canonical_workflow_configs:
       - scripted-cpu
@@ -166,10 +169,17 @@
       when: stage1_result.rc == 100
 
     - name: Stage assigned canonical workflow plan
-      when: sup_behavior in canonical_workflow_configs
+      when: sup_behavior in canonical_workflow_configs and not probe_install
       copy:
         src: "{{ behavior_source }}/{{ canonical_plan_filenames[sup_behavior] }}"
         dest: "{{ staged_workflow_plan }}"
+        mode: '0644'
+
+    - name: Stage approved probe daily variants
+      when: probe_install and probe_workflow != 'idle'
+      copy:
+        src: "{{ behavior_source }}/"
+        dest: "{{ staged_probe_plans }}/"
         mode: '0644'
 
     - name: "Stage 2: ollama + python + services"
@@ -178,6 +188,10 @@
         RUSE_NO_SERVICE_START=1 \
         RUSE_WORKFLOW_BEHAVIOR_PATH="{{ staged_workflow_plan if sup_behavior in canonical_workflow_configs else '' }}" \
         RUSE_WORKFLOW_GPU_TIER="{{ workflow_gpu_tier }}" \
+        RUSE_DEPLOYMENT_TYPE="{{ 'probe' if probe_install else 'decoy' }}" \
+        RUSE_PROBE_WORKFLOW="{{ probe_workflow | default('') if probe_install else '' }}" \
+        RUSE_PROBE_STARTED_AT="{{ probe_started_at }}" \
+        RUSE_PROBE_PLANS_DIR="{{ staged_probe_plans if probe_install else '' }}" \
           ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
       args:
         executable: /bin/bash
@@ -193,9 +207,15 @@
       # started at the tail of THIS playbook.
 
     - name: Remove staged canonical workflow plan
-      when: sup_behavior in canonical_workflow_configs
+      when: sup_behavior in canonical_workflow_configs and not probe_install
       file:
         path: "{{ staged_workflow_plan }}"
+        state: absent
+
+    - name: Remove staged probe daily variants
+      when: probe_install and probe_workflow != 'idle'
+      file:
+        path: "{{ staged_probe_plans }}"
         state: absent
 
     - name: Assert Stage 2 succeeded

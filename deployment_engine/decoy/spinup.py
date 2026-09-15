@@ -160,7 +160,9 @@ def run_decoy_spinup(
         return 1
 
     share_required = False
-    if (
+    if config.is_probe():
+        share_required = config.probe_workflow == "NetworkShareAccess"
+    elif (
         effective_source
         and config.purpose in {"control", "feedback", "other"}
         and all(
@@ -197,10 +199,11 @@ def run_decoy_spinup(
     run_dir.mkdir(parents=True, exist_ok=True)
     _copy_file(config_file, run_dir / "config.yaml")
     (run_dir / "ruse-revision.txt").write_text(f"{ruse_revision}\n")
-    if config.purpose == "other":
+    if config.purpose == "other" and effective_source:
         plan_snapshot = run_dir / "plans"
         shutil.copytree(Path(effective_source), plan_snapshot)
-        (run_dir / "evidence").mkdir()
+        if not config.is_probe():
+            (run_dir / "evidence").mkdir()
         effective_source = str(plan_snapshot)
         behavior_source = effective_source
 
@@ -309,6 +312,12 @@ def run_decoy_spinup(
         "ruse_revision": ruse_revision,
         "workflow_gpu_tier": workflow_gpu_tier,
     }
+    if config.is_probe():
+        extra_vars.update({
+            "probe_install": True,
+            "probe_workflow": config.probe_workflow or "idle",
+            "probe_started_at": started_at.isoformat(),
+        })
 
     # Override behavior_source if provided via CLI
     if behavior_source:
@@ -411,7 +420,7 @@ def run_decoy_spinup(
     # invisible to PHASE inference — logs collected but never analyzed. DONE
     # must mean "every VM functional AND registered" per the fail-loud
     # contract.
-    if config.purpose == "other":
+    if config.purpose == "other" and not config.is_probe():
         output.info("  RUSE-only canary: PHASE experiment registration skipped")
     else:
         phase_vms = [
@@ -582,6 +591,15 @@ def _validate_behavior_source(
     behavior_source derivation and distribution path unchanged.
     """
     errors: list[str] = []
+
+    if getattr(config, "deployment_type", None) == "probe":
+        from decoys.phase_workflow.probes import validate_probe_plans
+        from decoys.phase_workflow.loader import WorkflowPlanError
+        try:
+            validate_probe_plans(effective_source, config.probe_workflow)
+        except (ValueError, OSError, WorkflowPlanError) as exc:
+            return [str(exc)]
+        return []
 
     purpose = getattr(config, "purpose", None)
     canonical_deployments = all(

@@ -46,10 +46,12 @@ class Brain(Protocol):
 class WorkflowRegistry:
     """Dispatch exactly the six installed canonical workflows."""
 
-    def __init__(self, plan: WorkflowPlan, brain: Brain, workspace_root: Path):
+    def __init__(self, plan: WorkflowPlan, brain: Brain, workspace_root: Path,
+                 *, isolate_occurrences: bool = False):
         self._plan = plan
         self._brain = brain
         self._workspace_root = Path(workspace_root)
+        self._isolate_occurrences = isolate_occurrences
         self._handlers = {name: self._execute for name in CANONICAL_HANDLERS}
 
     @property
@@ -77,7 +79,10 @@ class WorkflowRegistry:
         handler = self._handlers.get(task.workflow)
         if handler is None:
             raise RuntimeError(f"unregistered canonical workflow: {task.workflow}")
-        workspace = self._workspace_root / local_day
+        root = self._workspace_root
+        if self._isolate_occurrences:
+            root = root / task.occurrence_id
+        workspace = root / local_day
         workspace.mkdir(parents=True, exist_ok=True)
         return handler(task, workspace)
 

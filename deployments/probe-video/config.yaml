@@ -1,0 +1,13 @@
+deployment_name: probe-video
+type: probe
+purpose: other
+target: null
+capture_interface: eno2
+probe_workflow: VideoViewing
+behavior_source: /home/ubuntu/PHASE/plans/probes/video
+flavor_capacity:
+  v1.14vcpu.28g: 1
+deployments:
+  - behavior: scripted-cpu
+    flavor: v1.14vcpu.28g
+    count: 1

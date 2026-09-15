@@ -44,6 +44,36 @@ from .feedback import (
 DECOY_CANARY_CONFIG = "decoy-runtime-canary"
 
 
+def build_probe_plan(deploy_dir: Path, config_name: str | None = None) -> list[dict]:
+    """Resolve the explicit Probe category in full before any display or execution."""
+    from decoys.phase_workflow.probes import PROBE_RESOURCES, validate_probe_plans
+    tasks = []
+    paths = ([deploy_dir / config_name / "config.yaml"] if config_name
+             else sorted(deploy_dir.glob("*/config.yaml")))
+    for path in paths:
+        # Avoid interpreting unrelated configuration types during probe discovery.
+        import yaml
+        raw = yaml.safe_load(path.read_text())
+        if not isinstance(raw, dict) or raw.get("type") != "probe":
+            if config_name:
+                raise ValueError("--probes requires an explicit type: probe configuration")
+            continue
+        config = DeploymentConfig.load(path)
+        validate_probe_plans(config.behavior_source, config.probe_workflow)
+        tasks.append({
+            "label": config.deployment_name, "config_name": path.parent.name,
+            "behavior_source": config.behavior_source, "configs_spec": None,
+            "manifest": None, "is_controls": False, "is_probe": True,
+            "probe_workflow": config.probe_workflow, "purpose": "other", "target": None,
+            "deployments": config.deployments,
+            "share_required": config.probe_workflow == "NetworkShareAccess",
+        })
+    if not config_name and (len(tasks) != 7 or
+            {t["probe_workflow"] for t in tasks} != {*PROBE_RESOURCES, None}):
+        raise ValueError("--probes requires six distinct workflow probes and one idle reference")
+    return tasks
+
+
 def build_deploy_plan(
     deploy_type: str,
     *,
@@ -349,6 +379,15 @@ def show_plan_and_confirm(
     any_mismatch = False
     for i, task in enumerate(plan, 1):
         output.info(f"  {i}. {task['label']}")
+        if task.get("is_probe"):
+            output.info("      category: probe; purpose: other; target: null")
+            output.info(f"      workflow: {task['probe_workflow'] or 'idle (no scheduled work)'}")
+            output.info(f"      source: {task['behavior_source'] or 'none'}")
+            for line in config_vm_table_lines(task["deployments"]):
+                output.info(f"      {line}")
+            if task["share_required"]:
+                output.info("      + one fleet-local v1.small share sidecar (not a measured SUP)")
+            continue
         if task.get("is_canary"):
             source = task["behavior_source"]
             output.info("      purpose:     canary (RUSE-only)")

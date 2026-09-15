@@ -51,6 +51,8 @@ Configuration Keys:
     parser.add_argument("--seed", type=int, default=42,
         help="Random seed for deterministic behavior (default: 42, 0 = non-deterministic)")
     parser.add_argument("--task", type=str, default=None)
+    parser.add_argument("--probe-workflow",
+                        help="Explicit Probe installation only; idle schedules no work")
     parser.add_argument("--behavior-config-dir", type=str, default=None,
         help="Override behavioral config directory (default: auto-discover from deployed_sups)")
     parser.add_argument("--list", action="store_true")
@@ -76,6 +78,11 @@ Configuration Keys:
                 print(f"  {old_key} -> {new_key}")
             if len(aliases) > 6:
                 print(f"  ... and {len(aliases) - 6} more")
+        return
+
+    if args.probe_workflow is not None:
+        from phase_workflow.runtime import run_probe_runtime
+        run_probe_runtime(args.config_key, args.probe_workflow, args.behavior_config_dir)
         return
 
     if args.config_key:

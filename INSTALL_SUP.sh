@@ -862,6 +862,17 @@ copy_source_code() {
         cp -r "$SCRIPT_DIR/decoys/phase_workflow" "$dest_dir/decoys/"
         cp -r "$SCRIPT_DIR/contracts/phase-workflow-plan-v1" "$dest_dir/contracts/"
         mkdir -p "$dest_dir/behavioral_configurations"
+        if [[ "${RUSE_DEPLOYMENT_TYPE:-}" == probe ]]; then
+            if [[ "$CONFIG_KEY" != scripted-cpu || -z "${RUSE_PROBE_WORKFLOW:-}" || -z "${RUSE_PROBE_STARTED_AT:-}" ]]; then
+                log_error "Probe installation requires scripted-cpu, explicit workflow/idle, and recorded start"
+                exit 1
+            fi
+            if [[ "$RUSE_PROBE_WORKFLOW" != idle ]]; then
+                cp "${RUSE_PROBE_PLANS_DIR:?}"/*.json "$dest_dir/behavioral_configurations/"
+            fi
+            touch "$dest_dir/decoys/__init__.py"
+            return
+        fi
         local workflow_behavior_path="${RUSE_WORKFLOW_BEHAVIOR_PATH:-}"
         if [[ ! -f "$workflow_behavior_path" ]]; then
             log_error "RUSE_WORKFLOW_BEHAVIOR_PATH must name the assigned canonical workflow plan"
@@ -908,6 +919,9 @@ create_run_script() {
 
     if is_phase_workflow_config "$CONFIG_KEY"; then
         runner_cmd="python3 -m sup $CONFIG_KEY --behavior-config-dir=$deploy_dir/behavioral_configurations"
+        if [[ "${RUSE_DEPLOYMENT_TYPE:-}" == probe ]]; then
+            runner_cmd+=" --probe-workflow=${RUSE_PROBE_WORKFLOW:?}"
+        fi
         if [[ "$BRAIN" == "mchp" ]]; then
             # LibreOffice needs a window manager for mapped, focusable GUI
             # windows. Keep it inside the same Xvfb/service ownership group.
@@ -951,6 +965,8 @@ export PATH="\$HOME/.local/bin:\$PATH"
 export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
 export RUSE_WORKFLOW_GPU_TIER="$workflow_gpu_tier"
+export RUSE_DEPLOYMENT_TYPE="${RUSE_DEPLOYMENT_TYPE:-decoy}"
+export RUSE_PROBE_STARTED_AT="${RUSE_PROBE_STARTED_AT:-}"
 export PYTHONPATH="$deploy_dir/decoys:\${PYTHONPATH:-}"
 export LOG_DIR="$deploy_dir/logs"
 export SUP_CONFIG_KEY="$CONFIG_KEY"

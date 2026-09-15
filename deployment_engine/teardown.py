@@ -110,11 +110,14 @@ def run_teardown_filtered(
 
         # RUSE-only canaries require an exact dated identity. Broad filtered
         # teardown must never select them alongside Control/Feedback fleets.
-        if config.purpose == "other":
+        if config.purpose == "other" and not config.is_probe():
             continue
 
         # Type filter
-        if config.is_rampart():
+        if config.is_probe():
+            if not types.get("probe"):
+                continue
+        elif config.is_rampart():
             if not types.get("rampart"):
                 continue
         elif config.is_ghosts():

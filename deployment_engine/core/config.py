@@ -15,7 +15,7 @@ class DeploymentConfig:
     """Parsed deployment configuration from config.yaml."""
 
     deployment_name: str
-    deployment_type: str = "decoy"  # "decoy", "rampart", or "ghosts"
+    deployment_type: str = "decoy"  # "decoy", "probe", "rampart", or "ghosts"
     purpose: str = ""
     target: str | None = None
     capture_interface: str = "eno2"
@@ -27,6 +27,7 @@ class DeploymentConfig:
     emulate: dict | None = None
     ghosts: dict | None = None
     gpu_tier: str | None = None  # "v100" | "rtx" | "rtx-a" — decoy feedback only
+    probe_workflow: str | None = None  # explicit null means the idle reference
 
     @classmethod
     def load(cls, config_path: Path) -> DeploymentConfig:
@@ -57,6 +58,18 @@ class DeploymentConfig:
         capture_interface = raw.get("capture_interface", "eno2")
         if not isinstance(capture_interface, str) or not capture_interface:
             raise ValueError("deployment config capture_interface must be non-empty")
+        if raw.get("type") == "probe":
+            from decoys.phase_workflow.probes import PROBE_RESOURCES
+            if "probe_workflow" not in raw or raw["probe_workflow"] not in (*PROBE_RESOURCES, None):
+                raise ValueError("probe_workflow must be an explicit canonical workflow or null (idle)")
+            if purpose != "other" or target is not None:
+                raise ValueError("probes require purpose: other and target: null")
+            if raw.get("deployments") != [{"behavior": "scripted-cpu", "flavor": "v1.14vcpu.28g", "count": 1}] or raw.get("gpu_tier"):
+                raise ValueError("each probe requires exactly one scripted-cpu CPU VM and no GPU tier")
+            if raw["probe_workflow"] is None and raw.get("behavior_source") is not None:
+                raise ValueError("idle probes must not have a behavior_source")
+        elif "probe_workflow" in raw:
+            raise ValueError("probe_workflow requires type: probe")
 
         return cls(
             deployment_name=raw.get("deployment_name", config_path.parent.name),
@@ -72,6 +85,7 @@ class DeploymentConfig:
             emulate=raw.get("emulate"),
             ghosts=raw.get("ghosts"),
             gpu_tier=raw.get("gpu_tier"),
+            probe_workflow=raw.get("probe_workflow"),
         )
 
     def vm_count(self) -> int:
@@ -85,6 +99,9 @@ class DeploymentConfig:
 
     def is_ghosts(self) -> bool:
         return self.deployment_type == "ghosts"
+
+    def is_probe(self) -> bool:
+        return self.deployment_type == "probe"
 
 
     def count_brains(self) -> dict[str, int]:

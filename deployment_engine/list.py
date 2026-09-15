@@ -33,6 +33,7 @@ def run_list(deploy_dir: Path) -> int:
     # Collect rows grouped by deployment type
     groups: dict[str, list[list[str]]] = {
         "decoy": [],
+        "probe": [],
         "rampart": [],
         "ghosts": [],
         "other": [],
@@ -55,7 +56,9 @@ def run_list(deploy_dir: Path) -> int:
                          f"{type(e).__name__}: {e}")
             continue
 
-        if config.is_rampart():
+        if config.is_probe():
+            group = "probe"
+        elif config.is_rampart():
             group = "rampart"
         elif config.is_ghosts():
             group = "ghosts"
@@ -86,14 +89,14 @@ def run_list(deploy_dir: Path) -> int:
             )
             active_col = f"{active}/{expected}" if expected > 0 else "?"
             registered = (
-                True if config.purpose == "other"
+                True if config.purpose == "other" and not config.is_probe()
                 else deployment_path(name, rid).is_file()
             )
             status_col = _format_status_col(
                 bad_statuses, sidecar_statuses, expected, active,
                 registered=registered,
             )
-            if config.purpose == "other":
+            if config.purpose == "other" and not config.is_probe():
                 status_col = (
                     "canary" if status_col == "OK"
                     else f"canary, {status_col}"
@@ -111,6 +114,7 @@ def run_list(deploy_dir: Path) -> int:
 
     GROUP_LABELS = {
         "decoy": "DECOY SUPs",
+        "probe": "PROBE SUPs",
         "rampart": "RAMPART Enterprise",
         "ghosts": "GHOSTS NPCs",
         "other": "Other",
@@ -125,7 +129,7 @@ def run_list(deploy_dir: Path) -> int:
             if i < len(col_widths):
                 col_widths[i] = max(col_widths[i], len(cell))
 
-    for key in ("decoy", "rampart", "ghosts", "other"):
+    for key in ("decoy", "probe", "rampart", "ghosts", "other"):
         rows = groups[key]
         if not rows:
             continue

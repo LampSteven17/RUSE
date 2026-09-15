@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -14,6 +15,76 @@ from phase_workflow.configurations import is_workflow_configuration
 from phase_workflow.executor import DailyExecutor
 from phase_workflow.loader import load_workflow_plan
 from phase_workflow.registry import WorkflowRegistry
+from phase_workflow.probes import probe_day_index, validate_probe_plans
+
+
+class ProbeExecutor(DailyExecutor):
+    """Select a validated daily variant before the ordinary scheduler resolves work.
+
+    Active occurrences retain their immutable tasks, the same registry/Brain,
+    worker pool, workspace date and capacity slot across midnight.
+    """
+
+    def __init__(self, plans, started_at, registry, logger, **kwargs):
+        self._probe_plans = plans
+        self._probe_started_at = started_at
+        self._probe_logger = logger
+        super().__init__(plans[0], registry, logger.workflow_plan_terminal, **kwargs)
+
+    def _load_day(self, local_day, *, initial):
+        index = probe_day_index(self._probe_started_at, local_day, len(self._probe_plans))
+        self.plan = self._probe_plans[index]
+        resource_id = self.plan.windows[0].sequence[0].resource_id
+        self._probe_logger.info("Probe daily plan selected", {
+            "local_date": local_day.isoformat(), "cycle_index": index,
+            "resource_id": resource_id, "filename": f"{resource_id}.json",
+        })
+        super()._load_day(local_day, initial=initial)
+
+
+def run_probe_runtime(config_key, workflow, behavior_config_dir, *, stop_event=None):
+    """Explicit probe installation only; idle never constructs an empty plan."""
+    if config_key != "scripted-cpu" or os.environ.get("RUSE_DEPLOYMENT_TYPE") != "probe":
+        raise RuntimeError("probe runtime requires an explicit scripted-cpu Probe installation")
+    started_at = os.environ["RUSE_PROBE_STARTED_AT"]
+    source = None if workflow == "idle" else resolve_behavior_path(config_key, behavior_config_dir).parent
+    plans = validate_probe_plans(source, None if workflow == "idle" else workflow)
+    logger = AgentLogger(agent_type=config_key)
+    session_config = {
+        "deployment_type": "probe", "probe_workflow": workflow,
+        "sup_config": config_key, "brain": "scripted", "hardware": "cpu",
+        "timezone": "America/New_York", "max_parallel": 10,
+        "started_at": started_at,
+    }
+    if plans:
+        session_config.update(schema=plans[0].schema, resource_profile=plans[0].resource_profile)
+    logger.session_start(config=session_config)
+    registry = executor = None
+    try:
+        if not plans:
+            # No Brain, scheduler, fake workflow or periodic traffic generator.
+            (stop_event if stop_event is not None else threading.Event()).wait()
+            return
+        plan = plans[0]
+        registry = WorkflowRegistry(
+            plan, build_brain(plan.brain, plan.brain_profile, logger),
+            source.parent / "workspace", isolate_occurrences=True,
+        )
+        executor = ProbeExecutor(plans, started_at, registry, logger)
+        executor.run_forever(stop_event)
+    except KeyboardInterrupt:
+        logger.info("Probe stopped by user")
+    except Exception as exc:
+        logger.session_fail(message="Probe runtime failed", exception=exc)
+        raise
+    finally:
+        try:
+            if executor is not None:
+                executor.close()
+        finally:
+            if registry is not None:
+                registry.close()
+            logger.session_end()
 
 
 _GPU_TIER_MODELS = {

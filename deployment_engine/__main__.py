@@ -80,6 +80,7 @@ examples:
     )
     p.add_argument("--decoy", "--decoys", action="store_true", dest="decoy",
                    help="Deploy DECOY SUP agents (default; --decoys alias)")
+    p.add_argument("--probes", action="store_true", help="Deploy the isolated Scripted workflow probes and idle reference")
     p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
                    help="Deploy RAMPART enterprise network (--ramparts alias)")
     p.add_argument("--ghosts", "--ghost", action="store_true", dest="ghosts",
@@ -132,6 +133,7 @@ def _teardown_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", dest="teardown_all", help="Delete ALL DECOY, Enterprise, and GHOSTS VMs")
 
     # Filter flags for batch teardown
+    p.add_argument("--probes", action="store_true", help="Filter: explicit Probe deployments only")
     p.add_argument("--decoy", "--decoys", action="store_true", dest="decoy",
                    help="Filter: DECOY SUP deployments (--decoys alias)")
     p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
@@ -263,6 +265,26 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
+    if args.probes:
+        if any((args.decoy, args.rampart, args.ghosts, args.controls, args.feedback,
+                args.canary, args.canary_sup, args.preset, args.source, args.target, args.gpu)):
+            parser.error("--probes cannot be combined with another category or plan selector")
+        from .core.plan import build_probe_plan, show_plan_and_confirm, execute_plan
+        from decoys.phase_workflow.loader import WorkflowPlanError
+        try:
+            plan = build_probe_plan(DEPLOY_DIR, args.config_name)
+        except (ValueError, OSError, WorkflowPlanError) as exc:
+            output.error(f"ERROR: {exc}")
+            return 1
+        if not show_plan_and_confirm(plan, "probe"):
+            return 0
+        return execute_plan(plan, "decoy", None, DEPLOY_DIR)
+
+    if args.config_name:
+        from .core.config import DeploymentConfig
+        path = DEPLOY_DIR / args.config_name / "config.yaml"
+        if path.is_file() and DeploymentConfig.load(path).is_probe():
+            parser.error("Probe configurations require --probes")
     deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "decoy")
 
     if args.canary_sup and not args.canary:
@@ -408,6 +430,13 @@ def _cmd_deploy(argv: list[str]) -> int:
 def _cmd_teardown(argv: list[str]) -> int:
     parser = _teardown_parser()
     args = parser.parse_args(argv)
+
+    if args.probes:
+        if any((args.decoy, args.rampart, args.ghosts, args.controls, args.feedback,
+                args.teardown_all, args.target)):
+            parser.error("--probes selects only probes; use an exact dated target separately")
+        from .teardown import run_teardown_filtered
+        return run_teardown_filtered(DEPLOY_DIR, types={"probe": True}, failed_only=args.failed)
 
     has_system = args.decoy or args.rampart or args.ghosts
     purpose = "control" if args.controls else ("feedback" if args.feedback else None)
