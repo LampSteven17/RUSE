@@ -596,7 +596,8 @@ def _validate_behavior_source(
         from decoys.phase_workflow.probes import validate_probe_plans
         from decoys.phase_workflow.loader import WorkflowPlanError
         try:
-            validate_probe_plans(effective_source, config.probe_workflow)
+            validate_probe_plans(effective_source, config.probe_workflow,
+                                 config.deployments[0]["behavior"])
         except (ValueError, OSError, WorkflowPlanError) as exc:
             return [str(exc)]
         return []

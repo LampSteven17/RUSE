@@ -863,8 +863,8 @@ copy_source_code() {
         cp -r "$SCRIPT_DIR/contracts/phase-workflow-plan-v1" "$dest_dir/contracts/"
         mkdir -p "$dest_dir/behavioral_configurations"
         if [[ "${RUSE_DEPLOYMENT_TYPE:-}" == probe ]]; then
-            if [[ "$CONFIG_KEY" != scripted-cpu || -z "${RUSE_PROBE_WORKFLOW:-}" || -z "${RUSE_PROBE_STARTED_AT:-}" ]]; then
-                log_error "Probe installation requires scripted-cpu, explicit workflow/idle, and recorded start"
+            if [[ ( "$CONFIG_KEY" != scripted-cpu && "$CONFIG_KEY" != mchp-cpu ) || -z "${RUSE_PROBE_WORKFLOW:-}" || -z "${RUSE_PROBE_STARTED_AT:-}" ]]; then
+                log_error "Probe installation requires scripted-cpu or mchp-cpu, explicit workflow/idle, and recorded start"
                 exit 1
             fi
             if [[ "$RUSE_PROBE_WORKFLOW" != idle ]]; then

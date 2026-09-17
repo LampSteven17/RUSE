@@ -4,7 +4,7 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .loader import WorkflowPlanError, load_workflow_plan
+from .loader import WorkflowPlanError, _load_json_bytes, parse_workflow_plan
 
 
 # Explicit catalog order approved in PHASE plans/probes/README.md.
@@ -23,10 +23,13 @@ PROBE_RESOURCES = {
     "NetworkShareAccess": ("share_team_notes", "share_inventory", "share_project_status"),
 }
 PROBE_TIMEZONE = ZoneInfo("America/New_York")
+PROBE_SUPS = ("scripted-cpu", "mchp-cpu")
 
 
-def validate_probe_plans(source, workflow):
+def validate_probe_plans(source, workflow, sup_config="scripted-cpu"):
     """Validate every daily variant before display/provisioning or runtime startup."""
+    if sup_config not in PROBE_SUPS:
+        raise WorkflowPlanError("probes support only scripted-cpu and mchp-cpu")
     if workflow is None:
         if source is not None:
             raise WorkflowPlanError("idle probe must not have plans")
@@ -39,7 +42,14 @@ def validate_probe_plans(source, workflow):
         raise WorkflowPlanError(f"probe directory must contain exactly its approved daily variants: {root}")
     plans = []
     for resource in resources:
-        plan = load_workflow_plan(root / f"{resource}.json", "scripted-cpu")
+        document = _load_json_bytes(root / f"{resource}.json", "probe source plan")
+        plan = parse_workflow_plan(document, "scripted-cpu")
+        if sup_config == "mchp-cpu":
+            # The PHASE schedule is shared, not regenerated. Bind only the two
+            # identity fields for this explicit probe variant, then validate
+            # all MCHP capabilities/profile rules through the ordinary parser.
+            document.update(sup_config="mchp-cpu", brain_profile="mchp-v1")
+            plan = parse_workflow_plan(document, sup_config)
         if (plan.resource_profile != "feedback-v2" or str(plan.timezone) != str(PROBE_TIMEZONE)
                 or plan.max_parallel != 10 or len(plan.windows) != 24):
             raise WorkflowPlanError("probe requires feedback-v2, America/New_York, max_parallel=10 and 24 windows")

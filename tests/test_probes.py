@@ -68,8 +68,12 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(6 * 115, 690)
 
     def test_spinup_reuses_provisioning_installs_variants_then_registers_probe(self):
-        for name in ('probe-idle', 'probe-research', 'probe-network-share'):
+        for name in ('probe-idle', 'probe-research', 'probe-network-share',
+                     'probe-mchp-idle', 'probe-mchp-research', 'probe-mchp-network-share'):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
+                sup = 'mchp-cpu' if name.startswith('probe-mchp-') else 'scripted-cpu'
+                is_idle = name.endswith('-idle')
+                is_share = name.endswith('-network-share')
                 root = Path(td)
                 config_dir = root / name
                 shutil.copytree(ROOT / 'deployments' / name, config_dir)
@@ -79,7 +83,7 @@ class ProbeTests(unittest.TestCase):
                     calls.append((play, extra_vars))
                     run = Path(extra_vars['run_dir'])
                     if play == 'shared/provision-vms.yaml':
-                        (run / 'inventory.ini').write_text('[sup_hosts]\n' + extra_vars['vm_prefix'] + 'scripted-cpu-0 ansible_host=192.0.2.1 sup_behavior=scripted-cpu\n')
+                        (run / 'inventory.ini').write_text('[sup_hosts]\n' + extra_vars['vm_prefix'] + f'{sup}-0 ansible_host=192.0.2.1 sup_behavior={sup}\n')
                     return SimpleNamespace(rc=0, log_path=run / 'test.log')
                 sidecar = {'name': make_vm_prefix(make_run_dep_id(name, RUN)) + 'share-0',
                            'ip': '192.0.2.2', 'flavor': 'v1.small', 'sup_config': None}
@@ -88,7 +92,6 @@ class ProbeTests(unittest.TestCase):
                     self.assertEqual(spinup.run_decoy_spinup(name, root), 0)
                     cloud.assert_not_called()
                     ssh.assert_not_called()
-                is_share = name == 'probe-network-share'
                 self.assertEqual(share.call_count, int(is_share))
                 plays = [p for p, _ in calls]
                 self.assertNotIn('decoy/distribute-behavior-configs.yaml', plays)
@@ -98,12 +101,12 @@ class ProbeTests(unittest.TestCase):
                 install = next(v for p, v in calls if p == 'decoy/install-sups.yaml')
                 self.assertTrue(install['probe_install'])
                 self.assertEqual(install['probe_started_at'], START)
-                self.assertEqual(install['probe_workflow'], 'idle' if name == 'probe-idle' else ('NetworkShareAccess' if is_share else 'WebResearch'))
+                self.assertEqual(install['probe_workflow'], 'idle' if is_idle else ('NetworkShareAccess' if is_share else 'WebResearch'))
                 config, system, started, vms = register.call_args.args
                 self.assertTrue(config.is_probe())
                 self.assertEqual((system, config.purpose, config.target), ('decoy', 'other', None))
-                self.assertEqual([v['sup_config'] for v in vms], ['scripted-cpu', None] if is_share else ['scripted-cpu'])
-                if name != 'probe-idle':
+                self.assertEqual([v['sup_config'] for v in vms], [sup, None] if is_share else [sup])
+                if not is_idle:
                     self.assertEqual(install['behavior_source'], str(config_dir / 'runs' / RUN / 'plans'))
 
     def test_playbook_stages_probe_variants_before_normal_service_start(self):

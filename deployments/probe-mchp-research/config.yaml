@@ -1,0 +1,13 @@
+deployment_name: probe-mchp-research
+type: probe
+purpose: other
+target: null
+capture_interface: eno2
+probe_workflow: WebResearch
+behavior_source: /home/ubuntu/PHASE/plans/probes/research
+flavor_capacity:
+  v1.14vcpu.28g: 1
+deployments:
+  - behavior: mchp-cpu
+    flavor: v1.14vcpu.28g
+    count: 1

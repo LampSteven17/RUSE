@@ -15,7 +15,7 @@ from phase_workflow.configurations import is_workflow_configuration
 from phase_workflow.executor import DailyExecutor
 from phase_workflow.loader import load_workflow_plan
 from phase_workflow.registry import WorkflowRegistry
-from phase_workflow.probes import probe_day_index, validate_probe_plans
+from phase_workflow.probes import PROBE_SUPS, probe_day_index, validate_probe_plans
 
 
 class ProbeExecutor(DailyExecutor):
@@ -44,15 +44,15 @@ class ProbeExecutor(DailyExecutor):
 
 def run_probe_runtime(config_key, workflow, behavior_config_dir, *, stop_event=None):
     """Explicit probe installation only; idle never constructs an empty plan."""
-    if config_key != "scripted-cpu" or os.environ.get("RUSE_DEPLOYMENT_TYPE") != "probe":
-        raise RuntimeError("probe runtime requires an explicit scripted-cpu Probe installation")
+    if config_key not in PROBE_SUPS or os.environ.get("RUSE_DEPLOYMENT_TYPE") != "probe":
+        raise RuntimeError("probe runtime requires an explicit Scripted or MCHP CPU Probe installation")
     started_at = os.environ["RUSE_PROBE_STARTED_AT"]
     source = None if workflow == "idle" else resolve_behavior_path(config_key, behavior_config_dir).parent
-    plans = validate_probe_plans(source, None if workflow == "idle" else workflow)
+    plans = validate_probe_plans(source, None if workflow == "idle" else workflow, config_key)
     logger = AgentLogger(agent_type=config_key)
     session_config = {
         "deployment_type": "probe", "probe_workflow": workflow,
-        "sup_config": config_key, "brain": "scripted", "hardware": "cpu",
+        "sup_config": config_key, "brain": "mchp" if config_key == "mchp-cpu" else "scripted", "hardware": "cpu",
         "timezone": "America/New_York", "max_parallel": 10,
         "started_at": started_at,
     }

@@ -1,7 +1,7 @@
-# Scripted Probe deployments
+# CPU Probe deployments
 
 Probes are an explicit `type: probe` category, not Control/Feedback deployments
-or RUSE-only canaries. They reuse the Decoy provisioning and Scripted runtime.
+or RUSE-only canaries. They reuse Decoy provisioning and canonical CPU runtimes.
 PHASE records use `system: decoy`, `purpose: other`, `target: null`; PHASE's
 ordinary Control/Feedback inference excludes them.
 
@@ -40,6 +40,35 @@ tasks retain their original resource, workspace day and capacity ownership.
 Probe artifacts use `workspace/<occurrence-id>/<local-date>/`, preserving the
 assigned filename without same-day peer overwrites. Ordinary Decoy workspace
 paths are unchanged.
+
+## Separate MCHP fleet
+
+```sh
+./deploy --probes --probe-sup mchp-cpu
+```
+
+This selects only `probe-mchp-research`, `probe-mchp-video`,
+`probe-mchp-download`, `probe-mchp-upload`, `probe-mchp-documents`,
+`probe-mchp-network-share`, and `probe-mchp-idle`. Each has one `mchp-cpu`
+on `v1.14vcpu.28g`; only network-share receives the `v1.small` sidecar.
+The existing Scripted configurations, deployment identities and running VMs are
+not changed or selected. Omitting `--probe-sup` still selects Scripted only.
+
+Both fleets reuse the exact PHASE-authored Scripted-labelled daily source files.
+The probe loader validates that source, then binds only `sup_config=mchp-cpu`
+and `brain_profile=mchp-v1` for MCHP and runs the same strict schema/capability
+validation again. Neither the files nor schedule/resource/instruction fields
+are edited. The normal production loader still rejects SUP/profile mismatches.
+Rotation remains relative to each probe run's recorded local start date.
+
+MCHP idle installs the ordinary MCHP dependencies and service, including its
+Xvfb/Openbox environment, but starts no workflow, Firefox driver or document.
+Active probes use the actual MCHP handlers and existing strict validation.
+
+`./teardown --decoys` excludes both fleets. **`./teardown --probes` selects both
+probe fleets**; use an exact dated identity to remove only one MCHP probe, e.g.
+`./teardown probe-mchp-idle-YYYY-MM-DD_HHMMSSZ`. Registration remains
+`system=decoy, purpose=other, target=null` for both fleets.
 
 Each plan has 24 hourly bursts, repeating 1/2/4/8/10 scheduled starts:
 115 per active VM, 690 across six. First-day past starts and DST gaps retain the

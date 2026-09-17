@@ -151,11 +151,18 @@ def load_workflow_plan(
 ) -> WorkflowPlan:
     """Read and fully validate one immutable plan exactly once."""
     behavior_path = Path(behavior_path)
+    document = _load_json_bytes(behavior_path, "behavior plan")
+    return parse_workflow_plan(document, expected_sup_config, contract_root=contract_root)
+
+
+def parse_workflow_plan(
+    document: dict, expected_sup_config: str, *, contract_root: Path = CONTRACT_ROOT,
+) -> WorkflowPlan:
+    """Validate a complete document with the same strict schema and capabilities."""
     schema = _load_json_bytes(contract_root / SCHEMA_PATH.name, "workflow schema")
     capabilities = _load_json_bytes(
         contract_root / CAPABILITIES_PATH.name, "workflow capabilities"
     )
-    document = _load_json_bytes(behavior_path, "behavior plan")
 
     try:
         Draft202012Validator.check_schema(schema)

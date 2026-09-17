@@ -80,7 +80,9 @@ examples:
     )
     p.add_argument("--decoy", "--decoys", action="store_true", dest="decoy",
                    help="Deploy DECOY SUP agents (default; --decoys alias)")
-    p.add_argument("--probes", action="store_true", help="Deploy the isolated Scripted workflow probes and idle reference")
+    p.add_argument("--probes", action="store_true", help="Deploy isolated CPU workflow probes and idle reference")
+    p.add_argument("--probe-sup", choices=["scripted-cpu", "mchp-cpu"],
+                   help="With --probes, select the CPU Brain fleet (default: scripted-cpu)")
     p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
                    help="Deploy RAMPART enterprise network (--ramparts alias)")
     p.add_argument("--ghosts", "--ghost", action="store_true", dest="ghosts",
@@ -265,6 +267,8 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
+    if args.probe_sup and not args.probes:
+        parser.error("--probe-sup requires --probes")
     if args.probes:
         if any((args.decoy, args.rampart, args.ghosts, args.controls, args.feedback,
                 args.canary, args.canary_sup, args.preset, args.source, args.target, args.gpu)):
@@ -272,7 +276,8 @@ def _cmd_deploy(argv: list[str]) -> int:
         from .core.plan import build_probe_plan, show_plan_and_confirm, execute_plan
         from decoys.phase_workflow.loader import WorkflowPlanError
         try:
-            plan = build_probe_plan(DEPLOY_DIR, args.config_name)
+            plan = build_probe_plan(DEPLOY_DIR, args.config_name,
+                                    sup_config=args.probe_sup or "scripted-cpu")
         except (ValueError, OSError, WorkflowPlanError) as exc:
             output.error(f"ERROR: {exc}")
             return 1

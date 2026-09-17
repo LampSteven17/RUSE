@@ -44,9 +44,12 @@ from .feedback import (
 DECOY_CANARY_CONFIG = "decoy-runtime-canary"
 
 
-def build_probe_plan(deploy_dir: Path, config_name: str | None = None) -> list[dict]:
+def build_probe_plan(deploy_dir: Path, config_name: str | None = None,
+                     *, sup_config: str = "scripted-cpu") -> list[dict]:
     """Resolve the explicit Probe category in full before any display or execution."""
-    from decoys.phase_workflow.probes import PROBE_RESOURCES, validate_probe_plans
+    from decoys.phase_workflow.probes import PROBE_RESOURCES, PROBE_SUPS, validate_probe_plans
+    if sup_config not in PROBE_SUPS:
+        raise ValueError("probe SUP must be scripted-cpu or mchp-cpu")
     tasks = []
     paths = ([deploy_dir / config_name / "config.yaml"] if config_name
              else sorted(deploy_dir.glob("*/config.yaml")))
@@ -59,7 +62,11 @@ def build_probe_plan(deploy_dir: Path, config_name: str | None = None) -> list[d
                 raise ValueError("--probes requires an explicit type: probe configuration")
             continue
         config = DeploymentConfig.load(path)
-        validate_probe_plans(config.behavior_source, config.probe_workflow)
+        if config.deployments[0]["behavior"] != sup_config:
+            if config_name:
+                raise ValueError("probe config does not match the selected --probe-sup")
+            continue
+        validate_probe_plans(config.behavior_source, config.probe_workflow, sup_config)
         tasks.append({
             "label": config.deployment_name, "config_name": path.parent.name,
             "behavior_source": config.behavior_source, "configs_spec": None,

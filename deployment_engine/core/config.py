@@ -59,13 +59,15 @@ class DeploymentConfig:
         if not isinstance(capture_interface, str) or not capture_interface:
             raise ValueError("deployment config capture_interface must be non-empty")
         if raw.get("type") == "probe":
-            from decoys.phase_workflow.probes import PROBE_RESOURCES
+            from decoys.phase_workflow.probes import PROBE_RESOURCES, PROBE_SUPS
             if "probe_workflow" not in raw or raw["probe_workflow"] not in (*PROBE_RESOURCES, None):
                 raise ValueError("probe_workflow must be an explicit canonical workflow or null (idle)")
             if purpose != "other" or target is not None:
                 raise ValueError("probes require purpose: other and target: null")
-            if raw.get("deployments") != [{"behavior": "scripted-cpu", "flavor": "v1.14vcpu.28g", "count": 1}] or raw.get("gpu_tier"):
-                raise ValueError("each probe requires exactly one scripted-cpu CPU VM and no GPU tier")
+            if (raw.get("deployments") not in [
+                    [{"behavior": sup, "flavor": "v1.14vcpu.28g", "count": 1}]
+                    for sup in PROBE_SUPS] or raw.get("gpu_tier")):
+                raise ValueError("each probe requires exactly one Scripted or MCHP CPU VM and no GPU tier")
             if raw["probe_workflow"] is None and raw.get("behavior_source") is not None:
                 raise ValueError("idle probes must not have a behavior_source")
         elif "probe_workflow" in raw:
