@@ -53,6 +53,8 @@ Configuration Keys:
     parser.add_argument("--task", type=str, default=None)
     parser.add_argument("--probe-workflow",
                         help="Explicit Probe installation only; idle schedules no work")
+    parser.add_argument("--probe-service", choices=["ntp", "firmware", "motd"],
+                        help="Background-only Probe observation; no foreground workflow")
     parser.add_argument("--behavior-config-dir", type=str, default=None,
         help="Override behavioral config directory (default: auto-discover from deployed_sups)")
     parser.add_argument("--list", action="store_true")
@@ -78,6 +80,13 @@ Configuration Keys:
                 print(f"  {old_key} -> {new_key}")
             if len(aliases) > 6:
                 print(f"  ... and {len(aliases) - 6} more")
+        return
+
+    if args.probe_service is not None:
+        if args.probe_workflow != "idle" or args.config_key != "scripted-cpu":
+            parser.error("background probes require scripted-cpu and --probe-workflow=idle")
+        from phase_workflow.service_probes import run_service_probe
+        run_service_probe(args.probe_service)
         return
 
     if args.probe_workflow is not None:

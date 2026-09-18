@@ -921,6 +921,14 @@ create_run_script() {
         runner_cmd="python3 -m sup $CONFIG_KEY --behavior-config-dir=$deploy_dir/behavioral_configurations"
         if [[ "${RUSE_DEPLOYMENT_TYPE:-}" == probe ]]; then
             runner_cmd+=" --probe-workflow=${RUSE_PROBE_WORKFLOW:?}"
+            if [[ -n "${RUSE_PROBE_SERVICE:-}" ]]; then
+                case "$RUSE_PROBE_SERVICE" in
+                    ntp|firmware|motd) ;;
+                    *) log_error "Unknown background probe service"; exit 1 ;;
+                esac
+                [[ "$CONFIG_KEY" == scripted-cpu && "$RUSE_PROBE_WORKFLOW" == idle ]] || exit 1
+                runner_cmd+=" --probe-service=$RUSE_PROBE_SERVICE"
+            fi
         fi
         if [[ "$BRAIN" == "mchp" ]]; then
             # LibreOffice needs a window manager for mapped, focusable GUI

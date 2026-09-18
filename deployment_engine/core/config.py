@@ -28,6 +28,7 @@ class DeploymentConfig:
     ghosts: dict | None = None
     gpu_tier: str | None = None  # "v100" | "rtx" | "rtx-a" — decoy feedback only
     probe_workflow: str | None = None  # explicit null means the idle reference
+    probe_service: str | None = None  # explicit background-only Probe variant
 
     @classmethod
     def load(cls, config_path: Path) -> DeploymentConfig:
@@ -70,7 +71,12 @@ class DeploymentConfig:
                 raise ValueError("each probe requires exactly one Scripted or MCHP CPU VM and no GPU tier")
             if raw["probe_workflow"] is None and raw.get("behavior_source") is not None:
                 raise ValueError("idle probes must not have a behavior_source")
-        elif "probe_workflow" in raw:
+            if "probe_service" in raw:
+                if (raw["probe_service"] not in {"ntp", "firmware", "motd"}
+                        or raw["probe_workflow"] is not None
+                        or raw["deployments"][0]["behavior"] != "scripted-cpu"):
+                    raise ValueError("background probes require ntp/firmware/motd, null workflow and Scripted CPU environment")
+        elif "probe_workflow" in raw or "probe_service" in raw:
             raise ValueError("probe_workflow requires type: probe")
 
         return cls(
@@ -88,6 +94,7 @@ class DeploymentConfig:
             ghosts=raw.get("ghosts"),
             gpu_tier=raw.get("gpu_tier"),
             probe_workflow=raw.get("probe_workflow"),
+            probe_service=raw.get("probe_service"),
         )
 
     def vm_count(self) -> int:

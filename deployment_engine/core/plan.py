@@ -45,11 +45,13 @@ DECOY_CANARY_CONFIG = "decoy-runtime-canary"
 
 
 def build_probe_plan(deploy_dir: Path, config_name: str | None = None,
-                     *, sup_config: str = "scripted-cpu") -> list[dict]:
+                     *, sup_config: str = "scripted-cpu", background_services: bool = False) -> list[dict]:
     """Resolve the explicit Probe category in full before any display or execution."""
     from decoys.phase_workflow.probes import PROBE_RESOURCES, PROBE_SUPS, validate_probe_plans
     if sup_config not in PROBE_SUPS:
         raise ValueError("probe SUP must be scripted-cpu or mchp-cpu")
+    if background_services and sup_config != "scripted-cpu":
+        raise ValueError("background probes use the Scripted CPU idle environment")
     tasks = []
     paths = ([deploy_dir / config_name / "config.yaml"] if config_name
              else sorted(deploy_dir.glob("*/config.yaml")))
@@ -60,6 +62,10 @@ def build_probe_plan(deploy_dir: Path, config_name: str | None = None,
         if not isinstance(raw, dict) or raw.get("type") != "probe":
             if config_name:
                 raise ValueError("--probes requires an explicit type: probe configuration")
+            continue
+        if bool(raw.get("probe_service")) != background_services:
+            if config_name:
+                raise ValueError("background probe configurations require --background-services")
             continue
         config = DeploymentConfig.load(path)
         if config.deployments[0]["behavior"] != sup_config:
@@ -72,10 +78,14 @@ def build_probe_plan(deploy_dir: Path, config_name: str | None = None,
             "behavior_source": config.behavior_source, "configs_spec": None,
             "manifest": None, "is_controls": False, "is_probe": True,
             "probe_workflow": config.probe_workflow, "purpose": "other", "target": None,
+            "probe_service": config.probe_service,
             "deployments": config.deployments,
             "share_required": config.probe_workflow == "NetworkShareAccess",
         })
-    if not config_name and (len(tasks) != 7 or
+    if background_services and not config_name:
+        if len(tasks) != 3 or {t["probe_service"] for t in tasks} != {"ntp", "firmware", "motd"}:
+            raise ValueError("background selection requires exactly NTP, firmware and MOTD probes")
+    elif not config_name and (len(tasks) != 7 or
             {t["probe_workflow"] for t in tasks} != {*PROBE_RESOURCES, None}):
         raise ValueError("--probes requires six distinct workflow probes and one idle reference")
     return tasks
@@ -388,7 +398,10 @@ def show_plan_and_confirm(
         output.info(f"  {i}. {task['label']}")
         if task.get("is_probe"):
             output.info("      category: probe; purpose: other; target: null")
-            output.info(f"      workflow: {task['probe_workflow'] or 'idle (no scheduled work)'}")
+            if task.get("probe_service"):
+                output.info(f"      background service: {task['probe_service']} (hourly observations; no workflows)")
+            else:
+                output.info(f"      workflow: {task['probe_workflow'] or 'idle (no scheduled work)'}")
             output.info(f"      source: {task['behavior_source'] or 'none'}")
             for line in config_vm_table_lines(task["deployments"]):
                 output.info(f"      {line}")

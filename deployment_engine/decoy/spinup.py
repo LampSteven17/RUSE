@@ -317,6 +317,7 @@ def run_decoy_spinup(
             "probe_install": True,
             "probe_workflow": config.probe_workflow or "idle",
             "probe_started_at": started_at.isoformat(),
+            "probe_service": config.probe_service or "",
         })
 
     # Override behavior_source if provided via CLI

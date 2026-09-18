@@ -1,0 +1,13 @@
+deployment_name: probe-ntp
+type: probe
+purpose: other
+target: null
+capture_interface: eno2
+probe_workflow: null
+probe_service: ntp
+flavor_capacity:
+  v1.14vcpu.28g: 1
+deployments:
+  - behavior: scripted-cpu
+    flavor: v1.14vcpu.28g
+    count: 1

@@ -81,6 +81,8 @@ examples:
     p.add_argument("--decoy", "--decoys", action="store_true", dest="decoy",
                    help="Deploy DECOY SUP agents (default; --decoys alias)")
     p.add_argument("--probes", action="store_true", help="Deploy isolated CPU workflow probes and idle reference")
+    p.add_argument("--background-services", action="store_true",
+                   help="With --probes, select ONLY the three NTP/firmware/MOTD CPU probes")
     p.add_argument("--probe-sup", choices=["scripted-cpu", "mchp-cpu"],
                    help="With --probes, select the CPU Brain fleet (default: scripted-cpu)")
     p.add_argument("--rampart", "--ramparts", action="store_true", dest="rampart",
@@ -267,6 +269,8 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
+    if args.background_services and (not args.probes or args.probe_sup):
+        parser.error("--background-services requires --probes and cannot select a Brain fleet")
     if args.probe_sup and not args.probes:
         parser.error("--probe-sup requires --probes")
     if args.probes:
@@ -277,7 +281,8 @@ def _cmd_deploy(argv: list[str]) -> int:
         from decoys.phase_workflow.loader import WorkflowPlanError
         try:
             plan = build_probe_plan(DEPLOY_DIR, args.config_name,
-                                    sup_config=args.probe_sup or "scripted-cpu")
+                                    sup_config=args.probe_sup or "scripted-cpu",
+                                    background_services=args.background_services)
         except (ValueError, OSError, WorkflowPlanError) as exc:
             output.error(f"ERROR: {exc}")
             return 1

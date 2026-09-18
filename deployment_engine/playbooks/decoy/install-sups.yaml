@@ -24,6 +24,7 @@
     ruse_revision: ""
     workflow_gpu_tier: "v100"
     probe_install: false
+    probe_service: ""
     probe_started_at: ""
     staged_probe_plans: "/tmp/ruse-probe-plans"
     ruse_path: "/opt/ruse"
@@ -191,6 +192,7 @@
         RUSE_DEPLOYMENT_TYPE="{{ 'probe' if probe_install else 'decoy' }}" \
         RUSE_PROBE_WORKFLOW="{{ probe_workflow | default('') if probe_install else '' }}" \
         RUSE_PROBE_STARTED_AT="{{ probe_started_at }}" \
+        RUSE_PROBE_SERVICE="{{ probe_service }}" \
         RUSE_PROBE_PLANS_DIR="{{ staged_probe_plans if probe_install else '' }}" \
           ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=2
       args:
@@ -261,6 +263,17 @@
       args:
         executable: /bin/bash
       changed_when: false
+
+    - name: Verify native background probe services before runtime startup
+      when: probe_install and probe_service != ''
+      command: "systemctl show {{ item }} --property=LoadState --value"
+      loop:
+        - systemd-timesyncd.service
+        - fwupd-refresh.service
+        - motd-news.service
+      register: background_native_units
+      changed_when: false
+      failed_when: background_native_units.rc != 0 or background_native_units.stdout | trim != 'loaded'
 
     - name: Start canonical workflow service after Stage 2
       when: sup_behavior in canonical_workflow_configs

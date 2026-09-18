@@ -1,5 +1,9 @@
 # CPU Probe deployments
 
+For the separately selected NTP, firmware and MOTD probes, see
+[Background-service probes](background-service-probes.md). They are not added
+to the default workflow/idle selection.
+
 Probes are an explicit `type: probe` category, not Control/Feedback deployments
 or RUSE-only canaries. They reuse Decoy provisioning and canonical CPU runtimes.
 PHASE records use `system: decoy`, `purpose: other`, `target: null`; PHASE's
