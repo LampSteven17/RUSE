@@ -92,6 +92,99 @@ class CanonicalFeedbackDeploymentTests(unittest.TestCase):
             feedback, "DECOY_FEEDBACK_BASE", self.feedback_root
         )
 
+    def test_ctrlfix_two_targets_ordered_latest_and_explicit_colfix_unchanged(self):
+        targets = ['cptc11-zeektx', 'axes-summer24']
+        sources = {}
+        for preset in ('colfix_v12.5.0', 'ctrlfix_v12.5.1'):
+            self.preset = preset
+            sources[preset] = []
+            for target in targets:
+                self.generation(target, '2026-09-19_1200Z')
+                sources[preset].append(self.generation(target, '2026-09-20_1200Z'))
+        for selector, preset, tier in (
+            (['--ctrlfix'], 'ctrlfix_v12.5.1', 'v100'),
+            (['--ctrlfix', '--gpu', 'rtx'], 'ctrlfix_v12.5.1', 'rtx'),
+            (['--preset', 'colfix_v12.5.0'], 'colfix_v12.5.0', 'v100'),
+        ):
+            with self.subTest(selector=selector), self.patch_root(), mock.patch.object(
+                plan, 'show_plan_and_confirm', return_value=False
+            ) as show, mock.patch.object(plan, 'execute_plan') as execute:
+                self.assertEqual(deployment_cli._cmd_deploy(
+                    ['--decoys', '--feedback', *selector, '--target', *targets]), 0)
+            tasks = show.call_args.args[0]
+            self.assertEqual([t['target'] for t in tasks], targets)
+            self.assertEqual([t['behavior_source'] for t in tasks], sources[preset])
+            self.assertEqual({t['preset'] for t in tasks}, {preset})
+            self.assertTrue(all(not t['is_controls'] for t in tasks))
+            self.assertTrue(all(t['deployments'] == list(feedback.canonical_decoy_feedback_deployments(tier)) for t in tasks))
+            execute.assert_not_called()
+
+    def test_ctrlfix_implies_feedback_only_without_changing_default_intent(self):
+        self.preset = 'ctrlfix_v12.5.1'
+        self.generation('axes-summer24')
+        with self.patch_root(), mock.patch.object(plan, 'show_plan_and_confirm', return_value=False) as show:
+            self.assertEqual(deployment_cli._cmd_deploy(['--ctrlfix', '--target', 'axes-summer24']), 0)
+        self.assertEqual(len(show.call_args.args[0]), 1)
+        self.assertFalse(show.call_args.args[0][0]['is_controls'])
+        # Existing bare --preset still requests both categories, not Feedback only.
+        with self.patch_root(), mock.patch.object(plan, 'build_deploy_plan', return_value=[]) as build:
+            deployment_cli._cmd_deploy(['--preset', self.preset])
+        self.assertTrue(build.call_args.kwargs['want_controls'])
+        self.assertTrue(build.call_args.kwargs['want_feedback'])
+
+    def test_ctrlfix_missing_or_invalid_never_falls_back_to_colfix(self):
+        self.generation('axes-summer24', '2026-09-20_1300Z')
+        self.preset = 'ctrlfix_v12.5.1'
+        for state in ('missing', 'incomplete', 'invalid'):
+            if state != 'missing':
+                # A valid older ctrlfix generation cannot mask an invalid newest.
+                self.generation('axes-summer24', '2026-09-19_1200Z')
+                newest = self.generation('axes-summer24', '2026-09-20_1200Z', missing='mchp-cpu')
+                if state == 'invalid':
+                    (newest / feedback.DECOY_PLAN_FILENAMES['mchp-cpu']).write_text('{}')
+            with self.subTest(state=state), self.patch_root(), mock.patch.object(plan, 'show_plan_and_confirm') as show, mock.patch.object(plan, 'execute_plan') as execute:
+                self.assertEqual(deployment_cli._cmd_deploy(
+                    ['--decoy', '--feedback', '--ctrlfix', '--target', 'axes-summer24']), 1)
+            show.assert_not_called()
+            execute.assert_not_called()
+
+    def test_ctrlfix_conflicting_selectors_rejected_before_plan(self):
+        for extra in (['--preset', 'colfix_v12.5.0'], ['--preset', 'ctrlfix_v12.5.1'],
+                      ['--controls'], ['--probes'], ['--canary'], ['--rampart'], ['--ghosts']):
+            with self.subTest(extra=extra), mock.patch.object(plan, 'build_deploy_plan') as build:
+                with self.assertRaises(SystemExit):
+                    deployment_cli._cmd_deploy(['--ctrlfix', *extra])
+                build.assert_not_called()
+
+    def test_ctrlfix_explicit_source_must_match_preset(self):
+        colfix = self.generation('axes-summer24')
+        self.preset = 'ctrlfix_v12.5.1'
+        ctrlfix = self.generation('axes-summer24')
+        for source, expected in ((colfix, 1), (ctrlfix, 0)):
+            with self.subTest(source=source), mock.patch.object(plan, 'show_plan_and_confirm', return_value=False) as show, mock.patch.object(plan, 'execute_plan') as execute:
+                self.assertEqual(deployment_cli._cmd_deploy(
+                    ['--decoy', '--feedback', '--ctrlfix', '--source', str(source)]), expected)
+            self.assertEqual(show.call_count, int(expected == 0))
+            execute.assert_not_called()
+
+    def test_ctrlfix_identity_config_and_registration_are_distinct(self):
+        names = []
+        for preset, slug in (('colfix_v12.5.0', 'colfix-v12-5-0'), ('ctrlfix_v12.5.1', 'ctrlfix-v12-5-1')):
+            self.preset = preset
+            source = self.generation('cptc11-zeektx')
+            name = feedback.generate_feedback_config(source, 'all', self.deploy_root)
+            names.append(name)
+            self.assertEqual(name, f'decoy-feedback-{slug}-cptc11-zeektx')
+            config = DeploymentConfig.load(self.deploy_root / name / 'config.yaml')
+            self.assertEqual(Path(config.behavior_source), source)
+            with mock.patch.object(deploy_steps, 'create_deployment', return_value=('run', Path('deployment.json'))) as create:
+                self.assertTrue(deploy_steps.register_phase_run(config, 'decoy', mock.sentinel.started_at,
+                    [{'name': 'vm', 'ip': '10.0.0.1', 'sup_config': 'scripted-cpu'}]))
+            self.assertEqual(create.call_args.kwargs['experiment_id'], name)
+            self.assertEqual(create.call_args.kwargs['purpose'], 'feedback')
+            self.assertEqual(create.call_args.kwargs['target'], 'cptc11-zeektx')
+        self.assertEqual(len(set(names)), 2)
+
     def test_all_eight_targets_are_discovered_in_canonical_order(self):
         self.all_targets()
         with self.patch_root():

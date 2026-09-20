@@ -230,8 +230,9 @@ def _build_feedback_tasks(
     of feedback datasets onto a specific GPU tier in one invocation.
 
     `preset` is the {preset}_v{version} namespace dir scoping discovery under
-    {type}-controls/. Ignored when an explicit `--source` path is given (it
-    already encodes the namespace). Required-ness is enforced upstream in the CLI.
+    {type}-controls/. A Decoy explicit source must match any selected preset;
+    legacy sources continue to encode their own namespace. Required-ness is
+    enforced upstream in the CLI.
     """
     if deploy_type == "decoy":
         return _build_decoy_feedback_tasks(
@@ -319,6 +320,10 @@ def _build_decoy_feedback_tasks(
         if source:
             source_path = Path(source)
             source_preset, source_target = decoy_feedback_source_identity(source_path)
+            if preset is not None and source_preset != preset:
+                raise FeedbackSourceError(
+                    f"--source preset {source_preset!r} conflicts with selected preset {preset!r}"
+                )
             sources = [{
                 "path": source_path,
                 "preset": source_preset,

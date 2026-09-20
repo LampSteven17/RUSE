@@ -65,6 +65,8 @@ examples:
   ./deploy --decoy --canary                 isolated RUSE-only runtime canary
   ./deploy --decoy --feedback --preset colfix_v12.5.0
                                             all canonical feedback targets
+  ./deploy --decoys --feedback --ctrlfix --target cptc11-zeektx axes-summer24
+                                            selected ctrlfix_v12.5.1 targets only
   ./deploy --decoy --feedback --preset colfix_v12.5.0 \
       --target axes-summer24                 one exact target
   ./deploy --decoy --feedback --preset colfix_v12.5.0 \
@@ -101,7 +103,10 @@ examples:
 
     p.add_argument("--canary-sup", choices=["mchp-cpu", "browseruse-gpu"],
                    help="With --canary, select one isolated CPU MCHP or V100 BrowserUse VM")
-    p.add_argument("--preset", type=str,
+    presets = p.add_mutually_exclusive_group()
+    presets.add_argument("--ctrlfix", action="store_true",
+                        help="Deploy Decoy Feedback from ctrlfix_v12.5.1 only (instead of --preset)")
+    presets.add_argument("--preset", type=str,
                    help="PHASE feedback preset (for canonical Decoy feedback: "
                         "/data/axes-mirror/feedback/{preset}/{target}/). Required "
                         "for discovery; not needed with an exact --source.")
@@ -269,6 +274,12 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
+    if args.ctrlfix:
+        if any((args.rampart, args.ghosts, args.controls, args.probes,
+                args.background_services, args.canary, args.canary_sup, args.config_name)):
+            parser.error("--ctrlfix selects only canonical Decoy Feedback, not another category or configuration")
+        args.preset = "ctrlfix_v12.5.1"
+        args.feedback = True
     if args.background_services and (not args.probes or args.probe_sup):
         parser.error("--background-services requires --probes and cannot select a Brain fleet")
     if args.probe_sup and not args.probes:
