@@ -19,12 +19,6 @@ from tests.test_phase_workflow_runtime import expanded_hls_control_document
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONTROL_CONFIG = REPOSITORY_ROOT / "deployments" / "decoy-controls" / "config.yaml"
 CONTROL_ROOT = Path("/home/ubuntu/PHASE/plans/feedback-v2-rewrite/fixtures/controls")
-CONTROL_GENERATION_ROOT = Path("/data/axes-mirror/controls")
-CURRENT_CONTROL_ROOT = max(
-    path
-    for path in CONTROL_GENERATION_ROOT.iterdir()
-    if path.is_dir() and feedback._is_decoy_generation_name(path.name)
-)
 CANONICAL = (
     "scripted-cpu",
     "mchp-cpu",
@@ -34,8 +28,8 @@ CANONICAL = (
 
 
 class Phase4ControlCanaryTests(unittest.TestCase):
-    def _generation(self, root: Path, timestamp: str) -> Path:
-        generation = root / timestamp
+    def _generation(self, root: Path, timestamp: str, preset="colfix_v12.5.0") -> Path:
+        generation = root / preset / timestamp
         generation.mkdir(parents=True)
         for sup_config in CANONICAL:
             (generation / feedback.DECOY_PLAN_FILENAMES[sup_config]).write_text(
@@ -112,7 +106,7 @@ class Phase4ControlCanaryTests(unittest.TestCase):
             older = self._generation(root, "2026-08-24_0900Z")
             newer = self._generation(root, "2026-08-24_1456Z")
             self._generation(root, "2026-99-99_9999Z")
-            (root / "latest").mkdir()
+            (root / "colfix_v12.5.0" / "latest").mkdir()
             with mock.patch.object(feedback, "DECOY_CONTROL_BASE", root):
                 selected = feedback.find_decoy_control_generation()
         self.assertEqual(selected, newer)
@@ -152,6 +146,68 @@ class Phase4ControlCanaryTests(unittest.TestCase):
             ])
         self.assertEqual(result, 1)
         build.assert_not_called()
+
+    def test_control_cli_selects_only_requested_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            controls = root / "controls"
+            colfix = self._generation(controls, "2026-09-18_2059Z")
+            ctrlfix = self._generation(controls, "2026-09-19_1200Z", "ctrlfix_v12.5.1")
+            # A newer historical flat generation must never be selected.
+            flat = controls / "2026-09-20_1200Z"
+            shutil.copytree(ctrlfix, flat)
+            deploy_root = self._deploy_root(root)
+            for flags, expected in (([], colfix),
+                                    (["--preset", "colfix_v12.5.0"], colfix),
+                                    (["--ctrlfix"], ctrlfix)):
+                with (
+                    self.subTest(flags=flags),
+                    mock.patch.object(feedback, "DECOY_CONTROL_BASE", controls),
+                    mock.patch.object(deployment_cli, "DEPLOY_DIR", deploy_root),
+                    mock.patch.object(plan, "show_plan_and_confirm", return_value=False) as show,
+                    mock.patch.object(plan, "execute_plan") as execute,
+                    mock.patch.object(feedback, "validate_decoy_control_generation",
+                                      wraps=feedback.validate_decoy_control_generation) as validate,
+                ):
+                    self.assertEqual(deployment_cli._cmd_deploy(
+                        ["--decoys", "--controls", *flags]), 0)
+                    validate.assert_called_once_with(expected)
+                    tasks = show.call_args.args[0]
+                    self.assertEqual(len(tasks), 1)
+                    self.assertTrue(tasks[0]["is_controls"])
+                    self.assertEqual(tasks[0]["behavior_source"], expected)
+                    self.assertEqual(tasks[0]["label"], "decoy-controls (control)")
+                    self.assertEqual(len(tasks[0]["deployments"]), 4)
+                    execute.assert_not_called()
+
+    def test_missing_control_namespace_or_generation_never_falls_back(self):
+        for preset, flags in (("colfix_v12.5.0", []), ("ctrlfix_v12.5.1", ["--ctrlfix"])):
+            for state in ("missing", "empty", "invalid_newest"):
+                with self.subTest(preset=preset, state=state), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    controls = root / "controls"
+                    other = "ctrlfix_v12.5.1" if not flags else "colfix_v12.5.0"
+                    valid_other = self._generation(controls, "2026-09-18_2059Z", other)
+                    shutil.copytree(valid_other, controls / "2026-09-20_1200Z")
+                    selected_root = controls / preset
+                    if state == "empty":
+                        (selected_root / "2026-02-30_1200Z").mkdir(parents=True)
+                    elif state == "invalid_newest":
+                        self._generation(controls, "2026-09-18_2059Z", preset)
+                        newest = self._generation(controls, "2026-09-19_1200Z", preset)
+                        (newest / "mchp-v1.json").unlink()
+                    with (
+                        mock.patch.object(feedback, "DECOY_CONTROL_BASE", controls),
+                        mock.patch.object(deployment_cli, "DEPLOY_DIR", self._deploy_root(root)),
+                        mock.patch.object(plan, "show_plan_and_confirm") as show,
+                        mock.patch.object(plan, "execute_plan") as execute,
+                        mock.patch.object(plan.output, "error") as error,
+                    ):
+                        self.assertEqual(deployment_cli._cmd_deploy(
+                            ["--decoys", "--controls", *flags]), 1)
+                        self.assertIn(str(selected_root), error.call_args.args[0])
+                        show.assert_not_called()
+                        execute.assert_not_called()
 
     def test_invalid_control_plans_abort_before_plan_display_or_execution(self):
         def missing(path):

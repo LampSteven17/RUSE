@@ -107,8 +107,8 @@ def build_deploy_plan(
 ) -> list[dict] | None:
     """Resolve controls + feedback intent into an ordered list of deploy tasks.
 
-    `preset` is the {preset}_v{version} namespace scoping feedback discovery
-    (None for controls-only or when `source` is an explicit full path).
+    `preset` scopes PHASE discovery. Decoy controls default to colfix_v12.5.0
+    when it is omitted.
 
     `tier_plan` is a static (gpu_tier, [targets]) assignment (e.g.
     feedback.TIER_PLANS["exp1"]) — each resulting feedback task carries its
@@ -120,7 +120,7 @@ def build_deploy_plan(
 
     if want_controls:
         try:
-            plan.append(_build_controls_task(deploy_type, deploy_dir))
+            plan.append(_build_controls_task(deploy_type, deploy_dir, preset=preset))
         except FeedbackSourceError as exc:
             output.error(f"ERROR: {exc}")
             return None
@@ -137,7 +137,7 @@ def build_deploy_plan(
     return plan
 
 
-def _build_controls_task(deploy_type: str, deploy_dir: Path) -> dict:
+def _build_controls_task(deploy_type: str, deploy_dir: Path, *, preset: str | None = None) -> dict:
     """Build one controls task, resolving Decoy plans directly from PHASE."""
     controls_cfg_path = deploy_dir / f"{deploy_type}-controls" / "config.yaml"
     if not controls_cfg_path.exists():
@@ -160,7 +160,7 @@ def _build_controls_task(deploy_type: str, deploy_dir: Path) -> dict:
 
     cfg = DeploymentConfig.load(controls_cfg_path)  # raises on parse errors — fail loud
     if deploy_type == "decoy":
-        src = find_decoy_control_generation()
+        src = find_decoy_control_generation(preset)
         manifest = None
     else:
         src = Path(cfg.behavior_source) if cfg.behavior_source else None

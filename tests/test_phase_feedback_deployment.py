@@ -150,7 +150,7 @@ class CanonicalFeedbackDeploymentTests(unittest.TestCase):
 
     def test_ctrlfix_conflicting_selectors_rejected_before_plan(self):
         for extra in (['--preset', 'colfix_v12.5.0'], ['--preset', 'ctrlfix_v12.5.1'],
-                      ['--controls'], ['--probes'], ['--canary'], ['--rampart'], ['--ghosts']):
+                      ['--probes'], ['--canary'], ['--rampart'], ['--ghosts']):
             with self.subTest(extra=extra), mock.patch.object(plan, 'build_deploy_plan') as build:
                 with self.assertRaises(SystemExit):
                     deployment_cli._cmd_deploy(['--ctrlfix', *extra])

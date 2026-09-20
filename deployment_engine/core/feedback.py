@@ -188,19 +188,20 @@ def decoy_generation_uses_network_share(
     )
 
 
-def find_decoy_control_generation() -> Path:
-    """Select and validate the newest calendar-valid control generation."""
-    if not DECOY_CONTROL_BASE.is_dir():
+def find_decoy_control_generation(preset: str | None = None) -> Path:
+    """Select the newest control generation within one PHASE namespace."""
+    root = DECOY_CONTROL_BASE / (preset or "colfix_v12.5.0")
+    if not root.is_dir():
         raise FeedbackSourceError(
-            f"control generation root not found: {DECOY_CONTROL_BASE}"
+            f"control generation root not found: {root}"
         )
     generations = sorted(
-        path for path in DECOY_CONTROL_BASE.iterdir()
+        path for path in root.iterdir()
         if path.is_dir() and _is_decoy_generation_name(path.name)
     )
     if not generations:
         raise FeedbackSourceError(
-            f"no YYYY-MM-DD_HHMMZ control generation found: {DECOY_CONTROL_BASE}"
+            f"no YYYY-MM-DD_HHMMZ control generation found: {root}"
         )
     selected = generations[-1]
     validate_decoy_control_generation(selected)

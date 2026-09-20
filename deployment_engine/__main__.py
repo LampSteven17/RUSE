@@ -105,11 +105,11 @@ examples:
                    help="With --canary, select one isolated CPU MCHP or V100 BrowserUse VM")
     presets = p.add_mutually_exclusive_group()
     presets.add_argument("--ctrlfix", action="store_true",
-                        help="Deploy Decoy Feedback from ctrlfix_v12.5.1 only (instead of --preset)")
+                        help="Select ctrlfix_v12.5.1 for Decoy Controls/Feedback (instead of --preset)")
     presets.add_argument("--preset", type=str,
-                   help="PHASE feedback preset (for canonical Decoy feedback: "
+                   help="PHASE preset (Decoy Controls default: colfix_v12.5.0; feedback: "
                         "/data/axes-mirror/feedback/{preset}/{target}/). Required "
-                        "for discovery; not needed with an exact --source.")
+                        "for feedback discovery; not needed with an exact --source.")
     p.add_argument("--source", type=str, help="Explicit PHASE feedback source directory (single)")
     p.add_argument(
         "--target",
@@ -275,11 +275,12 @@ def _cmd_deploy(argv: list[str]) -> int:
 
     # --- Resolve deploy type ---
     if args.ctrlfix:
-        if any((args.rampart, args.ghosts, args.controls, args.probes,
+        if any((args.rampart, args.ghosts, args.probes,
                 args.background_services, args.canary, args.canary_sup, args.config_name)):
-            parser.error("--ctrlfix selects only canonical Decoy Feedback, not another category or configuration")
+            parser.error("--ctrlfix selects only canonical Decoy Controls/Feedback, not another category or configuration")
         args.preset = "ctrlfix_v12.5.1"
-        args.feedback = True
+        if not args.controls:
+            args.feedback = True
     if args.background_services and (not args.probes or args.probe_sup):
         parser.error("--background-services requires --probes and cannot select a Brain fleet")
     if args.probe_sup and not args.probes:
