@@ -96,6 +96,10 @@ def register_phase_run(
     vms: list[dict],
 ) -> bool:
     """Create the one exact PHASE deployment record for a completed spinup."""
+    baseline = {}
+    if config.baseline_direction is not None:
+        baseline = {"baseline_direction": config.baseline_direction,
+                    "model_preset": config.model_preset}
     try:
         run_id, path = create_deployment(
             experiment_id=config.deployment_name,
@@ -105,6 +109,7 @@ def register_phase_run(
             started_at=started_at,
             capture_interface=config.capture_interface,
             vms=vms,
+            **baseline,
         )
     except PhaseRunRegistryError as exc:
         output.error(f"  ERROR: PHASE deployment registration failed: {exc}")

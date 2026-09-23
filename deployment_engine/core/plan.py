@@ -137,6 +137,22 @@ def build_deploy_plan(
     return plan
 
 
+def build_baseline_plan(preset: str, direction: str, gpu_tier: str = "v100") -> list[dict]:
+    from .feedback import (find_decoy_baseline_generation, _decoy_preset_slug,
+                           canonical_decoy_feedback_deployments)
+
+    source = find_decoy_baseline_generation(preset, direction)
+    name = f"decoy-baseline-{_decoy_preset_slug(preset)}-{direction}"
+    return [{
+        "label": name, "config_name": name, "is_baseline": True,
+        "is_controls": True, "purpose": "control", "target": None,
+        "model_preset": preset, "baseline_direction": direction,
+        "behavior_source": source, "configs_spec": None, "manifest": None,
+        "gpu_tier": gpu_tier,
+        "deployments": list(canonical_decoy_feedback_deployments(gpu_tier)),
+    }]
+
+
 def _build_controls_task(deploy_type: str, deploy_dir: Path, *, preset: str | None = None) -> dict:
     """Build one controls task, resolving Decoy plans directly from PHASE."""
     controls_cfg_path = deploy_dir / f"{deploy_type}-controls" / "config.yaml"
@@ -431,6 +447,10 @@ def show_plan_and_confirm(
             mf = task.get("manifest")
             if deploy_type == "decoy":
                 output.info("      purpose:     control")
+                if task.get("is_baseline"):
+                    output.info(f"      baseline:    {task['baseline_direction']}")
+                    output.info(f"      preset:      {task['model_preset']}")
+                    output.info("      target:      null (global)")
                 output.info(f"      generation:  {src.name}")
                 output.info(f"      source:      {src}")
             elif src is None:
@@ -445,7 +465,8 @@ def show_plan_and_confirm(
             if deps:
                 output.info("")
                 output.info(f"      VMs to provision ({sum(d.get('count', 1) for d in deps)}):")
-                for line in config_vm_table_lines(deps, indent="        "):
+                for line in config_vm_table_lines(deps, indent="        ",
+                                                 gpu_tier=task.get("gpu_tier", "v100")):
                     output.info(line)
         else:
             if deploy_type == "decoy":
@@ -481,7 +502,7 @@ def show_plan_and_confirm(
         output.error("Aborting: one or more manifests don't match deploy type.")
         return False
 
-    if n == 1 and plan[0]["is_controls"]:
+    if n == 1 and plan[0]["is_controls"] and not plan[0].get("is_baseline"):
         return True
 
     if not output.confirm(f"Deploy these {n} config(s)?"):
@@ -524,6 +545,9 @@ def execute_plan(
             src = task["behavior_source"]
             spinup_source = str(src) if src else None
         try:
+            if task.get("is_baseline"):
+                from .feedback import generate_baseline_config
+                generate_baseline_config(task, deploy_dir)
             # gpu_tier only applies to decoy deploys + feedback tasks. Controls
             # tasks use their own config.yaml-declared flavors and ignore the kwarg;
             # rampart/ghosts spinups don't accept it. Pass conditionally.

@@ -95,6 +95,10 @@ examples:
 
     # Scope flags — opt into just controls, just feedback, or (default) both.
     p.add_argument("--controls", action="store_true", help="Deploy the control fleet (no feedback)")
+    p.add_argument("--baseline", action="store_true", help="Deploy one global PHASE Baseline fleet")
+    direction = p.add_mutually_exclusive_group()
+    direction.add_argument("--human", action="store_true", help="With --baseline, select human direction")
+    direction.add_argument("--not-human", action="store_true", help="With --baseline, select not-human (default)")
     p.add_argument("--feedback", action="store_true", help="Deploy PHASE feedback variants")
     p.add_argument(
         "--canary", action="store_true",
@@ -274,6 +278,25 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
+    if (args.human or args.not_human) and not args.baseline:
+        parser.error("--human/--not-human require --baseline")
+    if args.baseline:
+        if any((args.controls, args.feedback, args.rampart, args.ghosts, args.probes,
+                args.background_services, args.probe_sup, args.canary, args.canary_sup,
+                args.source, args.target, args.config_name)):
+            parser.error("--baseline is a global Decoy fleet; cannot combine scopes, targets or sources")
+        from .core.plan import build_baseline_plan, show_plan_and_confirm, execute_plan
+        from .core.feedback import FeedbackSourceError
+        preset = "ctrlfix_v12.5.1" if args.ctrlfix else (args.preset or "colfix_v12.5.0")
+        gpu_tier = args.gpu or "v100"
+        try:
+            tasks = build_baseline_plan(preset, "human" if args.human else "not-human", gpu_tier)
+        except FeedbackSourceError as exc:
+            output.error(f"ERROR: {exc}")
+            return 1
+        if not show_plan_and_confirm(tasks, "decoy", gpu_tier=gpu_tier):
+            return 0
+        return execute_plan(tasks, "decoy", None, DEPLOY_DIR, gpu_tier=gpu_tier)
     if args.ctrlfix:
         if any((args.rampart, args.ghosts, args.probes,
                 args.background_services, args.canary, args.canary_sup, args.config_name)):

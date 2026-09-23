@@ -317,13 +317,17 @@ class PhaseRunRegistryTests(unittest.TestCase):
         self.assertNotIn("experiments.json", registry_source)
         self.assertFalse(Path("deployment_engine/core/register_experiment.py").exists())
 
-    def test_persisted_record_validates_against_byte_identical_phase_schema(self):
-        self.assertEqual(CONTRACT_PATH.read_bytes(), PHASE_SCHEMA.read_bytes())
+    def test_legacy_record_remains_valid_against_phase_schema(self):
+        # PHASE must adopt the approved optional Baseline fields before new
+        # Baselines deploy. Existing records remain valid with its old schema.
         run_id, path = self.create()
         record = json.loads(path.read_text())
         schema = json.loads(CONTRACT_PATH.read_text())
         Draft202012Validator(
             schema, format_checker=FormatChecker()
+        ).validate(record)
+        Draft202012Validator(
+            json.loads(PHASE_SCHEMA.read_text()), format_checker=FormatChecker()
         ).validate(record)
         self.assertEqual(
             set(record),

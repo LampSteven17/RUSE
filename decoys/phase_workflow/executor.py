@@ -71,12 +71,16 @@ class DailyExecutor:
         *,
         clock: Optional[Clock] = None,
         starter: Optional[Callable[[ResolvedTask, str], Handle]] = None,
+        background_policy=None,
     ):
         self.plan = plan
         self.registry = registry
         self._sink = terminal_sink
         self.clock = clock or RealClock()
         self.startup_utc = self._utc(self.clock.now())
+        self._background_policy = background_policy
+        if background_policy is not None:
+            background_policy.update(self.startup_utc)
         self._pool = None
         if starter is None:
             self._pool = ThreadPoolExecutor(
@@ -102,6 +106,9 @@ class DailyExecutor:
 
     def tick(self) -> None:
         now = self._utc(self.clock.now())
+        if self._background_policy is not None:
+            self._background_policy.update(now)
+            now = self._utc(self.clock.now())
         local_day = now.astimezone(self.plan.timezone).date()
         if local_day != self._day:
             self._close_unstarted(now)
@@ -163,6 +170,9 @@ class DailyExecutor:
             self._wake.clear()
 
     def close(self) -> None:
+        # Shutdown restoration belongs to the runtime lifecycle, not another
+        # membership transition (or retry of a failed transition) during drain.
+        self._background_policy = None
         if self._pool is not None:
             self._pool.shutdown(wait=True)
         self.tick()
@@ -319,6 +329,10 @@ class DailyExecutor:
             local_now.date() + timedelta(days=1), time(), self.plan.timezone
         ).astimezone(UTC)
         candidates.append(next_midnight)
+        if self._background_policy is not None:
+            # Re-evaluate wall-clock membership each minute, including DST folds
+            # and gaps. No once-per-day ledger and no extra scheduler thread.
+            candidates.append(now.replace(second=0, microsecond=0) + timedelta(minutes=1))
         for occurrence in self._waiting:
             close_naive = datetime.combine(occurrence.local_day, time()) + timedelta(
                 minutes=occurrence.window_end_minute

@@ -57,6 +57,8 @@ class WorkflowPlan:
     brain_profile_id: str
     brain_profile: Mapping[str, Any]
     windows: tuple[PlanWindow, ...]
+    # None means no policy; an empty tuple means enabled NTP with no off interval.
+    ntp_off_intervals: Optional[tuple[tuple[int, int], ...]] = None
 
 
 def _load_json_bytes(path: Path, label: str) -> dict[str, Any]:
@@ -169,6 +171,15 @@ def parse_workflow_plan(
         Draft202012Validator(schema).validate(document)
     except (SchemaError, ValidationError) as exc:
         raise WorkflowPlanError(f"invalid workflow plan: {exc.message}") from exc
+
+    background = document.get("background_services")
+    ntp_intervals = None
+    if background is not None:
+        intervals = background["ntp"]["off_intervals_local"]
+        if any(start >= end for start, end in intervals):
+            raise WorkflowPlanError("NTP off interval must have start < end")
+        if background["enabled"]:
+            ntp_intervals = tuple(tuple(interval) for interval in intervals)
 
     configurations = capabilities.get("sup_configurations")
     if not isinstance(configurations, dict) or expected_sup_config not in configurations:
@@ -328,4 +339,5 @@ def parse_workflow_plan(
         brain_profile_id=selected_profile,
         brain_profile=_freeze(raw_brain_profile),
         windows=tuple(windows),
+        ntp_off_intervals=ntp_intervals,
     )

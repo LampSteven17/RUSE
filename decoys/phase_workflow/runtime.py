@@ -16,6 +16,7 @@ from phase_workflow.executor import DailyExecutor
 from phase_workflow.loader import load_workflow_plan
 from phase_workflow.registry import WorkflowRegistry
 from phase_workflow.probes import PROBE_SUPS, probe_day_index, validate_probe_plans
+from phase_workflow.ntp_policy import NtpPolicy, ntp_lifecycle
 
 
 class ProbeExecutor(DailyExecutor):
@@ -158,22 +159,30 @@ def run_workflow_runtime(config_key: str, behavior_config_dir: Optional[str]) ->
     if ollama_model is not None:
         session_config["ollama_model"] = ollama_model
     logger.session_start(config=session_config)
-    registry = WorkflowRegistry(
-        plan,
-        build_brain(plan.brain, brain_profile, logger),
-        behavior_path.parent / "workspace",
-    )
-    executor = DailyExecutor(plan, registry, logger.workflow_plan_terminal)
+    policy = (NtpPolicy(plan.ntp_off_intervals, plan.timezone, logger)
+              if plan.ntp_off_intervals is not None else None)
     try:
-        executor.run_forever()
-    except KeyboardInterrupt:
-        logger.info("Workflow runtime stopped by user")
+        with ntp_lifecycle(policy):
+            registry = WorkflowRegistry(
+                plan,
+                build_brain(plan.brain, brain_profile, logger),
+                behavior_path.parent / "workspace",
+            )
+            executor = None
+            try:
+                executor = DailyExecutor(plan, registry, logger.workflow_plan_terminal,
+                                         background_policy=policy)
+                executor.run_forever()
+            except KeyboardInterrupt:
+                logger.info("Workflow runtime stopped by user")
+            finally:
+                try:
+                    if executor is not None:
+                        executor.close()
+                finally:
+                    registry.close()
     except Exception as exc:
         logger.session_fail(message="Workflow runtime failed", exception=exc)
         raise
     finally:
-        try:
-            executor.close()
-        finally:
-            registry.close()
-            logger.session_end()
+        logger.session_end()

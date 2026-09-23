@@ -29,6 +29,8 @@ class DeploymentConfig:
     gpu_tier: str | None = None  # "v100" | "rtx" | "rtx-a" — decoy feedback only
     probe_workflow: str | None = None  # explicit null means the idle reference
     probe_service: str | None = None  # explicit background-only Probe variant
+    baseline_direction: str | None = None
+    model_preset: str | None = None
 
     @classmethod
     def load(cls, config_path: Path) -> DeploymentConfig:
@@ -57,6 +59,12 @@ class DeploymentConfig:
         if purpose == "feedback" and target is None:
             raise ValueError("feedback deployment config target must not be null")
         capture_interface = raw.get("capture_interface", "eno2")
+        if "baseline_direction" in raw or "model_preset" in raw:
+            if (raw.get("baseline_direction") not in {"human", "not-human"}
+                    or raw.get("model_preset") not in {"colfix_v12.5.0", "ctrlfix_v12.5.1"}
+                    or raw.get("type", "decoy") != "decoy"
+                    or purpose != "control" or target is not None):
+                raise ValueError("Baseline requires direction, model preset, Decoy control purpose and null target")
         if not isinstance(capture_interface, str) or not capture_interface:
             raise ValueError("deployment config capture_interface must be non-empty")
         if raw.get("type") == "probe":
@@ -95,6 +103,8 @@ class DeploymentConfig:
             gpu_tier=raw.get("gpu_tier"),
             probe_workflow=raw.get("probe_workflow"),
             probe_service=raw.get("probe_service"),
+            baseline_direction=raw.get("baseline_direction"),
+            model_preset=raw.get("model_preset"),
         )
 
     def vm_count(self) -> int:

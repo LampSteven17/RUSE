@@ -15,6 +15,7 @@ from . import output
 FEEDBACK_BASE = Path("/mnt/AXES2U1/feedback")
 DECOY_FEEDBACK_BASE = Path("/data/axes-mirror/feedback")
 DECOY_CONTROL_BASE = Path("/data/axes-mirror/controls")
+DECOY_BASELINE_BASE = Path("/data/axes-mirror/baselines")
 DECOY_FEEDBACK_TARGETS = (
     "axes-fall24",
     "axes-spring25",
@@ -206,6 +207,45 @@ def find_decoy_control_generation(preset: str | None = None) -> Path:
     selected = generations[-1]
     validate_decoy_control_generation(selected)
     return selected
+
+
+def find_decoy_baseline_generation(preset: str, direction: str) -> Path:
+    """Resolve one global Baseline, without crossing direction or version."""
+    if preset not in {"colfix_v12.5.0", "ctrlfix_v12.5.1"}:
+        raise FeedbackSourceError(f"unsupported Baseline preset: {preset!r}")
+    if direction not in {"human", "not-human"}:
+        raise FeedbackSourceError(f"unsupported Baseline direction: {direction!r}")
+    root = DECOY_BASELINE_BASE / preset / direction
+    if not root.is_dir():
+        raise FeedbackSourceError(f"Baseline generation root not found: {root}")
+    generations = sorted(path for path in root.iterdir()
+                         if path.is_dir() and _is_decoy_generation_name(path.name))
+    if not generations:
+        raise FeedbackSourceError(f"no YYYY-MM-DD_HHMMZ Baseline generation found: {root}")
+    selected = generations[-1]
+    validate_decoy_control_generation(selected)
+    return selected
+
+
+def generate_baseline_config(task: dict, deploy_dir: Path) -> str:
+    """Save only a confirmed Baseline task using existing Decoy installation."""
+    import yaml
+
+    source = task["behavior_source"]
+    validate_decoy_control_generation(source)
+    gpu = DECOY_CANONICAL_GPU_TIERS[task["gpu_tier"]]
+    config = {
+        "deployment_name": task["config_name"], "purpose": "control", "target": None,
+        "baseline_direction": task["baseline_direction"], "model_preset": task["model_preset"],
+        "capture_interface": "eno2", "behavior_source": str(source),
+        "gpu_tier": task["gpu_tier"],
+        "flavor_capacity": {"v1.14vcpu.28g": 2, gpu["flavor"]: 2},
+        "deployments": task["deployments"],
+    }
+    path = deploy_dir / task["config_name"] / "config.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    return task["config_name"]
 
 
 def find_decoy_feedback_by_target(target: str, preset: str) -> Path:

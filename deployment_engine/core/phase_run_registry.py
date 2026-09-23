@@ -62,6 +62,8 @@ def create_deployment(
     capture_interface: str,
     vms: Iterable[Mapping],
     experiments_root: Path | None = None,
+    baseline_direction: str | None = None,
+    model_preset: str | None = None,
 ) -> tuple[str, Path]:
     """Validate and atomically persist one new immutable deployment record."""
     started = _aware_datetime(started_at, "started_at")
@@ -78,6 +80,8 @@ def create_deployment(
         "capture_interface": capture_interface,
         "vms": [dict(vm) for vm in vms],
     }
+    if baseline_direction is not None or model_preset is not None:
+        candidate.update(baseline_direction=baseline_direction, model_preset=model_preset)
     _validate_record(candidate, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_create(path, _json_bytes(candidate))
