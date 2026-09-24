@@ -2052,6 +2052,89 @@ class TruthPropagationTests(unittest.TestCase):
         self.assertFalse(result.completed)
         self.assertEqual(state["visitor_calls"], [])
 
+    def test_smol_accepts_closed_parenthesized_followup_only(self):
+        _plan, task = self.smol_task()
+        assigned = task.resource["url"]
+        followup = "https://en.wikipedia.org/wiki/Neural_network_(machine_learning)"
+        truncated = "https://en.wikipedia.org/wiki/Neural_network_(machine_learning"
+
+        def visit(url):
+            if url == assigned:
+                return (
+                    "[Neural network](/wiki/Neural_network_(machine_learning) "
+                    "\"article\")"
+                )
+            if url == followup:
+                return "Neural networks are machine-learning models."
+            raise AssertionError(url)
+
+        result, _task, state = self.run_smol_research(
+            [assigned, followup], visit
+        )
+        self.assertTrue(result.completed)
+        self.assertEqual(state["visitor_calls"], [assigned, followup])
+
+        result, _task, state = self.run_smol_research(
+            [assigned, truncated], visit
+        )
+        self.assertFalse(result.completed)
+        self.assertEqual(state["visitor_calls"], [assigned])
+        self.assertIn("unassigned follow-up", state["tool_errors"][-1])
+
+        malformed = (
+            "[Neural network](/wiki/Neural_network_(machine_learning) "
+            "\"article\""
+        )
+
+        def malformed_visit(url):
+            if url == assigned:
+                return malformed
+            raise AssertionError(url)
+
+        result, _task, state = self.run_smol_research(
+            [assigned, truncated], malformed_visit
+        )
+        self.assertFalse(result.completed)
+        self.assertEqual(state["visitor_calls"], [assigned])
+        self.assertIn("no readable result link", state["tool_errors"][0])
+
+        result, _task, state = self.run_smol_research(
+            [assigned, followup, followup], visit
+        )
+        self.assertFalse(result.completed)
+        self.assertEqual(state["visitor_calls"], [assigned, followup])
+        self.assertIn("repeatedly", state["tool_errors"][-1])
+
+    def test_markdown_link_extraction_requires_closed_destinations(self):
+        base = "https://en.wikipedia.org/wiki/Compiler"
+        self.assertEqual(
+            AssignedWebResearch._links_from(
+                " ".join((
+                    "[relative](/wiki/Foo_(bar))",
+                    "[absolute](https://example.com/Foo_(bar))",
+                    "[angle](<https://example.org/Foo_(bar)> \"title\")",
+                    "[titled](/wiki/Foo_(bar) 'title')",
+                    "[plain](/wiki/Plain)",
+                )),
+                base,
+            ),
+            {
+                "https://en.wikipedia.org/wiki/Foo_(bar)",
+                "https://example.com/Foo_(bar)",
+                "https://example.org/Foo_(bar)",
+                "https://en.wikipedia.org/wiki/Plain",
+            },
+        )
+        for malformed in (
+            "[x](/wiki/Foo(bar \"title\")",
+            "[x](/wiki/Foo_(bar)",
+            "[x]()",
+        ):
+            with self.subTest(malformed=malformed):
+                self.assertEqual(
+                    AssignedWebResearch._links_from(malformed, base), set()
+                )
+
     def test_web_reader_uses_identifiable_request_and_readable_markdown(self):
         calls = []
 

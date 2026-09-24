@@ -315,9 +315,11 @@ class AssignedWebResearch:
     """Verify the two LLM-selected page visits required by WebResearch."""
 
     # markdownify preserves optional link titles, for example
-    # ``[Main page](/wiki/Main_Page "Visit the main page")``. Capture the URL
-    # token without requiring it to be immediately followed by ``)``.
-    _MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)")
+    # ``[Main page](/wiki/Main_Page "Visit the main page")``.
+    _MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\(\s*")
+    _MARKDOWN_LINK_CLOSE = re.compile(
+        r"\s*(?:(?:\"[^\"]*\"|'[^']*'|\([^)]*\))\s*)?\)"
+    )
 
     def __init__(self, task: ResolvedTask, visitor: Callable[[str], str]):
         if task.workflow != "WebResearch":
@@ -382,8 +384,11 @@ class AssignedWebResearch:
     @classmethod
     def _links_from(cls, content: str, base_url: str) -> set[str]:
         links = set()
-        for raw in cls._MARKDOWN_LINK.findall(content):
-            candidate = urljoin(base_url, raw.strip("<>"))
+        for match in cls._MARKDOWN_LINK.finditer(content):
+            raw = cls._markdown_destination(content, match.end())
+            if raw is None:
+                continue
+            candidate = urljoin(base_url, raw)
             parts = urlsplit(candidate)
             if parts.netloc.endswith("google.com") and parts.path == "/url":
                 redirected = parse_qs(parts.query).get("q", [])
@@ -393,6 +398,40 @@ class AssignedWebResearch:
             if normalized != base_url:
                 links.add(normalized)
         return links
+
+    @staticmethod
+    def _markdown_destination(content: str, start: int) -> Optional[str]:
+        """Return a closed Markdown link destination, including balanced ``()``."""
+        if start >= len(content):
+            return None
+        if content[start] == "<":
+            end = content.find(">", start + 1)
+            if end == start + 1 or end == -1:
+                return None
+            if not AssignedWebResearch._MARKDOWN_LINK_CLOSE.match(content, end + 1):
+                return None
+            return content[start + 1:end]
+
+        end = start
+        depth = 0
+        while end < len(content):
+            character = content[end]
+            if character.isspace():
+                if (
+                    end == start
+                    or depth != 0
+                    or not AssignedWebResearch._MARKDOWN_LINK_CLOSE.match(content, end)
+                ):
+                    return None
+                return content[start:end]
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                if depth == 0:
+                    return content[start:end] if end > start else None
+                depth -= 1
+            end += 1
+        return None
 
     @staticmethod
     def _normalize(url: str) -> str:
