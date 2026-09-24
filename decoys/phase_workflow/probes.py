@@ -12,7 +12,7 @@ PROBE_RESOURCES = {
     "WebResearch": ("wikipedia_compiler", "wikipedia_geometry", "wikipedia_deep_learning",
                     "wikipedia_solar_power", "wikipedia_python"),
     "VideoViewing": ("video_hls_mux_bbb", "video_hls_apple_bipbop", "video_hls_unified_tos"),
-    "FileDownload": ("download_ovh_1m", "download_ovh_10m", "download_ovh_100m",
+    "FileDownload": ("download_cloudflare_1m", "download_cloudflare_10m", "download_hetzner_100m",
                      "download_sasag_1m", "download_sasag_10m", "download_sasag_100m"),
     "FileSyncUpload": ("cloudflare_upload",),
     "DocumentCreation": ("document_team_meeting_notes", "spreadsheet_expense_tracker",

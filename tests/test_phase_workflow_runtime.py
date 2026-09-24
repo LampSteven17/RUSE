@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import ANY, Mock, call, patch
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from common.logging.agent_logger import AgentLogger
@@ -174,7 +175,7 @@ def six_workflow_document(config_key="scripted-cpu"):
     resources = (
         ("WebResearch", "wikipedia_compiler"),
         ("VideoViewing", "video_hls_mux_bbb"),
-        ("FileDownload", "download_ovh_1m"),
+        ("FileDownload", "download_cloudflare_1m"),
         ("DocumentCreation", "document_team_meeting_notes"),
         ("FileSyncUpload", "cloudflare_upload"),
         ("NetworkShareAccess", "share_team_notes"),
@@ -266,17 +267,56 @@ class RecordingBrain:
 
 
 class LoaderTests(unittest.TestCase):
+    def test_download_resources_match_authoritative_catalog(self):
+        expected = {
+            "download_cloudflare_1m": {
+                "url": "https://speed.cloudflare.com/__down?bytes=1048576",
+                "expected_bytes": 1048576,
+            },
+            "download_cloudflare_10m": {
+                "url": "https://speed.cloudflare.com/__down?bytes=10485760",
+                "expected_bytes": 10485760,
+            },
+            "download_hetzner_100m": {
+                "url": "https://fsn1-speed.hetzner.com/100MB.bin",
+                "expected_bytes": 104857600,
+            },
+        }
+        for profile in ("feedback-v2", "controls-v2"):
+            resources = json.loads(
+                (CONTRACT_ROOT / "resource-profiles" / f"{profile}.json").read_text()
+            )["resources"]
+            self.assertEqual(
+                {resource_id: {key: resources[resource_id][key] for key in ("url", "expected_bytes")}
+                 for resource_id in expected},
+                expected,
+            )
+            self.assertFalse(any("ovh" in resource_id for resource_id in resources))
+            self.assertNotIn("download_cloudflare_100m", resources)
+
     def test_all_six_workflows_validate_for_all_four_versioned_brains(self):
         expected = list(CANONICAL_HANDLERS)
+        plans = {}
         for sup_config in PLAN_FILENAMES:
             with self.subTest(sup_config=sup_config):
                 plan = load_document(six_workflow_document(sup_config), sup_config)
+                plans[sup_config] = plan
                 entries = plan.windows[0].sequence
                 self.assertEqual({entry.workflow for entry in entries}, set(expected))
                 self.assertEqual(plan.resource_profile, "feedback-v2")
                 self.assertEqual(
                     plan.brain_profile_id, PLAN_FILENAMES[sup_config][:-5]
                 )
+                with self.assertRaises(TypeError):
+                    entries[0].resource["kind"] = "changed"
+
+        for key in ("browseruse-gpu", "smolagents-gpu"):
+            profile = plans[key].brain_profile
+            self.assertEqual(profile["model"]["key"], "gemma")
+            self.assertEqual(profile["model"]["ollama"], "gemma4:26b")
+            self.assertIsNone(profile["system_guidance"])
+            self.assertEqual(profile["max_steps"], 10)
+        self.assertIsNone(plans["mchp-cpu"].brain_profile["model"])
 
     def test_contract_assets_and_plan_names_are_versioned_only(self):
         self.assertEqual(
@@ -397,12 +437,8 @@ class LoaderTests(unittest.TestCase):
                 with self.assertRaises(WorkflowPlanError):
                     load_document(document, "scripted-cpu")
 
-    def test_four_current_controls_load_with_expanded_catalog(self):
+    def test_historical_controls_with_retired_ovh_ids_are_rejected(self):
         self.assertEqual(set(CONFIGURATIONS), EXPECTED_CONFIGS)
-        plans = {
-            key: load_document(expanded_hls_control_document(key), key)
-            for key in EXPECTED_CONFIGS
-        }
         expected_workflows = {
             "WebResearch",
             "VideoViewing",
@@ -411,29 +447,24 @@ class LoaderTests(unittest.TestCase):
             "FileSyncUpload",
             "NetworkShareAccess",
         }
-        for key, plan in plans.items():
-            self.assertEqual(plan.sup_config, key)
-            self.assertEqual(str(plan.timezone), "America/New_York")
-            self.assertEqual(plan.resource_profile, "controls-v2")
-            self.assertEqual(plan.max_parallel, 10)
-            self.assertEqual(len(plan.windows), 24)
-            entries = [entry for window in plan.windows for entry in window.sequence]
+        for key in EXPECTED_CONFIGS:
+            document = expanded_hls_control_document(key)
+            with self.subTest(sup_config=key), self.assertRaisesRegex(
+                WorkflowPlanError, "unknown resource: download_ovh_1m"
+            ):
+                load_document(document, key)
+            self.assertEqual(document["sup_config"], key)
+            self.assertEqual(document["timezone"], "America/New_York")
+            self.assertEqual(document["resource_profile"], "controls-v2")
+            self.assertEqual(document["max_parallel"], 10)
+            self.assertEqual(len(document["schedule"]), 24)
+            entries = [entry for window in document["schedule"] for entry in window["sequence"]]
             self.assertEqual(
-                Counter(entry.workflow for entry in entries),
+                Counter(entry["workflow"] for entry in entries),
                 Counter({workflow: 240 for workflow in expected_workflows}),
             )
             self.assertEqual(len(entries), 1440)
-            self.assertEqual(plan.brain_profile_id, PLAN_FILENAMES[key][:-5])
-            with self.assertRaises(TypeError):
-                entries[0].resource["kind"] = "changed"
-
-        for key in ("browseruse-gpu", "smolagents-gpu"):
-            profile = plans[key].brain_profile
-            self.assertEqual(profile["model"]["key"], "gemma")
-            self.assertEqual(profile["model"]["ollama"], "gemma4:26b")
-            self.assertIsNone(profile["system_guidance"])
-            self.assertEqual(profile["max_steps"], 10)
-        self.assertIsNone(plans["mchp-cpu"].brain_profile["model"])
+            self.assertEqual(document["brain_profile"], PLAN_FILENAMES[key][:-5])
 
     def test_rejects_legacy_ids_names_profiles_resources_and_contributions(self):
         mutations = []
@@ -1089,7 +1120,7 @@ class TransferWorkflowTests(unittest.TestCase):
 
                 def execute_script(self, script, url):
                     self.scripts.append((script, url))
-                    with (self.download_dir / "1Mb.dat").open("wb") as handle:
+                    with (self.download_dir / "__down").open("wb") as handle:
                         handle.truncate(task.resource["expected_bytes"])
                     timeout = type("TimeoutException", (Exception,), {})
                     raise timeout("page navigation did not complete")
@@ -1123,8 +1154,8 @@ class TransferWorkflowTests(unittest.TestCase):
     def test_mchp_firefox_download_rejects_partial_wrong_size_and_timeout(self):
         task = self.task("mchp-cpu", "FileDownload")
         for name, created in (
-            ("partial", {"1Mb.dat.part": 10}),
-            ("wrong size", {"1Mb.dat": task.resource["expected_bytes"] - 1}),
+            ("partial", {"__down.part": 10}),
+            ("wrong size", {"__down": task.resource["expected_bytes"] - 1}),
             ("missing", {}),
         ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
@@ -1163,7 +1194,7 @@ class TransferWorkflowTests(unittest.TestCase):
 
     def test_mchp_firefox_download_accepts_real_duplicate_names_in_owned_directory(self):
         task = self.task("mchp-cpu", "FileDownload")
-        for filename in ("1Mb.dat", "1Mb (1).dat", "1Mb(1).dat"):
+        for filename in ("__down", "__down (1)", "__down(1)"):
             with self.subTest(filename=filename), tempfile.TemporaryDirectory() as temporary:
                 workspace = Path(temporary)
 
@@ -1221,7 +1252,7 @@ class TransferWorkflowTests(unittest.TestCase):
 
             def execute_script(self, _script, _url):
                 barrier.wait(timeout=2)
-                filename = Path(self.task.resource["url"]).name
+                filename = Path(urlsplit(self.task.resource["url"]).path).name
                 with (self.destination / filename).open("wb") as handle:
                     handle.truncate(self.task.resource["expected_bytes"])
 
@@ -1249,7 +1280,7 @@ class TransferWorkflowTests(unittest.TestCase):
                     self.destination = destination
                     self.cleaned = False
                 def execute_script(self, _script, _url):
-                    for filename in ("1Mb.dat", "1Mb(1).dat"):
+                    for filename in ("__down", "__down(1)"):
                         with (self.destination / filename).open("wb") as handle:
                             handle.truncate(task.resource["expected_bytes"])
                 def cleanup(self):
@@ -1260,7 +1291,7 @@ class TransferWorkflowTests(unittest.TestCase):
                 return owners[-1]
             with self.assertRaisesRegex(
                 RuntimeError,
-                r"resource_id=download_ovh_1m.*expected_bytes=1048576.*created_files=.*1Mb\(1\)\.dat.*observed_sizes=.*elapsed_seconds=",
+                r"resource_id=download_cloudflare_1m.*expected_bytes=1048576.*created_files=.*__down\(1\).*observed_sizes=.*elapsed_seconds=",
             ):
                 firefox_download(task, workspace, factory)
             self.assertTrue(owners[0].cleaned)

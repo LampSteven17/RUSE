@@ -41,6 +41,19 @@ START = '2026-09-15T12:00:00+00:00'
 
 
 class ProbeTests(unittest.TestCase):
+    def test_download_rotation_matches_approved_catalog_order(self):
+        self.assertEqual(
+            PROBE_RESOURCES['FileDownload'],
+            (
+                'download_cloudflare_1m',
+                'download_cloudflare_10m',
+                'download_hetzner_100m',
+                'download_sasag_1m',
+                'download_sasag_10m',
+                'download_sasag_100m',
+            ),
+        )
+
     def test_all_27_authoritative_variants_real_loader_and_counts(self):
         count = 0
         for workflow, resources in PROBE_RESOURCES.items():

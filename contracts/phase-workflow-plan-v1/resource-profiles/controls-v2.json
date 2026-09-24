@@ -312,22 +312,22 @@
         ]
       }
     },
-    "download_ovh_1m": {
+    "download_cloudflare_1m": {
       "workflow": "FileDownload",
       "kind": "https_download",
-      "url": "https://sbg.proof.ovh.net/files/1Mb.dat",
+      "url": "https://speed.cloudflare.com/__down?bytes=1048576",
       "expected_bytes": 1048576
     },
-    "download_ovh_10m": {
+    "download_cloudflare_10m": {
       "workflow": "FileDownload",
       "kind": "https_download",
-      "url": "https://sbg.proof.ovh.net/files/10Mb.dat",
+      "url": "https://speed.cloudflare.com/__down?bytes=10485760",
       "expected_bytes": 10485760
     },
-    "download_ovh_100m": {
+    "download_hetzner_100m": {
       "workflow": "FileDownload",
       "kind": "https_download",
-      "url": "https://sbg.proof.ovh.net/files/100Mb.dat",
+      "url": "https://fsn1-speed.hetzner.com/100MB.bin",
       "expected_bytes": 104857600
     },
     "download_sasag_1m": {
