@@ -22,15 +22,35 @@ class NativeNtp:
     def __init__(self, enabled=True):
         self.enabled = enabled
         self.calls = []
+        self.timeouts = []
         self.fail = False
+        self.readbacks_before_apply = 0
+        self.transition_pending = False
+        self.pending_enabled = enabled
+        self.query_fail_after = None
+        self.queries = 0
 
-    def __call__(self, *args):
+    def __call__(self, *args, timeout):
         self.calls.append(args)
+        self.timeouts.append(timeout)
         if args[0] == "timedatectl":
-            return f'CanNTP=yes\nNTP={"yes" if self.enabled else "no"}\n'
+            self.queries += 1
+            if self.query_fail_after == self.queries:
+                raise RuntimeError("native state query failed")
+            reported = self.enabled
+            if self.transition_pending and self.readbacks_before_apply:
+                self.readbacks_before_apply -= 1
+                if not self.readbacks_before_apply:
+                    self.enabled = self.pending_enabled
+                    self.transition_pending = False
+            return f'CanNTP=yes\nNTP={"yes" if reported else "no"}\n'
         if self.fail:
             raise RuntimeError("native service transition failed")
-        self.enabled = args[-1] == "true"
+        self.pending_enabled = args[-1] == "true"
+        self.transition_pending = True
+        if not self.readbacks_before_apply:
+            self.enabled = self.pending_enabled
+            self.transition_pending = False
         return ""
 
     @property
@@ -38,11 +58,26 @@ class NativeNtp:
         return [args[-1] for args in self.calls if args[0] == "sudo"]
 
 
+class FakeTime:
+    def __init__(self):
+        self.value = 0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.value += seconds
+
+
 class NtpPolicyTests(TestCase):
-    def make(self, intervals=((75, 105),), enabled=True):
+    def make(self, intervals=((75, 105),), enabled=True, clock=None):
         native, logger = NativeNtp(enabled), Mock()
+        clock = clock or FakeTime()
         policy = NtpPolicy(intervals, ZoneInfo("America/New_York"), logger,
-                           run=native, now=lambda: stamp("2026-11-01T07:00:00"))
+                           run=native, now=lambda: stamp("2026-11-01T07:00:00"),
+                           monotonic=clock.monotonic, sleep=clock.sleep)
         return policy, native, logger
 
     def test_all_brains_and_profiles_accept_optional_policy_and_preserve_windows(self):
@@ -123,6 +158,60 @@ class NtpPolicyTests(TestCase):
         self.assertIsNone(policy.last_requested)
         self.assertEqual(logger.info.call_args.args[0], "NTP policy failure")
         self.assertFalse(native.enabled)
+
+    def test_transition_polls_old_state_once_for_enable_and_disable(self):
+        for initially_enabled, desired in ((False, True), (True, False)):
+            with self.subTest(initially_enabled=initially_enabled, desired=desired):
+                clock = FakeTime()
+                policy, native, _ = self.make(enabled=initially_enabled, clock=clock)
+                native.readbacks_before_apply = 1
+                policy._transition(desired, stamp("2026-11-01T07:00:00"), "test")
+                self.assertEqual(native.transitions, ["true" if desired else "false"])
+                self.assertEqual(clock.sleeps, [1])
+                self.assertEqual(native.timeouts, [120, 120, 120, 119])
+
+    def test_never_converging_readback_uses_one_deadline_and_retains_observation(self):
+        clock = FakeTime()
+        policy, native, logger = self.make(enabled=False, clock=clock)
+        native.readbacks_before_apply = 999
+        with self.assertRaisesRegex(RuntimeError, "before deadline"):
+            policy._transition(True, stamp("2026-11-01T07:00:00"), "test")
+        self.assertEqual(native.transitions, ["true"])
+        self.assertEqual(clock.value, 120)
+        self.assertEqual(native.timeouts[:3], [120, 120, 120])
+        self.assertEqual(native.timeouts[-1], 1)
+        failure = logger.info.call_args.args[1]
+        self.assertEqual(failure["observed_ntp_state"], {"CanNTP": "yes", "NTP": "no"})
+
+    def test_command_duration_consumes_the_same_transition_budget(self):
+        clock = FakeTime()
+        native = NativeNtp(enabled=False)
+
+        def delayed_native(*args, timeout):
+            result = native(*args, timeout=timeout)
+            clock.value += 30
+            return result
+
+        policy = NtpPolicy((), ZoneInfo("America/New_York"), Mock(), run=delayed_native,
+                           monotonic=clock.monotonic, sleep=clock.sleep)
+        policy._transition(True, stamp("2026-11-01T07:00:00"), "test")
+        self.assertEqual(native.timeouts, [120, 90, 60])
+
+    def test_initial_query_failure_does_not_report_a_previous_transition_state(self):
+        policy, native, logger = self.make(enabled=False)
+        policy._transition(True, stamp("2026-11-01T07:00:00"), "first")
+        native.query_fail_after = native.queries + 1
+        with self.assertRaisesRegex(RuntimeError, "state query failed"):
+            policy._transition(False, stamp("2026-11-01T07:00:00"), "second")
+        self.assertIsNone(logger.info.call_args.args[1]["observed_ntp_state"])
+
+    def test_query_failure_reports_last_observed_state(self):
+        policy, native, logger = self.make(enabled=False)
+        native.query_fail_after = 2
+        with self.assertRaisesRegex(RuntimeError, "state query failed"):
+            policy._transition(True, stamp("2026-11-01T07:00:00"), "test")
+        self.assertEqual(logger.info.call_args.args[1]["observed_ntp_state"],
+                         {"CanNTP": "yes", "NTP": "no"})
 
     def test_native_commands_are_bounded_and_do_not_install_clients(self):
         with patch("phase_workflow.ntp_policy.subprocess.run", return_value=SimpleNamespace(returncode=0, stdout="ok")) as run:

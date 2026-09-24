@@ -32,7 +32,22 @@ explicit operator approval.
 ## Changes after the recovery point
 
 The first subsequent commit documents this freeze only; it changes no runtime.
-No post-freeze stability fixes have been made at this point.
+
+The 2026-09-24 stability corrections are limited to the parenthesized-link
+correction (10 link/truth tests) and bounded native NTP verification (20 NTP
+tests). The pre-stability checkpoint remains preserved as
+`recovery/pre-stability-audit-2026-09-24` at
+`2bfa7d2a66460fdfbd1f4efb0a239224cd6946d9`.
+
+On 2026-09-24, isolated CPU canary
+`decoy-mchp-canary/2026-09-24_140731Z` ran one native NTP adapter verification
+cycle. Its SUP remained continuous (PID `11198`, `NRestarts=0`); the native
+timesync journal recorded accepted synchronization at
+`14:36:06.631962Z`, within 0.95 seconds of enable. The harness's immediate
+active-state assertion failed during normal service activation, but its
+preserved journal and final health evidence confirm the completed transition.
+This is native-adapter plus SUP-continuity evidence, not scheduler integration
+or fleet qualification.
 
 Keep each later approved stability correction in a separate focused commit on
 `main`. Update this section with its scope and validation, without moving the
