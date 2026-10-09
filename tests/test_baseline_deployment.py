@@ -7,11 +7,13 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from deployment_engine import __main__ as cli
+from deployment_engine import list as list_command
 from deployment_engine.core import feedback, plan, phase_run_registry as registry
 from deployment_engine.core.config import DeploymentConfig
 from deployment_engine.core.deploy_steps import register_phase_run
+from deployment_engine.core.vm_naming import make_run_dep_id, make_vm_prefix
 from deployment_engine.decoy.spinup import _validate_behavior_source
-from tests.test_phase_workflow_runtime import expanded_hls_control_document
+from tests.test_phase_workflow_runtime import CONTRACT_ROOT, six_workflow_document
 
 
 class BaselineTests(TestCase):
@@ -28,8 +30,19 @@ class BaselineTests(TestCase):
     def generation(self, preset="colfix_v12.5.0", direction="not-human", timestamp="2026-09-21_1200Z"):
         path = self.base / preset / direction / timestamp
         path.mkdir(parents=True)
+        instructions = json.loads(
+            (CONTRACT_ROOT / "capabilities-v1.json").read_text()
+        )["instructions"]["controls-v2"]
         for sup, name in feedback.DECOY_PLAN_FILENAMES.items():
-            (path / name).write_text(json.dumps(expanded_hls_control_document(sup)))
+            document = six_workflow_document(sup)
+            document["resource_profile"] = "controls-v2"
+            for window in document["schedule"]:
+                for entry in window["sequence"]:
+                    if sup in {"browseruse-gpu", "smolagents-gpu"}:
+                        entry["instruction"] = instructions[entry["workflow"]]
+                    else:
+                        entry.pop("instruction", None)
+            (path / name).write_text(json.dumps(document))
         return path
 
     def test_cli_default_directions_and_versions_are_isolated(self):
@@ -104,6 +117,225 @@ class BaselineTests(TestCase):
             self.assertEqual(cli._cmd_deploy(["--baseline"]), 0)
             execute.assert_not_called()
         self.assertTrue(feedback.decoy_generation_uses_network_share(path, purpose="control"))
+
+    def test_llm_comparison_is_ordered_unique_single_v100_tasks(self):
+        selected = self.generation(direction="human")
+        smol_path = selected / "smolagents-v1.json"
+        smol_document = json.loads(smol_path.read_text())
+        for window in smol_document["schedule"]:
+            window["sequence"] = [
+                entry for entry in window["sequence"]
+                if entry["workflow"] != "NetworkShareAccess"
+            ]
+        smol_path.write_text(json.dumps(smol_document))
+        tasks = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True
+        )
+        self.assertEqual(len(tasks), 36)
+        self.assertEqual(len({task["config_name"] for task in tasks}), 36)
+        gpu_expected = [
+            (model, behavior)
+            for model in plan.LLM_COMPARISON_MODELS
+            for behavior in ("browseruse-gpu", "smolagents-gpu")
+        ]
+        cpu_expected = [
+            (model, behavior)
+            for model in plan.LLM_COMPARISON_CPU_MODELS
+            for behavior in ("browseruse-gpu", "smolagents-gpu")
+        ]
+        self.assertEqual(
+            [(task["requested_model"], task["deployments"][0]["behavior"])
+             for task in tasks],
+            gpu_expected + cpu_expected,
+        )
+        for index, task in enumerate(tasks):
+            self.assertEqual(task["behavior_source"], selected)
+            self.assertEqual(task["baseline_direction"], "human")
+            hardware = "gpu" if index < 20 else "cpu"
+            self.assertEqual(task["gpu_tier"], "v100" if hardware == "gpu" else "cpu")
+            flavor = "v100-1gpu.14vcpu.28g" if hardware == "gpu" else "v1.14vcpu.28g"
+            self.assertEqual(task["comparison_hardware"], hardware)
+            self.assertEqual(task["deployments"][0]["flavor"], flavor)
+            self.assertEqual(task["deployments"][0]["count"], 1)
+            if hardware == "cpu":
+                self.assertTrue(task["config_name"].endswith("-cpu"))
+        with patch.object(plan.output, "info") as info, \
+             patch.object(plan.output, "confirm", return_value=False):
+            self.assertFalse(plan.show_plan_and_confirm(tasks, "decoy"))
+        rendered = "\n".join(str(call.args[0]) for call in info.call_args_list if call.args)
+        self.assertIn(
+            "Comparison total: 36 SUPs (20 GPU, 16 CPU) + 18 selected-plan share sidecars = 54 VMs",
+            rendered,
+        )
+
+    def test_llm_comparison_cli_scope_and_hardware_are_strict(self):
+        self.generation(direction="human")
+        ctrlfix_source = self.generation(
+            preset="ctrlfix_v12.5.1", direction="human"
+        )
+        invalid = (
+            ["--llm-comparison"],
+            ["--baseline", "--llm-comparison", "--human"],
+            ["--decoys", "--baseline", "--llm-comparison"],
+            ["--decoys", "--baseline", "--llm-comparison", "--human", "--gpu", "rtx"],
+            ["--decoys", "--baseline", "--llm-comparison", "--human", "--controls"],
+        )
+        for args in invalid:
+            with self.subTest(args=args), patch.object(plan, "build_baseline_plan") as build, self.assertRaises(SystemExit):
+                cli._cmd_deploy(args)
+            build.assert_not_called()
+        with patch.object(plan, "show_plan_and_confirm", return_value=False) as show:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", "--baseline", "--human", "--llm-comparison"
+            ]), 0)
+        self.assertEqual(len(show.call_args.args[0]), 36)
+        with patch.object(plan, "show_plan_and_confirm", return_value=False) as show:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", "--baseline", "--ctrlfix", "--human",
+                "--llm-comparison",
+            ]), 0)
+        self.assertEqual(len(show.call_args.args[0]), 36)
+        self.assertTrue(all(
+            task["behavior_source"] == ctrlfix_source
+            for task in show.call_args.args[0]
+        ))
+        with patch.object(plan, "show_plan_and_confirm", return_value=False) as show:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", "--baseline", "--human", "--llm-comparison", "--gpu", "v100"
+            ]), 0)
+        self.assertEqual(len(show.call_args.args[0]), 36)
+
+    def test_comparison_config_round_trip_and_invalid_model_fail(self):
+        self.generation(direction="human")
+        task = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True
+        )[0]
+        feedback.generate_baseline_config(task, self.deploy)
+        path = self.deploy / task["config_name"] / "config.yaml"
+        loaded = DeploymentConfig.load(path)
+        self.assertTrue(loaded.llm_comparison)
+        self.assertEqual(loaded.requested_model, "gemma4:26b")
+        self.assertEqual(loaded.flavor_capacity, {"v100-1gpu.14vcpu.28g": 1})
+        self.assertEqual(_validate_behavior_source(str(task["behavior_source"]), loaded), [])
+        document = __import__("yaml").safe_load(path.read_text())
+        document["requested_model"] = "unapproved:latest"
+        path.write_text(__import__("yaml").safe_dump(document))
+        with self.assertRaisesRegex(ValueError, "approved model"):
+            DeploymentConfig.load(path)
+
+        cpu_task = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True
+        )[20]
+        feedback.generate_baseline_config(cpu_task, self.deploy)
+        cpu_config = DeploymentConfig.load(
+            self.deploy / cpu_task["config_name"] / "config.yaml"
+        )
+        self.assertEqual(cpu_config.comparison_hardware, "cpu")
+        self.assertEqual(cpu_config.gpu_tier, "cpu")
+        self.assertEqual(cpu_config.flavor_capacity, {"v1.14vcpu.28g": 1})
+
+    def test_comparison_model_reaches_installer_pull_and_service_environment(self):
+        playbook = (Path(__file__).parents[1] / "deployment_engine/playbooks/decoy/install-sups.yaml").read_text()
+        installer = (Path(__file__).parents[1] / "INSTALL_SUP.sh").read_text()
+        ollama_installer = (
+            Path(__file__).parents[1] / "decoys/install_scripts/install_ollama.sh"
+        ).read_text()
+        self.assertEqual(playbook.count('RUSE_WORKFLOW_MODEL="{{ workflow_model }}"'), 2)
+        self.assertEqual(playbook.count('RUSE_LLM_COMPARISON="{{ \'1\' if llm_comparison else \'\' }}"'), 2)
+        self.assertIn('MODEL_NAMES["comparison"]="$requested_model"', installer)
+        self.assertIn('export OLLAMA_MODELS="$model_name"', installer)
+        self.assertIn('export OLLAMA_MODEL="$model_name"', installer)
+        self.assertIn('export RUSE_WORKFLOW_MODEL="${RUSE_WORKFLOW_MODEL:-}"', installer)
+        self.assertIn('grep -Fqx -- "$model"', ollama_installer)
+        self.assertIn('"${RUSE_LLM_COMPARISON:-}" == "1"', installer)
+        self.assertIn('"${RUSE_COMPARISON_HARDWARE:-}" == "cpu"', installer)
+
+    def test_comparison_lifecycle_preflight_prefixes_and_selected_sidecar(self):
+        missing_show = patch.object(plan, "show_plan_and_confirm")
+        missing_execute = patch.object(plan, "execute_plan")
+        with missing_show as show, missing_execute as execute:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", "--baseline", "--human", "--llm-comparison"
+            ]), 1)
+        show.assert_not_called()
+        execute.assert_not_called()
+
+        old = self.generation(direction="human", timestamp="2026-09-20_1200Z")
+        invalid = self.generation(direction="human", timestamp="2026-09-21_1200Z")
+        (invalid / "browseruse-v1.json").unlink()
+        with patch.object(plan, "show_plan_and_confirm") as show, \
+             patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", "--baseline", "--human", "--llm-comparison"
+            ]), 1)
+        show.assert_not_called()
+        execute.assert_not_called()
+        self.assertTrue(old.is_dir())
+
+        (invalid / "browseruse-v1.json").write_text(
+            (old / "browseruse-v1.json").read_text()
+        )
+        before = {path.name: path.read_bytes() for path in invalid.iterdir()}
+        original = feedback.find_decoy_baseline_generation
+        with patch.object(
+            feedback, "find_decoy_baseline_generation", wraps=original
+        ) as find:
+            tasks = plan.build_baseline_plan(
+                "colfix_v12.5.0", "human", llm_comparison=True
+            )
+        find.assert_called_once_with("colfix_v12.5.0", "human")
+        self.assertTrue(all(task["behavior_source"] == invalid for task in tasks))
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in invalid.iterdir()}, before
+        )
+
+        first, second = tasks[:2]
+        first_config = DeploymentConfig(
+            deployment_name=first["config_name"], purpose="control", target=None,
+            deployments=first["deployments"], baseline_direction="human",
+            model_preset="colfix_v12.5.0", llm_comparison=True,
+            requested_model=first["requested_model"], gpu_tier="v100",
+        )
+        second_config = DeploymentConfig(
+            deployment_name=second["config_name"], purpose="control", target=None,
+            deployments=second["deployments"], baseline_direction="human",
+            model_preset="colfix_v12.5.0", llm_comparison=True,
+            requested_model=second["requested_model"], gpu_tier="v100",
+        )
+        run_id = "2026-10-09_120000Z"
+        first_prefix = make_vm_prefix(make_run_dep_id(first["config_name"], run_id))
+        second_prefix = make_vm_prefix(make_run_dep_id(second["config_name"], run_id))
+        self.assertFalse(first_prefix.startswith(second_prefix))
+        self.assertFalse(second_prefix.startswith(first_prefix))
+        statuses = {
+            first_prefix + "browseruse-gpu-0": "ACTIVE",
+            second_prefix + "smolagents-gpu-0": "ACTIVE",
+        }
+        self.assertTrue(list_command.has_exact_run_vm(
+            first["config_name"], run_id, first_config, statuses
+        ))
+        self.assertTrue(list_command.has_exact_run_vm(
+            second["config_name"], run_id, second_config, statuses
+        ))
+        self.assertFalse(list_command.has_exact_run_vm(
+            first["config_name"], run_id, first_config,
+            {second_prefix + "smolagents-gpu-0": "ACTIVE"},
+        ))
+
+        browser_path = invalid / "browseruse-v1.json"
+        browser_document = json.loads(browser_path.read_text())
+        for window in browser_document["schedule"]:
+            window["sequence"] = [
+                entry for entry in window["sequence"]
+                if entry["workflow"] != "NetworkShareAccess"
+            ]
+        browser_path.write_text(json.dumps(browser_document))
+        self.assertFalse(feedback.decoy_generation_uses_network_share(
+            invalid, purpose="control", expected_configs={"browseruse-gpu"}
+        ))
+        self.assertTrue(feedback.decoy_generation_uses_network_share(
+            invalid, purpose="control", expected_configs={"smolagents-gpu"}
+        ))
 
     def test_saved_config_installation_and_registry_metadata(self):
         source = self.generation(direction="human")

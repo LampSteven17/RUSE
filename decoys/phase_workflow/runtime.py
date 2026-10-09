@@ -93,16 +93,62 @@ _GPU_TIER_MODELS = {
     "rtx": "gemma4:e4b",
 }
 
+_TEXT_ONLY_COMPARISON_MODELS = frozenset({
+    "deepseek-r1:8b-0528-qwen3-q4_K_M",
+    "gpt-oss:20b",
+    "granite4.2:8b-q4_K_M",
+})
+
+_COMPARISON_MODELS = frozenset({
+    "gemma4:26b",
+    "gemma4:e4b-it-qat",
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.5:4b-q4_K_M",
+    "ministral-3:14b-instruct-2512-q4_K_M",
+    "ministral-3:3b-instruct-2512-q4_K_M",
+    "deepseek-r1:8b-0528-qwen3-q4_K_M",
+    "gpt-oss:20b",
+    "granite4.2:8b-q4_K_M",
+    "llama3.2-vision:11b-instruct-q4_K_M",
+})
+
+_CPU_COMPARISON_MODELS = frozenset({
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.5:9b-q4_K_M",
+    "gemma4:e4b-it-qat",
+    "ministral-3:3b-instruct-2512-q4_K_M",
+    "deepseek-r1:8b-0528-qwen3-q4_K_M",
+    "gpt-oss:20b",
+    "granite4.2:8b-q4_K_M",
+    "llama3.2-vision:11b-instruct-q4_K_M",
+})
+
 
 def _select_runtime_brain_profile(plan):
     """Bind the deployed hardware tier to the immutable runtime profile."""
     gpu_tier = os.environ.get("RUSE_WORKFLOW_GPU_TIER", "v100")
-    if gpu_tier not in _GPU_TIER_MODELS:
+    comparison = os.environ.get("RUSE_LLM_COMPARISON") == "1"
+    comparison_hardware = os.environ.get("RUSE_COMPARISON_HARDWARE", "gpu")
+    if gpu_tier not in _GPU_TIER_MODELS and not (
+        comparison and comparison_hardware == "cpu" and gpu_tier == "cpu"
+    ):
         raise RuntimeError(f"unsupported canonical workflow GPU tier: {gpu_tier}")
+    requested_model = os.environ.get("RUSE_WORKFLOW_MODEL")
+    if bool(requested_model) != comparison:
+        raise RuntimeError("explicit workflow model and comparison marker must be provided together")
+    if comparison and plan.hardware != "gpu":
+        raise RuntimeError("LLM comparison requires a canonical GPU Brain")
     if plan.hardware != "gpu":
         return plan.brain_profile, gpu_tier, None
 
-    ollama_model = _GPU_TIER_MODELS[gpu_tier]
+    approved_models = (
+        _COMPARISON_MODELS if comparison_hardware == "gpu" else _CPU_COMPARISON_MODELS
+    )
+    if comparison and (gpu_tier != ("v100" if comparison_hardware == "gpu" else "cpu")
+                       or requested_model not in approved_models
+                       or comparison_hardware not in {"gpu", "cpu"}):
+        raise RuntimeError("LLM comparison model and hardware selection are invalid")
+    ollama_model = requested_model or _GPU_TIER_MODELS[gpu_tier]
     installed_model = os.environ.get("OLLAMA_MODEL", ollama_model)
     if installed_model != ollama_model:
         raise RuntimeError(
@@ -113,10 +159,15 @@ def _select_runtime_brain_profile(plan):
     if not isinstance(model, Mapping):
         raise RuntimeError("canonical GPU Brain profile is missing its model")
     selected_model = MappingProxyType({**model, "ollama": ollama_model})
-    selected_profile = MappingProxyType({
+    profile_values = {
         **plan.brain_profile,
         "model": selected_model,
-    })
+    }
+    if (comparison
+            and plan.brain == "browseruse"
+            and ollama_model in _TEXT_ONLY_COMPARISON_MODELS):
+        profile_values["use_vision"] = False
+    selected_profile = MappingProxyType(profile_values)
     return selected_profile, gpu_tier, ollama_model
 
 
@@ -150,7 +201,10 @@ def run_workflow_runtime(config_key: str, behavior_config_dir: Optional[str]) ->
         "schema": plan.schema,
         "sup_config": plan.sup_config,
         "brain": plan.brain,
-        "hardware": plan.hardware,
+        "hardware": (
+            os.environ.get("RUSE_COMPARISON_HARDWARE", plan.hardware)
+            if os.environ.get("RUSE_LLM_COMPARISON") == "1" else plan.hardware
+        ),
         "gpu_tier": gpu_tier,
         "resource_profile": plan.resource_profile,
         "timezone": str(plan.timezone),
@@ -158,6 +212,11 @@ def run_workflow_runtime(config_key: str, behavior_config_dir: Optional[str]) ->
     }
     if ollama_model is not None:
         session_config["ollama_model"] = ollama_model
+    if os.environ.get("RUSE_LLM_COMPARISON") == "1":
+        session_config["requested_model"] = os.environ["RUSE_WORKFLOW_MODEL"]
+        session_config["comparison_hardware"] = os.environ.get("RUSE_COMPARISON_HARDWARE", "gpu")
+        if plan.brain == "browseruse":
+            session_config["use_vision"] = brain_profile.get("use_vision", True)
     logger.session_start(config=session_config)
     policy = (NtpPolicy(plan.ntp_off_intervals, plan.timezone, logger)
               if plan.ntp_off_intervals is not None else None)

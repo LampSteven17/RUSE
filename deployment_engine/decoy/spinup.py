@@ -172,7 +172,11 @@ def run_decoy_spinup(
     ):
         try:
             share_required = decoy_generation_uses_network_share(
-                Path(effective_source), purpose=config.purpose
+                Path(effective_source), purpose=config.purpose,
+                expected_configs=(
+                    {config.deployments[0]["behavior"]}
+                    if getattr(config, "llm_comparison", False) else None
+                ),
             )
         except FeedbackSourceError as exc:
             output.error(f"ERROR: {exc}")
@@ -311,6 +315,9 @@ def run_decoy_spinup(
         "run_dir": str(run_dir),
         "ruse_revision": ruse_revision,
         "workflow_gpu_tier": workflow_gpu_tier,
+        "workflow_model": getattr(config, "requested_model", None) or "",
+        "llm_comparison": getattr(config, "llm_comparison", False),
+        "comparison_hardware": getattr(config, "comparison_hardware", None) or "",
     }
     if config.is_probe():
         extra_vars.update({
@@ -621,6 +628,10 @@ def _validate_behavior_source(
         except FeedbackSourceError as exc:
             return [str(exc)]
         configured = tuple(dep.get("behavior") for dep in config.deployments)
+        if getattr(config, "llm_comparison", False):
+            if configured not in {("browseruse-gpu",), ("smolagents-gpu",)}:
+                return ["LLM comparison requires exactly one canonical GPU Brain"]
+            return []
         if (purpose == "other" and getattr(config, "deployment_name", None) == "decoy-mchp-canary"
                 and config.deployments == [{"behavior": "mchp-cpu", "flavor": "v1.14vcpu.28g", "count": 1}]):
             return []

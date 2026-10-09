@@ -31,6 +31,9 @@ class DeploymentConfig:
     probe_service: str | None = None  # explicit background-only Probe variant
     baseline_direction: str | None = None
     model_preset: str | None = None
+    llm_comparison: bool = False
+    requested_model: str | None = None
+    comparison_hardware: str | None = None
 
     @classmethod
     def load(cls, config_path: Path) -> DeploymentConfig:
@@ -65,6 +68,25 @@ class DeploymentConfig:
                     or raw.get("type", "decoy") != "decoy"
                     or purpose != "control" or target is not None):
                 raise ValueError("Baseline requires direction, model preset, Decoy control purpose and null target")
+        if raw.get("llm_comparison"):
+            from .plan import LLM_COMPARISON_CPU_MODELS, LLM_COMPARISON_MODELS
+            hardware = raw.get("comparison_hardware")
+            expected_flavor = (
+                "v100-1gpu.14vcpu.28g" if hardware == "gpu" else "v1.14vcpu.28g"
+            )
+            if (raw.get("baseline_direction") != "human"
+                    or raw.get("gpu_tier") != ("v100" if hardware == "gpu" else "cpu")
+                    or hardware not in {"gpu", "cpu"}
+                    or raw.get("requested_model") not in (
+                        LLM_COMPARISON_MODELS if hardware == "gpu" else LLM_COMPARISON_CPU_MODELS
+                    )
+                    or raw.get("deployments") not in (
+                        [{"behavior": "browseruse-gpu", "flavor": expected_flavor, "count": 1}],
+                        [{"behavior": "smolagents-gpu", "flavor": expected_flavor, "count": 1}],
+                    )):
+                raise ValueError("LLM comparison requires one canonical BrowserUse/SmolAgents plan and the approved model/hardware lineup")
+        elif "requested_model" in raw:
+            raise ValueError("requested_model is only valid for an LLM comparison")
         if not isinstance(capture_interface, str) or not capture_interface:
             raise ValueError("deployment config capture_interface must be non-empty")
         if raw.get("type") == "probe":
@@ -105,6 +127,9 @@ class DeploymentConfig:
             probe_service=raw.get("probe_service"),
             baseline_direction=raw.get("baseline_direction"),
             model_preset=raw.get("model_preset"),
+            llm_comparison=raw.get("llm_comparison", False),
+            requested_model=raw.get("requested_model"),
+            comparison_hardware=raw.get("comparison_hardware"),
         )
 
     def vm_count(self) -> int:

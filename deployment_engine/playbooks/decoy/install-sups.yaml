@@ -23,6 +23,9 @@
     ruse_repo: "https://github.com/LampSteven17/RUSE.git"
     ruse_revision: ""
     workflow_gpu_tier: "v100"
+    workflow_model: ""
+    llm_comparison: false
+    comparison_hardware: ""
     probe_install: false
     probe_service: ""
     probe_started_at: ""
@@ -155,6 +158,9 @@
       shell: |
         cd {{ ruse_path }}
         RUSE_WORKFLOW_GPU_TIER="{{ workflow_gpu_tier }}" \
+        RUSE_WORKFLOW_MODEL="{{ workflow_model }}" \
+        RUSE_LLM_COMPARISON="{{ '1' if llm_comparison else '' }}" \
+        RUSE_COMPARISON_HARDWARE="{{ comparison_hardware }}" \
           ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=1
       args:
         executable: /bin/bash
@@ -189,6 +195,9 @@
         RUSE_NO_SERVICE_START=1 \
         RUSE_WORKFLOW_BEHAVIOR_PATH="{{ staged_workflow_plan if sup_behavior in canonical_workflow_configs else '' }}" \
         RUSE_WORKFLOW_GPU_TIER="{{ workflow_gpu_tier }}" \
+        RUSE_WORKFLOW_MODEL="{{ workflow_model }}" \
+        RUSE_LLM_COMPARISON="{{ '1' if llm_comparison else '' }}" \
+        RUSE_COMPARISON_HARDWARE="{{ comparison_hardware }}" \
         RUSE_DEPLOYMENT_TYPE="{{ 'probe' if probe_install else 'decoy' }}" \
         RUSE_PROBE_WORKFLOW="{{ probe_workflow | default('') if probe_install else '' }}" \
         RUSE_PROBE_STARTED_AT="{{ probe_started_at }}" \

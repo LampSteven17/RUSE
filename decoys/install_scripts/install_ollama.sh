@@ -122,7 +122,10 @@ if [ -n "$MODELS_TO_INSTALL" ]; then
             log "Checking for model ($model)..."
             
             # Check if model is already installed (handle both with and without :latest tag)
-            if ollama list | grep -q "^$model" || ollama list | grep -q "^$model:latest"; then
+            if { [ "${RUSE_LLM_COMPARISON:-}" = "1" ] && \
+                    ollama list | awk 'NR > 1 {print $1}' | grep -Fqx -- "$model"; } || \
+               { [ "${RUSE_LLM_COMPARISON:-}" != "1" ] && \
+                    { ollama list | grep -q "^$model" || ollama list | grep -q "^$model:latest"; }; }; then
                 log "$model model already available"
             else
                 log "Pulling $model model (this may take several minutes)..."

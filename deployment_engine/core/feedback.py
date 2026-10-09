@@ -168,7 +168,7 @@ def validate_decoy_canary_generation(source_dir: Path) -> dict[str, object]:
 
 
 def decoy_generation_uses_network_share(
-    source_dir: Path, *, purpose: str
+    source_dir: Path, *, purpose: str, expected_configs: set[str] | None = None
 ) -> bool:
     """Return whether one already-valid canonical generation needs its sidecar."""
     if purpose == "control":
@@ -181,6 +181,8 @@ def decoy_generation_uses_network_share(
         raise FeedbackSourceError(
             f"canonical Decoy generation has unsupported purpose: {purpose!r}"
         )
+    if expected_configs is not None:
+        plans = {key: value for key, value in plans.items() if key in expected_configs}
     return any(
         entry.workflow == "NetworkShareAccess"
         for plan in plans.values()
@@ -233,15 +235,24 @@ def generate_baseline_config(task: dict, deploy_dir: Path) -> str:
 
     source = task["behavior_source"]
     validate_decoy_control_generation(source)
-    gpu = DECOY_CANONICAL_GPU_TIERS[task["gpu_tier"]]
+    gpu = DECOY_CANONICAL_GPU_TIERS.get(task["gpu_tier"])
     config = {
         "deployment_name": task["config_name"], "purpose": "control", "target": None,
         "baseline_direction": task["baseline_direction"], "model_preset": task["model_preset"],
         "capture_interface": "eno2", "behavior_source": str(source),
         "gpu_tier": task["gpu_tier"],
-        "flavor_capacity": {"v1.14vcpu.28g": 2, gpu["flavor"]: 2},
+        "flavor_capacity": (
+            {"v1.14vcpu.28g": 2, gpu["flavor"]: 2}
+            if gpu is not None else {"v1.14vcpu.28g": 1}
+        ),
         "deployments": task["deployments"],
     }
+    if task.get("is_llm_comparison"):
+        config["llm_comparison"] = True
+        config["requested_model"] = task["requested_model"]
+        config["comparison_hardware"] = task["comparison_hardware"]
+        flavor = task["deployments"][0]["flavor"]
+        config["flavor_capacity"] = {flavor: 1}
     path = deploy_dir / task["config_name"] / "config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
@@ -491,6 +502,7 @@ def config_vm_table_lines(
     deployments: list[dict],
     indent: str = "    ",
     gpu_tier: str | None = None,
+    requested_model: str | None = None,
 ) -> list[str]:
     """Per-VM provisioning table for a config.yaml `deployments` list
     ([{behavior, flavor, count}, ...]). Used for CONTROLS, whose VMs come from
@@ -509,11 +521,14 @@ def config_vm_table_lines(
         beh = dep.get("behavior", "?")
         details = _workflow_control_runtime_details(beh, capabilities)
         brain, model = details or _legacy_controls_vm_runtime_details(beh)
-        if gpu_tier is not None and beh in {"browseruse-gpu", "smolagents-gpu"}:
+        if (gpu_tier is not None and requested_model is None
+                and beh in {"browseruse-gpu", "smolagents-gpu"}):
             try:
                 model = DECOY_CANONICAL_GPU_TIERS[gpu_tier]["ollama_model"]
             except KeyError as exc:
                 raise ValueError(f"unsupported canonical GPU tier: {gpu_tier}") from exc
+        if requested_model is not None and beh in {"browseruse-gpu", "smolagents-gpu"}:
+            model = requested_model
         rows.append((beh, brain, dep.get("flavor", "?"), model))
     return _render_vm_table(rows, indent)
 

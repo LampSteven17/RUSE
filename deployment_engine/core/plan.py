@@ -20,6 +20,8 @@ Each task is a dict:
 
 from __future__ import annotations
 
+import re
+import json
 from pathlib import Path
 
 from . import output
@@ -137,12 +139,99 @@ def build_deploy_plan(
     return plan
 
 
-def build_baseline_plan(preset: str, direction: str, gpu_tier: str = "v100") -> list[dict]:
+LLM_COMPARISON_MODELS = (
+    "gemma4:26b",
+    "gemma4:e4b-it-qat",
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.5:4b-q4_K_M",
+    "ministral-3:14b-instruct-2512-q4_K_M",
+    "ministral-3:3b-instruct-2512-q4_K_M",
+    "deepseek-r1:8b-0528-qwen3-q4_K_M",
+    "gpt-oss:20b",
+    "granite4.2:8b-q4_K_M",
+    "llama3.2-vision:11b-instruct-q4_K_M",
+)
+LLM_COMPARISON_CPU_MODELS = (
+    "qwen3.8:27b-q4_K_M",
+    "qwen3.5:9b-q4_K_M",
+    "gemma4:e4b-it-qat",
+    "ministral-3:3b-instruct-2512-q4_K_M",
+    "deepseek-r1:8b-0528-qwen3-q4_K_M",
+    "gpt-oss:20b",
+    "granite4.2:8b-q4_K_M",
+    "llama3.2-vision:11b-instruct-q4_K_M",
+)
+
+
+def _comparison_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def build_baseline_plan(
+    preset: str,
+    direction: str,
+    gpu_tier: str = "v100",
+    *,
+    llm_comparison: bool = False,
+) -> list[dict]:
     from .feedback import (find_decoy_baseline_generation, _decoy_preset_slug,
                            canonical_decoy_feedback_deployments)
 
     source = find_decoy_baseline_generation(preset, direction)
     name = f"decoy-baseline-{_decoy_preset_slug(preset)}-{direction}"
+    if llm_comparison:
+        if direction != "human" or gpu_tier != "v100":
+            raise FeedbackSourceError("LLM comparison requires the human Baseline on V100")
+        tasks = []
+        share_configs = set()
+        for behavior, filename in (
+            ("browseruse-gpu", "browseruse-v1.json"),
+            ("smolagents-gpu", "smolagents-v1.json"),
+        ):
+            document = json.loads((source / filename).read_text(encoding="utf-8"))
+            if any(
+                entry.get("workflow") == "NetworkShareAccess"
+                for window in document.get("schedule", [])
+                for entry in window.get("sequence", [])
+            ):
+                share_configs.add(behavior)
+        for model in LLM_COMPARISON_MODELS:
+            for behavior in ("browseruse-gpu", "smolagents-gpu"):
+                brain = behavior.removesuffix("-gpu")
+                identity = f"{name}-{brain}-{_comparison_slug(model)}"
+                tasks.append({
+                    "label": identity, "config_name": identity,
+                    "is_baseline": True, "is_llm_comparison": True,
+                    "is_controls": True, "purpose": "control", "target": None,
+                    "model_preset": preset, "baseline_direction": direction,
+                    "behavior_source": source, "configs_spec": None, "manifest": None,
+                    "gpu_tier": gpu_tier, "requested_model": model,
+                    "comparison_hardware": "gpu",
+                    "share_required": behavior in share_configs,
+                    "deployments": [{
+                        "behavior": behavior,
+                        "flavor": "v100-1gpu.14vcpu.28g",
+                        "count": 1,
+                    }],
+                })
+        for model in LLM_COMPARISON_CPU_MODELS:
+            for behavior in ("browseruse-gpu", "smolagents-gpu"):
+                brain = behavior.removesuffix("-gpu")
+                identity = f"{name}-{brain}-{_comparison_slug(model)}-cpu"
+                tasks.append({
+                    "label": identity, "config_name": identity,
+                    "is_baseline": True, "is_llm_comparison": True,
+                    "is_controls": True, "purpose": "control", "target": None,
+                    "model_preset": preset, "baseline_direction": direction,
+                    "behavior_source": source, "configs_spec": None, "manifest": None,
+                    "gpu_tier": "cpu", "requested_model": model,
+                    "comparison_hardware": "cpu",
+                    "share_required": behavior in share_configs,
+                    "deployments": [{
+                        "behavior": behavior, "flavor": "v1.14vcpu.28g", "count": 1,
+                    }],
+                })
+        return tasks
     return [{
         "label": name, "config_name": name, "is_baseline": True,
         "is_controls": True, "purpose": "control", "target": None,
@@ -413,6 +502,15 @@ def show_plan_and_confirm(
     n = len(plan)
     output.banner(f"DEPLOY PLAN ({deploy_type}, {n} task{'s' if n != 1 else ''})")
     output.info("")
+    if plan and all(task.get("is_llm_comparison") for task in plan):
+        gpu_count = sum(task["comparison_hardware"] == "gpu" for task in plan)
+        cpu_count = sum(task["comparison_hardware"] == "cpu" for task in plan)
+        sidecars = sum(bool(task.get("share_required")) for task in plan)
+        output.info(
+            f"  Comparison total: {n} SUPs ({gpu_count} GPU, {cpu_count} CPU) "
+            f"+ {sidecars} selected-plan share sidecars = {n + sidecars} VMs"
+        )
+        output.info("")
 
     any_mismatch = False
     for i, task in enumerate(plan, 1):
@@ -450,6 +548,18 @@ def show_plan_and_confirm(
                 if task.get("is_baseline"):
                     output.info(f"      baseline:    {task['baseline_direction']}")
                     output.info(f"      preset:      {task['model_preset']}")
+                    if task.get("requested_model"):
+                        output.info(f"      model:       {task['requested_model']}")
+                        output.info(f"      hardware:    {task['comparison_hardware']}")
+                        if (task["deployments"][0]["behavior"] == "browseruse-gpu"
+                                and task["requested_model"] in {
+                                    "deepseek-r1:8b-0528-qwen3-q4_K_M",
+                                    "gpt-oss:20b",
+                                    "granite4.2:8b-q4_K_M",
+                                }):
+                            output.info("      BrowserUse:  use_vision=False (comparison profile)")
+                        if task.get("share_required"):
+                            output.info("      sidecar:     one fleet-local v1.small share host")
                     output.info("      target:      null (global)")
                 output.info(f"      generation:  {src.name}")
                 output.info(f"      source:      {src}")
@@ -466,7 +576,8 @@ def show_plan_and_confirm(
                 output.info("")
                 output.info(f"      VMs to provision ({sum(d.get('count', 1) for d in deps)}):")
                 for line in config_vm_table_lines(deps, indent="        ",
-                                                 gpu_tier=task.get("gpu_tier", "v100")):
+                                                 gpu_tier=task.get("gpu_tier", "v100"),
+                                                 requested_model=task.get("requested_model")):
                     output.info(line)
         else:
             if deploy_type == "decoy":

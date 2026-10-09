@@ -96,6 +96,8 @@ examples:
     # Scope flags — opt into just controls, just feedback, or (default) both.
     p.add_argument("--controls", action="store_true", help="Deploy the control fleet (no feedback)")
     p.add_argument("--baseline", action="store_true", help="Deploy one global PHASE Baseline fleet")
+    p.add_argument("--llm-comparison", action="store_true",
+                   help="With --decoys --baseline --human, compare the approved LLM lineup")
     direction = p.add_mutually_exclusive_group()
     direction.add_argument("--human", action="store_true", help="With --baseline, select human direction")
     direction.add_argument("--not-human", action="store_true", help="With --baseline, select not-human (default)")
@@ -278,19 +280,26 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
-    if (args.human or args.not_human) and not args.baseline:
-        parser.error("--human/--not-human require --baseline")
+    if (args.human or args.not_human or args.llm_comparison) and not args.baseline:
+        parser.error("--human/--not-human/--llm-comparison require --baseline")
     if args.baseline:
         if any((args.controls, args.feedback, args.rampart, args.ghosts, args.probes,
                 args.background_services, args.probe_sup, args.canary, args.canary_sup,
                 args.source, args.target, args.config_name)):
             parser.error("--baseline is a global Decoy fleet; cannot combine scopes, targets or sources")
+        if args.llm_comparison and (
+            not args.decoy or not args.human or args.not_human or args.gpu == "rtx"
+        ):
+            parser.error("--llm-comparison requires --decoys --baseline --human and V100 hardware")
         from .core.plan import build_baseline_plan, show_plan_and_confirm, execute_plan
         from .core.feedback import FeedbackSourceError
         preset = "ctrlfix_v12.5.1" if args.ctrlfix else (args.preset or "colfix_v12.5.0")
         gpu_tier = args.gpu or "v100"
         try:
-            tasks = build_baseline_plan(preset, "human" if args.human else "not-human", gpu_tier)
+            tasks = build_baseline_plan(
+                preset, "human" if args.human else "not-human", gpu_tier,
+                llm_comparison=args.llm_comparison,
+            )
         except FeedbackSourceError as exc:
             output.error(f"ERROR: {exc}")
             return 1

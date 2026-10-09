@@ -384,6 +384,37 @@ apply_phase_workflow_gpu_tier() {
     is_phase_workflow_config "$CONFIG_KEY" || return 0
 
     local gpu_tier="${RUSE_WORKFLOW_GPU_TIER:-v100}"
+    local requested_model="${RUSE_WORKFLOW_MODEL:-}"
+    if [[ -n "$requested_model" ]]; then
+        [[ "${RUSE_LLM_COMPARISON:-}" == "1" ]] || {
+            log_error "Explicit workflow models require comparison mode"
+            return 1
+        }
+        [[ "$CONFIG_KEY" == "browseruse-gpu" || "$CONFIG_KEY" == "smolagents-gpu" ]] || {
+            log_error "Explicit workflow models require a canonical GPU Brain"
+            return 1
+        }
+        local comparison_hardware="${RUSE_COMPARISON_HARDWARE:-gpu}"
+        [[ "$comparison_hardware" == "gpu" || "$comparison_hardware" == "cpu" ]] || {
+            log_error "Comparison hardware must be gpu or cpu"
+            return 1
+        }
+        [[ ( "$comparison_hardware" == "gpu" && "$gpu_tier" == "v100" ) || \
+           ( "$comparison_hardware" == "cpu" && "$gpu_tier" == "cpu" ) ]] || {
+            log_error "Comparison hardware does not match workflow tier"
+            return 1
+        }
+        case "$requested_model" in
+            gemma4:26b|gemma4:e4b-it-qat|qwen3.8:27b-q4_K_M|qwen3.5:4b-q4_K_M|qwen3.5:9b-q4_K_M|\
+            ministral-3:14b-instruct-2512-q4_K_M|ministral-3:3b-instruct-2512-q4_K_M|\
+            deepseek-r1:8b-0528-qwen3-q4_K_M|gpt-oss:20b|granite4.2:8b-q4_K_M|\
+            llama3.2-vision:11b-instruct-q4_K_M) ;;
+            *) log_error "Unsupported workflow comparison model: $requested_model"; return 1 ;;
+        esac
+        MODEL_NAMES["comparison"]="$requested_model"
+        MODEL="comparison"
+        return 0
+    fi
     case "$gpu_tier" in
         v100)
             ;;
@@ -801,7 +832,8 @@ install_system_deps() {
 
     # Model-backed GPU configurations require the NVIDIA driver. CPU hosts have
     # no NVIDIA PCI device and canonical CPU controls have MODEL=none.
-    if [[ "$MODEL" != "none" ]]; then
+    if [[ "$MODEL" != "none" && !( "${RUSE_LLM_COMPARISON:-}" == "1" && \
+            "${RUSE_COMPARISON_HARDWARE:-}" == "cpu" ) ]]; then
         install_nvidia_driver
     fi
 }
@@ -973,6 +1005,9 @@ export PATH="\$HOME/.local/bin:\$PATH"
 export OLLAMA_MODEL="$model_name"
 export LITELLM_MODEL="ollama/$model_name"
 export RUSE_WORKFLOW_GPU_TIER="$workflow_gpu_tier"
+export RUSE_WORKFLOW_MODEL="${RUSE_WORKFLOW_MODEL:-}"
+export RUSE_LLM_COMPARISON="${RUSE_LLM_COMPARISON:-}"
+export RUSE_COMPARISON_HARDWARE="${RUSE_COMPARISON_HARDWARE:-}"
 export RUSE_DEPLOYMENT_TYPE="${RUSE_DEPLOYMENT_TYPE:-decoy}"
 export RUSE_PROBE_STARTED_AT="${RUSE_PROBE_STARTED_AT:-}"
 export PYTHONPATH="$deploy_dir/decoys:\${PYTHONPATH:-}"
@@ -1262,7 +1297,7 @@ main() {
     fi
 
     parse_args "$@"
-    apply_phase_workflow_gpu_tier
+    apply_phase_workflow_gpu_tier || exit 1
 
     echo ""
     echo -e "${BLUE}================================${NC}"

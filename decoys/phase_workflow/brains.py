@@ -805,6 +805,8 @@ def browseruse_runner(
             browser_session=browser_session,
             directly_open_url=False,
         )
+        if "use_vision" in profile:
+            agent_kwargs["use_vision"] = profile["use_vision"]
         if tools is not None:
             agent_kwargs["tools"] = tools
         if playback is not None:

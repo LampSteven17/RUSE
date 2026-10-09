@@ -1579,6 +1579,76 @@ class TransferWorkflowTests(unittest.TestCase):
                         self.assertEqual(result.completed, expected)
                         self.assertEqual(len(transfer.calls), min(invocations, 1))
 
+    def test_comparison_models_reach_both_canonical_framework_adapters(self):
+        from deployment_engine.core.plan import (
+            LLM_COMPARISON_CPU_MODELS,
+            LLM_COMPARISON_MODELS,
+        )
+
+        text_only = {
+            "deepseek-r1:8b-0528-qwen3-q4_K_M",
+            "gpt-oss:20b",
+            "granite4.2:8b-q4_K_M",
+        }
+        for hardware, model in (
+            *(("gpu", value) for value in LLM_COMPARISON_MODELS),
+            *(("cpu", value) for value in LLM_COMPARISON_CPU_MODELS),
+        ):
+            browser_values = {}
+            smol_values = {}
+            browser_api = self.browser_api(0)
+            original_agent = browser_api[0]
+
+            class BrowserAgent(original_agent):
+                def __init__(self, **values):
+                    browser_values.update(values)
+                    super().__init__(**values)
+
+            smol_api = list(self.smol_api(0))
+            original_smol_model = smol_api[1]
+
+            class SmolModel(original_smol_model):
+                def __init__(self, **values):
+                    smol_values.update(values)
+                    super().__init__(**values)
+
+            plans = {
+                key: load_document(six_workflow_document(key), key)
+                for key in ("browseruse-gpu", "smolagents-gpu")
+            }
+            env = {
+                "RUSE_WORKFLOW_GPU_TIER": "v100" if hardware == "gpu" else "cpu",
+                "RUSE_WORKFLOW_MODEL": model,
+                "RUSE_LLM_COMPARISON": "1",
+                "RUSE_COMPARISON_HARDWARE": hardware,
+                "OLLAMA_MODEL": model,
+            }
+            with self.subTest(model=model), patch.dict(os.environ, env, clear=True):
+                browser_profile, _, _ = _select_runtime_brain_profile(plans["browseruse-gpu"])
+                smol_profile, _, _ = _select_runtime_brain_profile(plans["smolagents-gpu"])
+                task = self.task("browseruse-gpu", "FileSyncUpload")
+                with patch("phase_workflow.brains._require_distribution"):
+                    browseruse_runner(
+                        task, Path("/tmp/day"), browser_profile,
+                        syncer=Mock(),
+                        framework_api=(BrowserAgent, *browser_api[1:]),
+                        llm_factory=lambda selected, _logger: selected,
+                        step_logger=lambda _logger, _result: None,
+                        chromium_args=[],
+                    )
+                    smol_api[1] = SmolModel
+                    smolagents_runner(
+                        self.task("smolagents-gpu", "FileSyncUpload"),
+                        Path("/tmp/day"), smol_profile, syncer=Mock(),
+                        framework_api=tuple(smol_api),
+                    )
+            self.assertEqual(browser_values["llm"], model)
+            if model in text_only:
+                self.assertIs(browser_values["use_vision"], False)
+            else:
+                self.assertNotIn("use_vision", browser_values)
+            self.assertEqual(smol_values["model_id"], f"ollama/{model}")
+
     def test_llm_download_actions_require_exactly_one_exact_size_file(self):
         for sup_config, runner, api_factory in (
             ("browseruse-gpu", browseruse_runner, self.browser_api),
@@ -3696,6 +3766,58 @@ class LLMDocumentRunnerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_existing_context_selection_remains_gpu_32768_cpu_16384(self):
+        from common.config.model_config import get_num_ctx
+
+        with patch("common.config.model_config.shutil.which", return_value=None):
+            self.assertEqual(get_num_ctx(), 16384)
+        with patch("common.config.model_config.shutil.which", return_value="/usr/bin/nvidia-smi"), \
+             patch("common.config.model_config.subprocess.run", return_value=SimpleNamespace(
+                 returncode=0, stdout="GPU 0: Tesla V100\n"
+             )):
+            self.assertEqual(get_num_ctx(), 32768)
+
+    def test_comparison_vision_override_is_only_three_browseruse_models(self):
+        browser = load_control_plan("browseruse-gpu")
+        smol = load_control_plan("smolagents-gpu")
+        models = (
+            "gemma4:26b", "gemma4:e4b-it-qat", "qwen3.8:27b-q4_K_M",
+            "qwen3.5:4b-q4_K_M", "ministral-3:14b-instruct-2512-q4_K_M",
+            "ministral-3:3b-instruct-2512-q4_K_M",
+            "deepseek-r1:8b-0528-qwen3-q4_K_M", "gpt-oss:20b",
+            "granite4.2:8b-q4_K_M", "llama3.2-vision:11b-instruct-q4_K_M",
+        )
+        text_only = set(models[6:9])
+        for model in models:
+            env = {
+                "RUSE_WORKFLOW_GPU_TIER": "v100",
+                "RUSE_WORKFLOW_MODEL": model,
+                "RUSE_LLM_COMPARISON": "1",
+                "OLLAMA_MODEL": model,
+            }
+            with self.subTest(model=model), patch.dict(os.environ, env, clear=True):
+                browser_profile, _, _ = _select_runtime_brain_profile(browser)
+                smol_profile, _, _ = _select_runtime_brain_profile(smol)
+            self.assertEqual(browser_profile.get("use_vision"),
+                             False if model in text_only else None)
+            self.assertNotIn("use_vision", smol_profile)
+        with patch.dict(os.environ, {
+            "RUSE_WORKFLOW_GPU_TIER": "v100", "OLLAMA_MODEL": "gemma4:26b"
+        }, clear=True):
+            ordinary, _, _ = _select_runtime_brain_profile(browser)
+        self.assertNotIn("use_vision", ordinary)
+
+    def test_comparison_model_marker_and_allowlist_fail_loud(self):
+        plan = load_control_plan("browseruse-gpu")
+        for env in (
+            {"RUSE_WORKFLOW_GPU_TIER": "v100", "RUSE_WORKFLOW_MODEL": "gemma4:26b"},
+            {"RUSE_WORKFLOW_GPU_TIER": "v100", "RUSE_LLM_COMPARISON": "1"},
+            {"RUSE_WORKFLOW_GPU_TIER": "v100", "RUSE_WORKFLOW_MODEL": "unknown", "RUSE_LLM_COMPARISON": "1"},
+            {"RUSE_WORKFLOW_GPU_TIER": "rtx", "RUSE_WORKFLOW_MODEL": "gemma4:26b", "RUSE_LLM_COMPARISON": "1"},
+        ):
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True), self.assertRaises(RuntimeError):
+                _select_runtime_brain_profile(plan)
+
     def test_runtime_gpu_tier_selects_model_without_mutating_contract_profile(self):
         gpu_plan = load_control_plan("browseruse-gpu")
         for tier, expected_model in (
@@ -3756,6 +3878,33 @@ class RuntimeTests(unittest.TestCase):
             build.call_args.args[1]["model"]["ollama"], "gemma4:e4b"
         )
 
+    def test_runtime_records_cpu_comparison_hardware_tier_and_model(self):
+        plan = load_control_plan("browseruse-gpu")
+        logger = Mock()
+        executor = Mock()
+        model = "qwen3.5:9b-q4_K_M"
+        with (
+            patch.dict(os.environ, {
+                "RUSE_WORKFLOW_GPU_TIER": "cpu",
+                "RUSE_WORKFLOW_MODEL": model,
+                "RUSE_LLM_COMPARISON": "1",
+                "RUSE_COMPARISON_HARDWARE": "cpu",
+                "OLLAMA_MODEL": model,
+            }, clear=True),
+            patch("phase_workflow.runtime.load_workflow_plan", return_value=plan),
+            patch("phase_workflow.runtime.AgentLogger", return_value=logger),
+            patch("phase_workflow.runtime.build_brain") as build,
+            patch("phase_workflow.runtime.WorkflowRegistry"),
+            patch("phase_workflow.runtime.DailyExecutor", return_value=executor),
+        ):
+            run_workflow_runtime("browseruse-gpu", "/tmp/assigned")
+        session_config = logger.session_start.call_args.kwargs["config"]
+        self.assertEqual(session_config["hardware"], "cpu")
+        self.assertEqual(session_config["gpu_tier"], "cpu")
+        self.assertEqual(session_config["requested_model"], model)
+        self.assertEqual(session_config["ollama_model"], model)
+        self.assertEqual(build.call_args.args[1]["model"]["ollama"], model)
+
     def test_invalid_startup_plan_never_constructs_runtime_or_falls_back(self):
         with tempfile.TemporaryDirectory() as td, patch(
             "phase_workflow.runtime.load_workflow_plan",
@@ -3772,6 +3921,49 @@ class RuntimeTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_cpu_comparison_skips_nvidia_but_keeps_exact_model_for_ollama(self):
+        model = "qwen3.5:9b-q4_K_M"
+        for config_key in ("browseruse-gpu", "smolagents-gpu"):
+            with self.subTest(config_key=config_key):
+                command = f'''
+source "{INSTALLER}"
+parse_config_key "{config_key}"
+export RUSE_WORKFLOW_GPU_TIER=cpu
+export RUSE_WORKFLOW_MODEL={model}
+export RUSE_LLM_COMPARISON=1
+export RUSE_COMPARISON_HARDWARE=cpu
+apply_phase_workflow_gpu_tier
+sudo() {{ :; }}
+install_nvidia_driver() {{ NVIDIA_CALLS=$((NVIDIA_CALLS + 1)); NVIDIA_DRIVER_INSTALLED=true; }}
+NVIDIA_CALLS=0
+install_system_deps
+printf '%s|%s|%s|%s' "$NVIDIA_CALLS" "$NVIDIA_DRIVER_INSTALLED" "$MODEL" "${{MODEL_NAMES[$MODEL]}}"
+'''
+                result = subprocess.run(
+                    ["bash", "-c", command], cwd=REPOSITORY_ROOT,
+                    text=True, capture_output=True, check=True,
+                )
+                self.assertTrue(result.stdout.endswith(
+                    f"0|false|comparison|{model}"
+                ), result.stdout)
+
+        command = f'''
+source "{INSTALLER}"
+parse_config_key browseruse-gpu
+export RUSE_WORKFLOW_GPU_TIER=v100
+apply_phase_workflow_gpu_tier
+sudo() {{ :; }}
+install_nvidia_driver() {{ NVIDIA_CALLS=$((NVIDIA_CALLS + 1)); NVIDIA_DRIVER_INSTALLED=true; }}
+NVIDIA_CALLS=0
+install_system_deps
+printf '%s|%s' "$NVIDIA_CALLS" "$NVIDIA_DRIVER_INSTALLED"
+'''
+        result = subprocess.run(
+            ["bash", "-c", command], cwd=REPOSITORY_ROOT,
+            text=True, capture_output=True, check=True,
+        )
+        self.assertTrue(result.stdout.endswith("1|true"), result.stdout)
+
     def test_canonical_mchp_runs_libreoffice_under_owned_window_manager(self):
         installer = INSTALLER.read_text(encoding="utf-8")
         mchp_packages = next(
