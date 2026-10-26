@@ -503,7 +503,7 @@ def _browseruse_action_evidence(
     if resource.get("url"):
         fields.append(f"assigned_url={resource['url']}")
     if task.workflow == "NetworkShareAccess":
-        fields.append(f"share={SHARE_UNC}/{resource['path']}")
+        fields.append(f"share={resource.get('unc', SHARE_UNC)}/{resource['path']}")
     if artifact is not None:
         artifact_path = Path(artifact)
         fields.append(f"artifact={artifact_path}")
@@ -1064,10 +1064,12 @@ def build_brain(
     logger=None,
     *,
     document_store: Optional[DailyDocumentStore] = None,
+    syncer_override=None,
+    share_override=None,
 ):
     documents = document_store or DailyDocumentStore()
-    syncer = HttpsDocumentSync(documents)
-    share = KerberosShareAccess(documents)
+    syncer = syncer_override or HttpsDocumentSync(documents)
+    share = share_override or KerberosShareAccess(documents)
     if brain == "scripted":
         return ResourceBrain(
             SeleniumResourceWorkflows(_chromium_driver),

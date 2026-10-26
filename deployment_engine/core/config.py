@@ -32,6 +32,7 @@ class DeploymentConfig:
     baseline_direction: str | None = None
     model_preset: str | None = None
     llm_comparison: bool = False
+    no_schedule: bool = False
     requested_model: str | None = None
     comparison_hardware: str | None = None
 
@@ -87,6 +88,10 @@ class DeploymentConfig:
                 raise ValueError("LLM comparison requires one canonical BrowserUse/SmolAgents plan and the approved model/hardware lineup")
         elif "requested_model" in raw:
             raise ValueError("requested_model is only valid for an LLM comparison")
+        if "no_schedule" in raw and not isinstance(raw["no_schedule"], bool):
+            raise ValueError("no_schedule must be a boolean")
+        if raw.get("no_schedule") and not raw.get("llm_comparison"):
+            raise ValueError("no_schedule is only valid for an LLM comparison")
         if not isinstance(capture_interface, str) or not capture_interface:
             raise ValueError("deployment config capture_interface must be non-empty")
         if raw.get("type") == "probe":
@@ -128,6 +133,7 @@ class DeploymentConfig:
             baseline_direction=raw.get("baseline_direction"),
             model_preset=raw.get("model_preset"),
             llm_comparison=raw.get("llm_comparison", False),
+            no_schedule=raw.get("no_schedule", False),
             requested_model=raw.get("requested_model"),
             comparison_hardware=raw.get("comparison_hardware"),
         )

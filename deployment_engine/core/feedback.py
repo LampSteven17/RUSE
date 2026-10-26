@@ -253,6 +253,8 @@ def generate_baseline_config(task: dict, deploy_dir: Path) -> str:
         config["comparison_hardware"] = task["comparison_hardware"]
         flavor = task["deployments"][0]["flavor"]
         config["flavor_capacity"] = {flavor: 1}
+        if task.get("no_schedule"):
+            config["no_schedule"] = True
     path = deploy_dir / task["config_name"] / "config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")

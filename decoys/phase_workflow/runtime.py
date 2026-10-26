@@ -217,20 +217,67 @@ def run_workflow_runtime(config_key: str, behavior_config_dir: Optional[str]) ->
         session_config["comparison_hardware"] = os.environ.get("RUSE_COMPARISON_HARDWARE", "gpu")
         if plan.brain == "browseruse":
             session_config["use_vision"] = brain_profile.get("use_vision", True)
+    autonomous = os.environ.get("RUSE_NO_SCHEDULE") == "1"
+    if autonomous:
+        if (
+            os.environ.get("RUSE_LLM_COMPARISON") != "1"
+            or plan.brain not in {"browseruse", "smolagents"}
+            or ollama_model is None
+        ):
+            raise RuntimeError(
+                "no-schedule runtime requires a BrowserUse or SmolAgents LLM comparison"
+            )
+        session_config["mode"] = "autonomous_no_schedule"
+        session_config["resource_selection"] = "model_selected"
+        session_config["schedule_applied"] = False
     logger.session_start(config=session_config)
     policy = (NtpPolicy(plan.ntp_off_intervals, plan.timezone, logger)
               if plan.ntp_off_intervals is not None else None)
     try:
         with ntp_lifecycle(policy):
+            if autonomous:
+                from phase_workflow.autonomous import (
+                    AutonomousExecutor,
+                    AutonomousHttpsUpload,
+                    AutonomousShareAccess,
+                    OllamaAutonomousPlanner,
+                )
+                from phase_workflow.workflows import DailyDocumentStore
+
+                documents = DailyDocumentStore()
+                brain = build_brain(
+                    plan.brain,
+                    brain_profile,
+                    logger,
+                    document_store=documents,
+                    syncer_override=AutonomousHttpsUpload(documents),
+                    share_override=AutonomousShareAccess(documents),
+                )
+            else:
+                brain = build_brain(plan.brain, brain_profile, logger)
             registry = WorkflowRegistry(
                 plan,
-                build_brain(plan.brain, brain_profile, logger),
-                behavior_path.parent / "workspace",
+                brain,
+                behavior_path.parent / (
+                    "autonomous-workspace" if autonomous else "workspace"
+                ),
+                isolate_occurrences=autonomous,
             )
             executor = None
             try:
-                executor = DailyExecutor(plan, registry, logger.workflow_plan_terminal,
-                                         background_policy=policy)
+                if autonomous:
+                    executor = AutonomousExecutor(
+                        plan,
+                        OllamaAutonomousPlanner(ollama_model, logger),
+                        registry,
+                        logger,
+                        background_policy=policy,
+                    )
+                else:
+                    executor = DailyExecutor(
+                        plan, registry, logger.workflow_plan_terminal,
+                        background_policy=policy,
+                    )
                 executor.run_forever()
             except KeyboardInterrupt:
                 logger.info("Workflow runtime stopped by user")

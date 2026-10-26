@@ -159,7 +159,7 @@ def run_decoy_spinup(
             output.error("will not fall back to an older timestamp.")
         return 1
 
-    share_required = False
+    share_required = bool(getattr(config, "no_schedule", False))
     if config.is_probe():
         share_required = config.probe_workflow == "NetworkShareAccess"
     elif (
@@ -171,7 +171,7 @@ def run_decoy_spinup(
         )
     ):
         try:
-            share_required = decoy_generation_uses_network_share(
+            share_required = share_required or decoy_generation_uses_network_share(
                 Path(effective_source), purpose=config.purpose,
                 expected_configs=(
                     {config.deployments[0]["behavior"]}
@@ -190,6 +190,8 @@ def run_decoy_spinup(
     output.info(f"  RUSE ref:  {ruse_revision}")
     if config.purpose == "feedback":
         output.info(f"  GPU tier:  {workflow_gpu_tier}")
+    if getattr(config, "no_schedule", False):
+        output.info("  Mode:      autonomous (no PHASE timing; all six activities)")
     if behavior_source:
         source_label = {
             "feedback": "Feedback",
@@ -317,6 +319,7 @@ def run_decoy_spinup(
         "workflow_gpu_tier": workflow_gpu_tier,
         "workflow_model": getattr(config, "requested_model", None) or "",
         "llm_comparison": getattr(config, "llm_comparison", False),
+        "no_schedule": getattr(config, "no_schedule", False),
         "comparison_hardware": getattr(config, "comparison_hardware", None) or "",
     }
     if config.is_probe():

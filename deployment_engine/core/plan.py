@@ -173,15 +173,18 @@ def build_baseline_plan(
     gpu_tier: str = "v100",
     *,
     llm_comparison: bool = False,
+    no_schedule: bool = False,
 ) -> list[dict]:
     from .feedback import (find_decoy_baseline_generation, _decoy_preset_slug,
                            canonical_decoy_feedback_deployments)
 
+    if no_schedule and not llm_comparison:
+        raise FeedbackSourceError("No-schedule mode requires the human Baseline LLM comparison")
+    if llm_comparison and (direction != "human" or gpu_tier != "v100"):
+        raise FeedbackSourceError("LLM comparison requires the human Baseline on V100")
     source = find_decoy_baseline_generation(preset, direction)
     name = f"decoy-baseline-{_decoy_preset_slug(preset)}-{direction}"
     if llm_comparison:
-        if direction != "human" or gpu_tier != "v100":
-            raise FeedbackSourceError("LLM comparison requires the human Baseline on V100")
         tasks = []
         share_configs = set()
         for behavior, filename in (
@@ -199,15 +202,18 @@ def build_baseline_plan(
             for behavior in ("browseruse-gpu", "smolagents-gpu"):
                 brain = behavior.removesuffix("-gpu")
                 identity = f"{name}-{brain}-{_comparison_slug(model)}"
+                if no_schedule:
+                    identity += "-autonomous"
                 tasks.append({
                     "label": identity, "config_name": identity,
                     "is_baseline": True, "is_llm_comparison": True,
+                    "no_schedule": no_schedule,
                     "is_controls": True, "purpose": "control", "target": None,
                     "model_preset": preset, "baseline_direction": direction,
                     "behavior_source": source, "configs_spec": None, "manifest": None,
                     "gpu_tier": gpu_tier, "requested_model": model,
                     "comparison_hardware": "gpu",
-                    "share_required": behavior in share_configs,
+                    "share_required": no_schedule or behavior in share_configs,
                     "deployments": [{
                         "behavior": behavior,
                         "flavor": "v100-1gpu.14vcpu.28g",
@@ -218,15 +224,18 @@ def build_baseline_plan(
             for behavior in ("browseruse-gpu", "smolagents-gpu"):
                 brain = behavior.removesuffix("-gpu")
                 identity = f"{name}-{brain}-{_comparison_slug(model)}-cpu"
+                if no_schedule:
+                    identity += "-autonomous"
                 tasks.append({
                     "label": identity, "config_name": identity,
                     "is_baseline": True, "is_llm_comparison": True,
+                    "no_schedule": no_schedule,
                     "is_controls": True, "purpose": "control", "target": None,
                     "model_preset": preset, "baseline_direction": direction,
                     "behavior_source": source, "configs_spec": None, "manifest": None,
                     "gpu_tier": "cpu", "requested_model": model,
                     "comparison_hardware": "cpu",
-                    "share_required": behavior in share_configs,
+                    "share_required": no_schedule or behavior in share_configs,
                     "deployments": [{
                         "behavior": behavior, "flavor": "v1.14vcpu.28g", "count": 1,
                     }],
@@ -510,6 +519,8 @@ def show_plan_and_confirm(
             f"  Comparison total: {n} SUPs ({gpu_count} GPU, {cpu_count} CPU) "
             f"+ {sidecars} selected-plan share sidecars = {n + sidecars} VMs"
         )
+        if all(task.get("no_schedule") for task in plan):
+            output.info("  Mode: autonomous; no PHASE timing; all six activities available")
         output.info("")
 
     any_mismatch = False
@@ -548,6 +559,8 @@ def show_plan_and_confirm(
                 if task.get("is_baseline"):
                     output.info(f"      baseline:    {task['baseline_direction']}")
                     output.info(f"      preset:      {task['model_preset']}")
+                    if task.get("no_schedule"):
+                        output.info("      mode:        autonomous (no PHASE timing; all six activities)")
                     if task.get("requested_model"):
                         output.info(f"      model:       {task['requested_model']}")
                         output.info(f"      hardware:    {task['comparison_hardware']}")

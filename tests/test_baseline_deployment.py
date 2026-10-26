@@ -1,7 +1,9 @@
 """Global Baseline selection/registration; cloud execution is always mocked."""
 from datetime import datetime, timezone, timedelta
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 from unittest import TestCase
 from unittest.mock import patch
@@ -204,6 +206,111 @@ class BaselineTests(TestCase):
                 "--decoys", "--baseline", "--human", "--llm-comparison", "--gpu", "v100"
             ]), 0)
         self.assertEqual(len(show.call_args.args[0]), 36)
+
+    def test_no_schedule_requires_explicit_human_llm_comparison(self):
+        invalid = (
+            ["--no-schedule"],
+            ["--baseline", "--no-schedule"],
+            ["--decoys", "--baseline", "--human", "--no-schedule"],
+            ["--decoys", "--baseline", "--human", "--llm-comparison", "--no-schedule", "--gpu", "rtx"],
+        )
+        for args in invalid:
+            with self.subTest(args=args), patch.object(plan, "build_baseline_plan") as build, self.assertRaises(SystemExit):
+                cli._cmd_deploy(args)
+            build.assert_not_called()
+
+    def test_no_schedule_plan_is_autonomous_unique_and_keeps_source_immutable(self):
+        source = self.generation(direction="human")
+        before = {path.name: path.read_bytes() for path in source.iterdir()}
+        scheduled = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True
+        )
+        autonomous = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True, no_schedule=True
+        )
+        self.assertEqual(len(autonomous), 36)
+        self.assertEqual(
+            [(t["requested_model"], t["comparison_hardware"], t["deployments"])
+             for t in autonomous],
+            [(t["requested_model"], t["comparison_hardware"], t["deployments"])
+             for t in scheduled],
+        )
+        self.assertEqual(len({task["config_name"] for task in autonomous}), 36)
+        self.assertTrue(all(task["config_name"].endswith("-autonomous") for task in autonomous))
+        self.assertTrue({task["config_name"] for task in autonomous}.isdisjoint(
+            {task["config_name"] for task in scheduled}
+        ))
+        self.assertTrue(all(task["no_schedule"] for task in autonomous))
+        self.assertEqual(sum(task["share_required"] for task in autonomous), 36)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in source.iterdir()}, before
+        )
+        with patch.object(plan.output, "info") as info, \
+             patch.object(plan.output, "confirm", return_value=False):
+            self.assertFalse(plan.show_plan_and_confirm(autonomous, "decoy"))
+        rendered = "\n".join(str(call.args[0]) for call in info.call_args_list if call.args)
+        self.assertIn("36 selected-plan share sidecars = 72 VMs", rendered)
+        self.assertIn("autonomous; no PHASE timing; all six activities", rendered)
+
+    def test_no_schedule_config_and_install_environment_are_opt_in(self):
+        self.generation(direction="human")
+        scheduled, autonomous = (
+            plan.build_baseline_plan(
+                "colfix_v12.5.0", "human", llm_comparison=True,
+                no_schedule=value,
+            )[0]
+            for value in (False, True)
+        )
+        feedback.generate_baseline_config(scheduled, self.deploy)
+        feedback.generate_baseline_config(autonomous, self.deploy)
+        scheduled_path = self.deploy / scheduled["config_name"] / "config.yaml"
+        autonomous_path = self.deploy / autonomous["config_name"] / "config.yaml"
+        scheduled_document = __import__("yaml").safe_load(scheduled_path.read_text())
+        autonomous_document = __import__("yaml").safe_load(autonomous_path.read_text())
+        self.assertNotIn("no_schedule", scheduled_document)
+        self.assertIs(autonomous_document["no_schedule"], True)
+        self.assertFalse(DeploymentConfig.load(scheduled_path).no_schedule)
+        self.assertTrue(DeploymentConfig.load(autonomous_path).no_schedule)
+
+        playbook = (Path(__file__).parents[1] / "deployment_engine/playbooks/decoy/install-sups.yaml").read_text()
+        installer = (Path(__file__).parents[1] / "INSTALL_SUP.sh").read_text()
+        self.assertEqual(playbook.count('RUSE_NO_SCHEDULE="{{ \'1\' if no_schedule else \'\' }}"'), 2)
+        self.assertIn('export RUSE_NO_SCHEDULE="${RUSE_NO_SCHEDULE:-}"', installer)
+
+        autonomous_document["no_schedule"] = False
+        autonomous_path.write_text(__import__("yaml").safe_dump(autonomous_document))
+        self.assertFalse(DeploymentConfig.load(autonomous_path).no_schedule)
+        autonomous_document["no_schedule"] = "true"
+        autonomous_path.write_text(__import__("yaml").safe_dump(autonomous_document))
+        with self.assertRaisesRegex(ValueError, "must be a boolean"):
+            DeploymentConfig.load(autonomous_path)
+
+    def test_installed_run_script_captures_no_schedule_opt_in_and_empty_default(self):
+        source = self.generation(direction="human") / "browseruse-v1.json"
+        installer = Path(__file__).parents[1] / "INSTALL_SUP.sh"
+        command = (
+            f'source "{installer}"; '
+            'parse_config_key browseruse-gpu; '
+            f'RUSE_WORKFLOW_BEHAVIOR_PATH="{source}"; '
+            'export RUSE_WORKFLOW_BEHAVIOR_PATH; '
+            'copy_source_code "$1"; create_run_script "$1"'
+        )
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                destination = self.root / ("installed-autonomous" if enabled else "installed-scheduled")
+                env = dict(os.environ)
+                env.pop("RUSE_NO_SCHEDULE", None)
+                if enabled:
+                    env["RUSE_NO_SCHEDULE"] = "1"
+                result = subprocess.run(
+                    ["bash", "-c", command, "installer-test", str(destination)],
+                    cwd=Path(__file__).parents[1], env=env, text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                run_script = (destination / "run_agent.sh").read_text()
+                expected = 'export RUSE_NO_SCHEDULE="1"' if enabled else 'export RUSE_NO_SCHEDULE=""'
+                self.assertIn(expected, run_script)
 
     def test_comparison_config_round_trip_and_invalid_model_fail(self):
         self.generation(direction="human")
