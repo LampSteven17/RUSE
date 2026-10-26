@@ -75,6 +75,8 @@ def run_teardown_filtered(
     types: dict[str, bool],
     purpose: str | None = None,
     failed_only: bool = False,
+    comparison_only: bool = False,
+    no_schedule: bool | None = None,
 ) -> int:
     """Teardown all active deployments matching the given filters.
 
@@ -89,6 +91,10 @@ def run_teardown_filtered(
     (see core/run_status.py) that still have an exact-prefix OpenStack VM.
     Runs with no stamp (UNKNOWN), an OK stamp, or no matching VM are left
     alone.
+
+    comparison_only: only target configurations explicitly marked as an LLM
+    comparison. no_schedule optionally narrows those comparisons by their
+    explicit scheduling mode.
     """
     from .core.run_status import read_run_status, FAILED
 
@@ -131,6 +137,12 @@ def run_teardown_filtered(
         # names never determine whether a run is a control or feedback run.
         if purpose is not None and config.purpose != purpose:
             continue
+
+        if comparison_only:
+            if config.llm_comparison is not True:
+                continue
+            if no_schedule is not None and config.no_schedule is not no_schedule:
+                continue
 
         # Every filtered teardown follows the same active-run definition as
         # ./list: at least one OpenStack VM under this run's exact prefix.

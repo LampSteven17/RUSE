@@ -87,6 +87,36 @@ def _write_purpose_config(
     return config_dir
 
 
+def _write_comparison_config(
+    deploy_dir: Path,
+    name: str,
+    *,
+    no_schedule: bool | None,
+    comparison: bool = True,
+) -> Path:
+    config_dir = _write_purpose_config(deploy_dir, name, "control", None)
+    config_file = config_dir / "config.yaml"
+    document = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    document["baseline_direction"] = "human"
+    document["model_preset"] = "colfix_v12.5.0"
+    document["llm_comparison"] = comparison
+    if no_schedule is not None:
+        document["no_schedule"] = no_schedule
+    if comparison:
+        document["gpu_tier"] = "v100"
+        document["comparison_hardware"] = "gpu"
+        document["requested_model"] = "gemma4:26b"
+        document["deployments"] = [{
+            "behavior": "browseruse-gpu",
+            "flavor": "v100-1gpu.14vcpu.28g",
+            "count": 1,
+        }]
+    config_file.write_text(
+        yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
+    )
+    return config_dir
+
+
 class _Cloud:
     def __init__(self, statuses: dict[str, str]):
         self.statuses = statuses
@@ -650,6 +680,111 @@ class OperatorCommandTests(unittest.TestCase):
             )
         self.assertEqual(filtered.call_args.kwargs["purpose"], "control")
         self.assertTrue(filtered.call_args.kwargs["failed_only"])
+
+    def test_llm_comparison_cli_dispatches_both_modes_or_explicit_mode(self):
+        help_text = deployment_cli._teardown_parser().format_help()
+        self.assertIn("both scheduled", help_text)
+        self.assertIn("and autonomous by default", help_text)
+
+        for extra, expected in (([], None), (["--scheduled"], False), (["--no-schedule"], True)):
+            with self.subTest(extra=extra), mock.patch(
+                "deployment_engine.teardown.run_teardown_filtered", return_value=0
+            ) as filtered:
+                self.assertEqual(
+                    deployment_cli._cmd_teardown(
+                        ["--decoys", "--llm-comparison", *extra]
+                    ),
+                    0,
+                )
+            self.assertEqual(filtered.call_args.kwargs["types"], {
+                "decoy": True, "rampart": False, "ghosts": False,
+            })
+            self.assertTrue(filtered.call_args.kwargs["comparison_only"])
+            self.assertIs(filtered.call_args.kwargs["no_schedule"], expected)
+
+        with mock.patch(
+            "deployment_engine.teardown.run_teardown_filtered", return_value=0
+        ) as filtered:
+            self.assertEqual(deployment_cli._cmd_teardown(
+                ["--decoys", "--controls", "--llm-comparison", "--failed"]
+            ), 0)
+        self.assertEqual(filtered.call_args.kwargs["purpose"], "control")
+        self.assertTrue(filtered.call_args.kwargs["failed_only"])
+
+    def test_llm_comparison_cli_rejects_invalid_combinations_before_dispatch(self):
+        invalid = (
+            ["--llm-comparison"],
+            ["--scheduled"],
+            ["--no-schedule"],
+            ["--decoys", "--llm-comparison", "--scheduled", "--no-schedule"],
+            ["--decoys", "--llm-comparison", "--all"],
+            ["--decoys", "--llm-comparison", "--probes"],
+            ["--decoys", "--llm-comparison", "--rampart"],
+            ["--decoys", "--llm-comparison", "--ghosts"],
+            ["--decoys", "--llm-comparison", "--feedback"],
+            ["--decoys", "--llm-comparison", f"control-{CURRENT_RUN}"],
+        )
+        for argv in invalid:
+            with self.subTest(argv=argv), mock.patch(
+                "deployment_engine.teardown.run_teardown_filtered"
+            ) as filtered, mock.patch(
+                "deployment_engine.teardown.run_teardown"
+            ) as exact, mock.patch(
+                "deployment_engine.teardown.run_teardown_all"
+            ) as teardown_all, self.assertRaises(SystemExit):
+                deployment_cli._cmd_teardown(argv)
+            filtered.assert_not_called()
+            exact.assert_not_called()
+            teardown_all.assert_not_called()
+
+    def test_llm_comparison_filter_uses_explicit_config_and_active_exact_vm(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            deploy_dir = Path(temporary)
+            scheduled = _write_comparison_config(
+                deploy_dir, "misleading-feedback-name", no_schedule=None
+            )
+            autonomous = _write_comparison_config(
+                deploy_dir, "ordinary-control-name", no_schedule=True
+            )
+            ordinary = _write_comparison_config(
+                deploy_dir, "llm-comparison-looking", no_schedule=False,
+                comparison=False,
+            )
+            zero_vm = _write_comparison_config(
+                deploy_dir, "comparison-zero-vm", no_schedule=False
+            )
+            statuses = {}
+            for config_dir in (scheduled, autonomous, ordinary):
+                prefix = make_vm_prefix(make_run_dep_id(config_dir.name, CURRENT_RUN))
+                statuses[prefix + "scripted-cpu-0"] = "ACTIVE"
+            partial_prefix = make_vm_prefix(make_run_dep_id(zero_vm.name, CURRENT_RUN))
+            statuses[partial_prefix.removesuffix("-") + "extra-scripted-cpu-0"] = "ACTIVE"
+
+            for mode, included, excluded in (
+                (None, (scheduled.name, autonomous.name), (ordinary.name, zero_vm.name)),
+                (False, (scheduled.name,), (autonomous.name, ordinary.name, zero_vm.name)),
+                (True, (autonomous.name,), (scheduled.name, ordinary.name, zero_vm.name)),
+            ):
+                cloud = _Cloud(statuses)
+                stderr = StringIO()
+                with self.subTest(mode=mode), mock.patch.object(
+                    deployment_teardown, "OpenStack", return_value=cloud
+                ), mock.patch.object(
+                    deployment_teardown.output, "confirm", return_value=False
+                ), redirect_stderr(stderr):
+                    result = deployment_teardown.run_teardown_filtered(
+                        deploy_dir,
+                        types={"decoy": True, "rampart": False, "ghosts": False},
+                        comparison_only=True,
+                        no_schedule=mode,
+                    )
+                self.assertEqual(result, 0)
+                rendered = stderr.getvalue()
+                for name in included:
+                    self.assertIn(f"{name}/{CURRENT_RUN}", rendered)
+                for name in excluded:
+                    self.assertNotIn(f"{name}/{CURRENT_RUN}", rendered)
+                self.assertEqual(cloud.status_map_calls, 1)
 
     def test_explicit_dated_teardown_dispatches_only_the_exact_run(self):
         with tempfile.TemporaryDirectory() as temporary:

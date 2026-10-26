@@ -140,6 +140,9 @@ def _teardown_parser() -> argparse.ArgumentParser:
                                              teardown one exact dated run
   ./teardown --decoy --controls            teardown all active DECOY control deployments
   ./teardown --decoy --feedback            teardown all active DECOY feedback deployments
+  ./teardown --decoys --llm-comparison     teardown scheduled and autonomous LLM comparisons
+  ./teardown --decoys --llm-comparison --scheduled
+                                             teardown scheduled LLM comparisons only
   ./teardown --rampart                     teardown all active RAMPART deployments
   ./teardown --ghosts --feedback           teardown all active GHOSTS feedback deployments
   ./teardown --all                         nuclear: delete ALL VMs""",
@@ -167,6 +170,22 @@ def _teardown_parser() -> argparse.ArgumentParser:
         "--feedback",
         action="store_true",
         help="Filter: only deployments with purpose: feedback",
+    )
+    p.add_argument(
+        "--llm-comparison",
+        action="store_true",
+        help="With --decoys, filter LLM comparisons (both scheduled and autonomous by default)",
+    )
+    schedule = p.add_mutually_exclusive_group()
+    schedule.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="With --llm-comparison, filter scheduled comparisons only",
+    )
+    schedule.add_argument(
+        "--no-schedule",
+        action="store_true",
+        help="With --llm-comparison, filter autonomous comparisons only",
     )
     p.add_argument("--failed", action="store_true",
                    help="Filter: only runs stamped failed (deploy_status.json) "
@@ -490,6 +509,19 @@ def _cmd_teardown(argv: list[str]) -> int:
     parser = _teardown_parser()
     args = parser.parse_args(argv)
 
+    comparison_mode = args.scheduled or args.no_schedule
+    if comparison_mode and not args.llm_comparison:
+        parser.error("--scheduled/--no-schedule require --llm-comparison")
+    if args.llm_comparison:
+        if not args.decoy:
+            parser.error("--llm-comparison requires --decoys")
+        if any((args.teardown_all, args.probes, args.rampart, args.ghosts,
+                args.feedback, args.target)):
+            parser.error(
+                "--llm-comparison cannot combine with --all, --probes, "
+                "--rampart, --ghosts, --feedback, or an exact target"
+            )
+
     if args.probes:
         if any((args.decoy, args.rampart, args.ghosts, args.controls, args.feedback,
                 args.teardown_all, args.target)):
@@ -518,6 +550,16 @@ def _cmd_teardown(argv: list[str]) -> int:
         types = {"decoy": args.decoy, "rampart": args.rampart, "ghosts": args.ghosts}
         if args.failed and not has_system:
             types = {"decoy": True, "rampart": True, "ghosts": True}
+        if args.llm_comparison:
+            no_schedule = True if args.no_schedule else (False if args.scheduled else None)
+            return run_teardown_filtered(
+                DEPLOY_DIR,
+                types=types,
+                purpose=purpose,
+                failed_only=args.failed,
+                comparison_only=True,
+                no_schedule=no_schedule,
+            )
         return run_teardown_filtered(
             DEPLOY_DIR,
             types=types,
