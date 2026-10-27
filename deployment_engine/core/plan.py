@@ -46,6 +46,50 @@ from .feedback import (
 DECOY_CANARY_CONFIG = "decoy-runtime-canary"
 
 
+def build_saved_llm_comparison_plan(
+    deploy_dir: Path, config_name: str,
+) -> list[dict]:
+    """Build one task from an existing explicit LLM-comparison config."""
+    config = DeploymentConfig.load(deploy_dir / config_name / "config.yaml")
+    if config.deployment_type != "decoy" or not config.llm_comparison:
+        raise ValueError(
+            "saved comparison deployment requires a Decoy config with "
+            "llm_comparison: true"
+        )
+
+    from ..decoy.spinup import _validate_behavior_source
+    errors = _validate_behavior_source(config.behavior_source, config)
+    if errors:
+        raise ValueError("; ".join(errors))
+
+    from .feedback import decoy_generation_uses_network_share
+    behavior = config.deployments[0]["behavior"]
+    source = Path(config.behavior_source)
+    return [{
+        "label": config.deployment_name,
+        "config_name": config_name,
+        "is_baseline": True,
+        "is_llm_comparison": True,
+        "is_saved_config": True,
+        "no_schedule": config.no_schedule,
+        "is_controls": True,
+        "purpose": config.purpose,
+        "target": config.target,
+        "model_preset": config.model_preset,
+        "baseline_direction": config.baseline_direction,
+        "behavior_source": source,
+        "configs_spec": None,
+        "manifest": None,
+        "gpu_tier": config.gpu_tier,
+        "requested_model": config.requested_model,
+        "comparison_hardware": config.comparison_hardware,
+        "share_required": config.no_schedule or decoy_generation_uses_network_share(
+            source, purpose="control", expected_configs={behavior}
+        ),
+        "deployments": config.deployments,
+    }]
+
+
 def build_probe_plan(deploy_dir: Path, config_name: str | None = None,
                      *, sup_config: str = "scripted-cpu", background_services: bool = False) -> list[dict]:
     """Resolve the explicit Probe category in full before any display or execution."""
@@ -669,7 +713,7 @@ def execute_plan(
             src = task["behavior_source"]
             spinup_source = str(src) if src else None
         try:
-            if task.get("is_baseline"):
+            if task.get("is_baseline") and not task.get("is_saved_config"):
                 from .feedback import generate_baseline_config
                 generate_baseline_config(task, deploy_dir)
             # gpu_tier only applies to decoy deploys + feedback tasks. Controls

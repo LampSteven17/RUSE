@@ -63,6 +63,7 @@ examples:
   ./deploy --decoy --preset colfix_v12.5.0 controls + ALL feedback targets
   ./deploy --decoy --controls               control fleet only
   ./deploy --decoy --canary                 isolated RUSE-only runtime canary
+  ./deploy --decoys SAVED_COMPARISON_CONFIG deploy exactly one saved LLM comparison
   ./deploy --decoy --feedback --preset colfix_v12.5.0
                                             all canonical feedback targets
   ./deploy --decoys --feedback --ctrlfix --target cptc11-zeektx axes-summer24
@@ -361,8 +362,45 @@ def _cmd_deploy(argv: list[str]) -> int:
     if args.config_name:
         from .core.config import DeploymentConfig
         path = DEPLOY_DIR / args.config_name / "config.yaml"
-        if path.is_file() and DeploymentConfig.load(path).is_probe():
-            parser.error("Probe configurations require --probes")
+        if path.is_file():
+            try:
+                config = DeploymentConfig.load(path)
+            except (OSError, ValueError) as exc:
+                output.error(f"ERROR: {exc}")
+                return 1
+            if config.is_probe():
+                parser.error("Probe configurations require --probes")
+            if config.llm_comparison:
+                if not args.decoy or any((
+                    args.controls, args.feedback, args.baseline, args.human,
+                    args.not_human, args.llm_comparison, args.no_schedule,
+                    args.rampart, args.ghosts, args.canary, args.canary_sup,
+                    args.ctrlfix, args.preset, args.source, args.target, args.gpu,
+                )):
+                    parser.error(
+                        "a saved LLM comparison config requires only "
+                        "--decoys and its config name"
+                    )
+                from .core.plan import (
+                    build_saved_llm_comparison_plan, execute_plan,
+                    show_plan_and_confirm,
+                )
+                from .core.feedback import FeedbackSourceError
+                try:
+                    saved_plan = build_saved_llm_comparison_plan(
+                        DEPLOY_DIR, args.config_name
+                    )
+                except (OSError, ValueError, FeedbackSourceError) as exc:
+                    output.error(f"ERROR: {exc}")
+                    return 1
+                if not show_plan_and_confirm(
+                    saved_plan, "decoy", gpu_tier=config.gpu_tier or "v100"
+                ):
+                    return 0
+                return execute_plan(
+                    saved_plan, "decoy", args.config_name, DEPLOY_DIR,
+                    gpu_tier=config.gpu_tier or "v100",
+                )
     deploy_type = "rampart" if args.rampart else ("ghosts" if args.ghosts else "decoy")
 
     if args.canary_sup and not args.canary:

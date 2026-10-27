@@ -207,6 +207,103 @@ class BaselineTests(TestCase):
             ]), 0)
         self.assertEqual(len(show.call_args.args[0]), 36)
 
+    def test_saved_llm_comparison_config_deploys_exactly_one_immutable_task(self):
+        source = self.generation(
+            preset="ctrlfix_v12.5.1", direction="human",
+            timestamp="2026-10-23_2156Z",
+        )
+        task = next(
+            task for task in plan.build_baseline_plan(
+                "ctrlfix_v12.5.1", "human", llm_comparison=True,
+                no_schedule=True,
+            )
+            if task["requested_model"] == "ministral-3:3b-instruct-2512-q4_K_M"
+            and task["deployments"][0]["behavior"] == "smolagents-gpu"
+        )
+        feedback.generate_baseline_config(task, self.deploy)
+        config_path = self.deploy / task["config_name"] / "config.yaml"
+        config_before = config_path.read_bytes()
+        source_before = {path.name: path.read_bytes() for path in source.iterdir()}
+
+        with patch.object(cli, "DEPLOY_DIR", self.deploy), \
+             patch.object(feedback, "find_decoy_baseline_generation") as find, \
+             patch.object(feedback, "generate_baseline_config") as generate, \
+             patch.object(plan, "show_plan_and_confirm", return_value=True) as show, \
+             patch.object(plan, "execute_plan", return_value=0) as execute:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", task["config_name"],
+            ]), 0)
+
+        find.assert_not_called()
+        generate.assert_not_called()
+        saved = show.call_args.args[0]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["behavior_source"], source)
+        self.assertEqual(saved[0]["requested_model"], task["requested_model"])
+        self.assertEqual(saved[0]["deployments"], task["deployments"])
+        self.assertTrue(saved[0]["no_schedule"])
+        self.assertTrue(saved[0]["share_required"])
+        execute.assert_called_once_with(
+            saved, "decoy", task["config_name"], self.deploy, gpu_tier="v100"
+        )
+        with patch.object(feedback, "generate_baseline_config") as generate, \
+             patch("deployment_engine.decoy.spinup.run_decoy_spinup", return_value=0) as spinup:
+            self.assertEqual(
+                plan.execute_plan(
+                    saved, "decoy", task["config_name"], self.deploy,
+                    gpu_tier="v100",
+                ),
+                0,
+            )
+        generate.assert_not_called()
+        spinup.assert_called_once_with(
+            task["config_name"], self.deploy, str(source), None
+        )
+        self.assertEqual(config_path.read_bytes(), config_before)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in source.iterdir()}, source_before
+        )
+
+    def test_saved_llm_comparison_invalid_source_fails_before_dispatch(self):
+        source = self.generation(direction="human")
+        task = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True
+        )[0]
+        feedback.generate_baseline_config(task, self.deploy)
+        (source / "browseruse-v1.json").unlink()
+        with patch.object(cli, "DEPLOY_DIR", self.deploy), \
+             patch.object(plan, "show_plan_and_confirm") as show, \
+             patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", task["config_name"],
+            ]), 1)
+        show.assert_not_called()
+        execute.assert_not_called()
+
+    def test_saved_llm_comparison_rejects_overrides(self):
+        self.generation(direction="human")
+        task = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True
+        )[0]
+        feedback.generate_baseline_config(task, self.deploy)
+        conflicts = (
+            ["--controls"], ["--feedback"], ["--baseline"], ["--human"],
+            ["--llm-comparison"], ["--no-schedule"], ["--ctrlfix"],
+            ["--preset", "colfix_v12.5.0"], ["--source", "/unused"],
+            ["--target", "axes-summer24"], ["--gpu", "v100"],
+        )
+        for conflict in conflicts:
+            with self.subTest(conflict=conflict), \
+                 patch.object(cli, "DEPLOY_DIR", self.deploy), \
+                 patch.object(plan, "show_plan_and_confirm") as show, \
+                 patch.object(plan, "execute_plan") as execute, \
+                 self.assertRaises(SystemExit):
+                cli._cmd_deploy([
+                    "--decoys", task["config_name"], *conflict,
+                ])
+            show.assert_not_called()
+            execute.assert_not_called()
+
     def test_no_schedule_requires_explicit_human_llm_comparison(self):
         invalid = (
             ["--no-schedule"],
