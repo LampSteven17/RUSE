@@ -371,7 +371,7 @@ class BaselineTests(TestCase):
 
         playbook = (Path(__file__).parents[1] / "deployment_engine/playbooks/decoy/install-sups.yaml").read_text()
         installer = (Path(__file__).parents[1] / "INSTALL_SUP.sh").read_text()
-        self.assertEqual(playbook.count('RUSE_NO_SCHEDULE="{{ \'1\' if no_schedule else \'\' }}"'), 2)
+        self.assertEqual(playbook.count('RUSE_NO_SCHEDULE="{{ \'1\' if no_schedule | bool else \'\' }}"'), 2)
         self.assertIn('export RUSE_NO_SCHEDULE="${RUSE_NO_SCHEDULE:-}"', installer)
 
         autonomous_document["no_schedule"] = False
@@ -445,7 +445,7 @@ class BaselineTests(TestCase):
             Path(__file__).parents[1] / "decoys/install_scripts/install_ollama.sh"
         ).read_text()
         self.assertEqual(playbook.count('RUSE_WORKFLOW_MODEL="{{ workflow_model }}"'), 2)
-        self.assertEqual(playbook.count('RUSE_LLM_COMPARISON="{{ \'1\' if llm_comparison else \'\' }}"'), 2)
+        self.assertEqual(playbook.count('RUSE_LLM_COMPARISON="{{ \'1\' if llm_comparison | bool else \'\' }}"'), 2)
         self.assertIn('MODEL_NAMES["comparison"]="$requested_model"', installer)
         self.assertIn('export OLLAMA_MODELS="$model_name"', installer)
         self.assertIn('export OLLAMA_MODEL="$model_name"', installer)
@@ -453,6 +453,67 @@ class BaselineTests(TestCase):
         self.assertIn('grep -Fqx -- "$model"', ollama_installer)
         self.assertIn('"${RUSE_LLM_COMPARISON:-}" == "1"', installer)
         self.assertIn('"${RUSE_COMPARISON_HARDWARE:-}" == "cpu"', installer)
+
+    def test_install_playbook_boolean_flags_render_ansible_extra_vars(self):
+        with patch.dict(
+            os.environ,
+            {"ANSIBLE_LOCAL_TEMP": str(self.root / "ansible-tmp")},
+        ):
+            from ansible.plugins.filter.core import FilterModule
+        from jinja2 import Environment
+        import yaml
+
+        playbook_path = (
+            Path(__file__).parents[1]
+            / "deployment_engine/playbooks/decoy/install-sups.yaml"
+        )
+        document = yaml.safe_load(playbook_path.read_text())
+        stage_shells = [
+            task["shell"]
+            for task in document[0]["tasks"]
+            if task["name"].startswith(("Stage 1:", "Stage 2:"))
+        ]
+        self.assertEqual(len(stage_shells), 2)
+
+        environment = Environment()
+        environment.filters["bool"] = FilterModule().filters()["bool"]
+        common = {
+            "ruse_path": "/opt/ruse",
+            "workflow_gpu_tier": "v100",
+            "workflow_model": "",
+            "comparison_hardware": "",
+            "sup_behavior": "browseruse-gpu",
+            "staged_workflow_plan": "/tmp/plan.json",
+            "canonical_workflow_configs": ["browseruse-gpu"],
+            "probe_install": False,
+            "probe_workflow": "",
+            "probe_started_at": "",
+            "probe_service": "",
+            "staged_probe_plans": "/tmp/probe-plans",
+        }
+        cases = (
+            ("ordinary-native", False, False, "", ""),
+            ("ordinary-PythonFalse", "False", "False", "", ""),
+            ("ordinary-lowercase-false", "false", "false", "", ""),
+            ("scheduled-comparison", "true", "false", "1", ""),
+            ("autonomous-native", True, True, "1", "1"),
+            ("autonomous-string", "True", "true", "1", "1"),
+        )
+        for name, comparison, no_schedule, expected_comparison, expected_schedule in cases:
+            with self.subTest(name=name):
+                values = {
+                    **common,
+                    "llm_comparison": comparison,
+                    "no_schedule": no_schedule,
+                }
+                for shell in stage_shells:
+                    rendered = environment.from_string(shell).render(values)
+                    self.assertIn(
+                        f'RUSE_LLM_COMPARISON="{expected_comparison}"', rendered
+                    )
+                    self.assertIn(
+                        f'RUSE_NO_SCHEDULE="{expected_schedule}"', rendered
+                    )
 
     def test_comparison_lifecycle_preflight_prefixes_and_selected_sidecar(self):
         missing_show = patch.object(plan, "show_plan_and_confirm")

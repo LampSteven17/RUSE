@@ -160,8 +160,8 @@
         cd {{ ruse_path }}
         RUSE_WORKFLOW_GPU_TIER="{{ workflow_gpu_tier }}" \
         RUSE_WORKFLOW_MODEL="{{ workflow_model }}" \
-        RUSE_LLM_COMPARISON="{{ '1' if llm_comparison else '' }}" \
-        RUSE_NO_SCHEDULE="{{ '1' if no_schedule else '' }}" \
+        RUSE_LLM_COMPARISON="{{ '1' if llm_comparison | bool else '' }}" \
+        RUSE_NO_SCHEDULE="{{ '1' if no_schedule | bool else '' }}" \
         RUSE_COMPARISON_HARDWARE="{{ comparison_hardware }}" \
           ./INSTALL_SUP.sh --{{ sup_behavior }} --stage=1
       args:
@@ -198,8 +198,8 @@
         RUSE_WORKFLOW_BEHAVIOR_PATH="{{ staged_workflow_plan if sup_behavior in canonical_workflow_configs else '' }}" \
         RUSE_WORKFLOW_GPU_TIER="{{ workflow_gpu_tier }}" \
         RUSE_WORKFLOW_MODEL="{{ workflow_model }}" \
-        RUSE_LLM_COMPARISON="{{ '1' if llm_comparison else '' }}" \
-        RUSE_NO_SCHEDULE="{{ '1' if no_schedule else '' }}" \
+        RUSE_LLM_COMPARISON="{{ '1' if llm_comparison | bool else '' }}" \
+        RUSE_NO_SCHEDULE="{{ '1' if no_schedule | bool else '' }}" \
         RUSE_COMPARISON_HARDWARE="{{ comparison_hardware }}" \
         RUSE_DEPLOYMENT_TYPE="{{ 'probe' if probe_install else 'decoy' }}" \
         RUSE_PROBE_WORKFLOW="{{ probe_workflow | default('') if probe_install else '' }}" \
