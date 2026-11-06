@@ -101,6 +101,8 @@ examples:
                    help="With --decoys --baseline --human, compare the approved LLM lineup")
     p.add_argument("--no-schedule", action="store_true",
                    help="With the human Baseline LLM comparison, run autonomously without PHASE timing")
+    p.add_argument("--single-schedule", action="store_true",
+                   help="With a normal Baseline, use the shared-schedule PHASE generation")
     direction = p.add_mutually_exclusive_group()
     direction.add_argument("--human", action="store_true", help="With --baseline, select human direction")
     direction.add_argument("--not-human", action="store_true", help="With --baseline, select not-human (default)")
@@ -302,8 +304,8 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
-    if (args.human or args.not_human or args.llm_comparison or args.no_schedule) and not args.baseline:
-        parser.error("--human/--not-human/--llm-comparison/--no-schedule require --baseline")
+    if (args.human or args.not_human or args.llm_comparison or args.no_schedule or args.single_schedule) and not args.baseline:
+        parser.error("--human/--not-human/--llm-comparison/--no-schedule/--single-schedule require --baseline")
     if args.baseline:
         if any((args.controls, args.feedback, args.rampart, args.ghosts, args.probes,
                 args.background_services, args.probe_sup, args.canary, args.canary_sup,
@@ -315,6 +317,8 @@ def _cmd_deploy(argv: list[str]) -> int:
             parser.error("--llm-comparison requires --decoys --baseline --human and V100 hardware")
         if args.no_schedule and not args.llm_comparison:
             parser.error("--no-schedule requires --decoys --baseline --human --llm-comparison")
+        if args.single_schedule and (args.llm_comparison or args.no_schedule):
+            parser.error("--single-schedule requires a normal Baseline")
         from .core.plan import build_baseline_plan, show_plan_and_confirm, execute_plan
         from .core.feedback import FeedbackSourceError
         preset = "ctrlfix_v12.5.1" if args.ctrlfix else (args.preset or "colfix_v12.5.0")
@@ -324,6 +328,7 @@ def _cmd_deploy(argv: list[str]) -> int:
                 preset, "human" if args.human else "not-human", gpu_tier,
                 llm_comparison=args.llm_comparison,
                 no_schedule=args.no_schedule,
+                single_schedule=args.single_schedule,
             )
         except FeedbackSourceError as exc:
             output.error(f"ERROR: {exc}")

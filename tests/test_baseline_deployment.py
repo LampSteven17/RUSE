@@ -29,8 +29,11 @@ class BaselineTests(TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def generation(self, preset="colfix_v12.5.0", direction="not-human", timestamp="2026-09-21_1200Z"):
-        path = self.base / preset / direction / timestamp
+    def generation(self, preset="colfix_v12.5.0", direction="not-human", timestamp="2026-09-21_1200Z", single_schedule=False):
+        path = self.base / preset / direction
+        if single_schedule:
+            path /= "single-schedule"
+        path /= timestamp
         path.mkdir(parents=True)
         instructions = json.loads(
             (CONTRACT_ROOT / "capabilities-v1.json").read_text()
@@ -46,6 +49,169 @@ class BaselineTests(TestCase):
                         entry.pop("instruction", None)
             (path / name).write_text(json.dumps(document))
         return path
+
+    def single_schedule_generation(self, **kwargs):
+        path = self.generation(single_schedule=True, **kwargs)
+        documents = {
+            name: json.loads((path / name).read_text())
+            for name in feedback.DECOY_PLAN_FILENAMES.values()
+        }
+        schedule = documents["scripted-v1.json"]["schedule"]
+        background = documents["scripted-v1.json"].get("background_services")
+        instructions = json.loads(
+            (CONTRACT_ROOT / "capabilities-v1.json").read_text()
+        )["instructions"]["controls-v2"]
+        for name, document in documents.items():
+            document["schedule"] = json.loads(json.dumps(schedule))
+            for window in document["schedule"]:
+                for entry in window["sequence"]:
+                    if name in {"browseruse-v1.json", "smolagents-v1.json"}:
+                        entry["instruction"] = instructions[entry["workflow"]]
+                    else:
+                        entry.pop("instruction", None)
+            if background is None:
+                document.pop("background_services", None)
+            else:
+                document["background_services"] = background
+            (path / name).write_text(json.dumps(document))
+        return path
+
+    def test_single_schedule_is_opt_in_for_both_directions_and_saved_natively(self):
+        names = []
+        cases = (
+            ("colfix_v12.5.0", "not-human", []),
+            ("colfix_v12.5.0", "human", ["--human"]),
+            ("ctrlfix_v12.5.1", "not-human", ["--ctrlfix"]),
+            ("ctrlfix_v12.5.1", "human", ["--ctrlfix", "--human"]),
+        )
+        for preset, direction, flags in cases:
+            ordinary = self.generation(preset=preset, direction=direction)
+            selected = self.single_schedule_generation(
+                preset=preset, direction=direction
+            )
+            before = {item.name: item.read_bytes() for item in selected.iterdir()}
+            with patch.object(plan, "show_plan_and_confirm", return_value=False) as show, \
+                 patch.object(plan, "execute_plan") as execute:
+                self.assertEqual(cli._cmd_deploy([
+                    "--decoys", "--baseline", "--single-schedule", *flags,
+                ]), 0)
+            execute.assert_not_called()
+            task = show.call_args.args[0][0]
+            self.assertEqual(task["behavior_source"], selected)
+            self.assertEqual(len(task["deployments"]), 4)
+            self.assertEqual(task["config_name"],
+                             f"decoy-baseline-{preset.replace('.', '-').replace('_', '-')}-{direction}-single-schedule")
+            names.append(task["config_name"])
+            self.assertNotEqual(task["behavior_source"], ordinary)
+            feedback.generate_baseline_config(task, self.deploy)
+            path = self.deploy / task["config_name"] / "config.yaml"
+            document = __import__("yaml").safe_load(path.read_text())
+            self.assertIs(document["single_schedule"], True)
+            self.assertTrue(DeploymentConfig.load(path).single_schedule)
+            self.assertEqual(
+                {item.name: item.read_bytes() for item in selected.iterdir()}, before
+            )
+        self.assertEqual(len(set(names)), 4)
+
+    def test_single_schedule_nested_generation_does_not_affect_ordinary_discovery(self):
+        ordinary = self.generation(timestamp="2026-09-20_1200Z")
+        nested = self.single_schedule_generation(timestamp="2026-09-21_1200Z")
+        self.assertEqual(
+            feedback.find_decoy_baseline_generation(
+                "colfix_v12.5.0", "not-human"
+            ), ordinary
+        )
+        self.assertEqual(
+            feedback.find_decoy_baseline_generation(
+                "colfix_v12.5.0", "not-human", single_schedule=True
+            ), nested
+        )
+
+    def test_single_schedule_selection_has_no_fallback_and_rejects_bad_newest(self):
+        self.generation()
+        old = self.single_schedule_generation(timestamp="2026-09-20_1200Z")
+        newest = self.single_schedule_generation()
+        (newest / "mchp-v1.json").unlink()
+        with self.assertRaises(feedback.FeedbackSourceError):
+            feedback.find_decoy_baseline_generation(
+                "colfix_v12.5.0", "not-human", single_schedule=True
+            )
+        self.assertTrue(old.is_dir())
+        for preset, direction in (("ctrlfix_v12.5.1", "not-human"),
+                                  ("colfix_v12.5.0", "human")):
+            with self.assertRaisesRegex(feedback.FeedbackSourceError, "single-schedule"):
+                feedback.find_decoy_baseline_generation(
+                    preset, direction, single_schedule=True
+                )
+
+    def test_single_schedule_divergence_fails_before_preview(self):
+        def mutate_window(document):
+            document["schedule"][0]["window_local"] = [541, 601]
+
+        def mutate_offset(document):
+            document["schedule"][0]["sequence"][-1]["offset_minutes"] = 6
+
+        def mutate_count(document):
+            entry = dict(document["schedule"][0]["sequence"][-1])
+            entry["offset_minutes"] = 6
+            document["schedule"][0]["sequence"].append(entry)
+
+        mutations = {
+            "timezone": lambda document: document.__setitem__("timezone", "UTC"),
+            "max_parallel": lambda document: document.__setitem__("max_parallel", 2),
+            "window": mutate_window,
+            "offset": mutate_offset,
+            "count": mutate_count,
+            "resource": lambda document: document["schedule"][0]["sequence"][0].__setitem__(
+                "resource_id", "wikipedia_geometry"
+            ),
+            "workflow": lambda document: document["schedule"][0]["sequence"][0].update(
+                workflow="VideoViewing", resource_id="video_hls_mux_bbb"
+            ),
+            "background_services": lambda document: document.__setitem__(
+                "background_services",
+                {"enabled": False, "ntp": {"off_intervals_local": []}},
+            ),
+        }
+        for index, (label, mutate) in enumerate(mutations.items()):
+            with self.subTest(field=label):
+                source = self.single_schedule_generation(
+                    timestamp=f"2026-09-21_12{index:02d}Z"
+                )
+                document = json.loads((source / "mchp-v1.json").read_text())
+                mutate(document)
+                (source / "mchp-v1.json").write_text(json.dumps(document))
+                feedback.validate_decoy_control_generation(source)
+                with self.assertRaisesRegex(
+                    feedback.FeedbackSourceError, str(source)
+                ):
+                    feedback.validate_single_schedule_generation(source)
+
+        with patch.object(plan, "show_plan_and_confirm") as show, \
+             patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", "--baseline", "--single-schedule",
+            ]), 1)
+        show.assert_not_called()
+        execute.assert_not_called()
+
+    def test_single_schedule_rejects_other_modes_and_string_config_value(self):
+        invalid = (
+            ["--single-schedule"],
+            ["--decoys", "--baseline", "--human", "--llm-comparison", "--single-schedule"],
+            ["--decoys", "--baseline", "--human", "--llm-comparison", "--no-schedule", "--single-schedule"],
+            ["--baseline", "--controls", "--single-schedule"],
+        )
+        for args in invalid:
+            with self.subTest(args=args), patch.object(plan, "build_baseline_plan") as build, \
+                 self.assertRaises(SystemExit):
+                cli._cmd_deploy(args)
+            build.assert_not_called()
+        path = self.deploy / "bad" / "config.yaml"
+        path.parent.mkdir(parents=True)
+        path.write_text("purpose: control\ntarget: null\nsingle_schedule: 'true'\n")
+        with self.assertRaisesRegex(ValueError, "single_schedule must be a boolean"):
+            DeploymentConfig.load(path)
 
     def test_cli_default_directions_and_versions_are_isolated(self):
         identities = []

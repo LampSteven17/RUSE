@@ -1,9 +1,10 @@
 # Baseline and optional NTP policy handoff
 
-Implementation is local and uncommitted. No live qualification or deployment
-has been performed. Preserve the published experiment recovery tag and frozen
-SHA in `experiment-runtime-freeze.md`; that older runtime does not support this
-new policy. Publishing or deploying a newer revision requires approval.
+No live qualification or deployment of single-schedule Baselines has been
+performed. Preserve the published experiment recovery tag and frozen SHA in
+`experiment-runtime-freeze.md`; that older runtime does not support this new
+mode. Deployment requires operator approval and the exact published 40-character
+revision pin.
 
 ## Global Baselines
 
@@ -39,6 +40,21 @@ NetworkShareAccess sidecar and immutable-revision installation path. Examples:
 
 Existing `decoy-controls` identities, directories and commands are unchanged.
 
+An opt-in `--single-schedule` mode is available for either Baseline direction.
+It selects only the newest valid generation below
+`baselines/<preset>/<direction>/single-schedule/<timestamp>` and requires all
+four native plans to share workflows, resources, counts, timing, timezone,
+parallelism, and background services; only Brain identity/profile and
+instructions may differ. It performs no plan regeneration or translation; the
+selected plan bytes are installed unchanged. Its isolated
+deployment identity ends in `-single-schedule`, and saved configuration records
+the native boolean `single_schedule: true`. Ordinary Baselines and LLM
+comparisons are unchanged, and no new phase-run registry field is introduced.
+PHASE ingestion must read that immutable saved run configuration, exclude marked
+runs from both ordinary-control and ordinary-human pools, and select them
+separately by direction, preset, and mode; deployment-name inference is not an
+acceptable substitute.
+
 ## Registration agreement for PHASE
 
 The existing timestamped `deployment.json` contains the usual timestamps,
@@ -60,11 +76,13 @@ only on Decoy control records with null target. Existing Controls and Feedback
 records have neither field. The saved RUSE configuration carries both fields.
 RUSE's extended schema is `contracts/phase-run-v1/phase-run-v1.schema.json`.
 
-Before deployment, PHASE must adopt this schema extension and separate inference
-and graphs by explicit Baseline direction and preset. Its newest-Control-only
-selection is not sufficient and has not been changed here. Do not infer direction
-from names or substitute Baselines for historical Controls. RUSE's existing
-control-purpose list/teardown filtering also includes these Baseline fleets.
+PHASE currently recognizes the direction metadata, but its global newest-control
+and newest-human selection in `INFER.py:138-161` does not separate preset or
+schedule mode; the stage-5 comparison path has the same grouping gap. PHASE must
+exclude `single_schedule: true` runs from ordinary pools and group them by
+explicit direction, preset, and mode before inference or graphing. Do not infer
+those facts from names or substitute Baselines for historical Controls. RUSE's
+existing control-purpose list/teardown filtering also includes these fleets.
 
 ## Optional NTP policy
 

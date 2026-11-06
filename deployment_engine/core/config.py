@@ -33,6 +33,7 @@ class DeploymentConfig:
     model_preset: str | None = None
     llm_comparison: bool = False
     no_schedule: bool = False
+    single_schedule: bool = False
     requested_model: str | None = None
     comparison_hardware: str | None = None
 
@@ -92,6 +93,16 @@ class DeploymentConfig:
             raise ValueError("no_schedule must be a boolean")
         if raw.get("no_schedule") and not raw.get("llm_comparison"):
             raise ValueError("no_schedule is only valid for an LLM comparison")
+        if "single_schedule" in raw and not isinstance(raw["single_schedule"], bool):
+            raise ValueError("single_schedule must be a boolean")
+        if raw.get("single_schedule") and (
+            raw.get("llm_comparison")
+            or raw.get("baseline_direction") not in {"human", "not-human"}
+            or raw.get("model_preset") not in {"colfix_v12.5.0", "ctrlfix_v12.5.1"}
+            or raw.get("type", "decoy") != "decoy"
+            or purpose != "control" or target is not None
+        ):
+            raise ValueError("single_schedule is only valid for a normal Baseline")
         if not isinstance(capture_interface, str) or not capture_interface:
             raise ValueError("deployment config capture_interface must be non-empty")
         if raw.get("type") == "probe":
@@ -134,6 +145,7 @@ class DeploymentConfig:
             model_preset=raw.get("model_preset"),
             llm_comparison=raw.get("llm_comparison", False),
             no_schedule=raw.get("no_schedule", False),
+            single_schedule=raw.get("single_schedule", False),
             requested_model=raw.get("requested_model"),
             comparison_hardware=raw.get("comparison_hardware"),
         )

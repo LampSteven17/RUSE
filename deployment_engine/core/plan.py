@@ -218,6 +218,7 @@ def build_baseline_plan(
     *,
     llm_comparison: bool = False,
     no_schedule: bool = False,
+    single_schedule: bool = False,
 ) -> list[dict]:
     from .feedback import (find_decoy_baseline_generation, _decoy_preset_slug,
                            canonical_decoy_feedback_deployments)
@@ -226,8 +227,15 @@ def build_baseline_plan(
         raise FeedbackSourceError("No-schedule mode requires the human Baseline LLM comparison")
     if llm_comparison and (direction != "human" or gpu_tier != "v100"):
         raise FeedbackSourceError("LLM comparison requires the human Baseline on V100")
-    source = find_decoy_baseline_generation(preset, direction)
+    if single_schedule and (llm_comparison or no_schedule):
+        raise FeedbackSourceError("Single-schedule mode is only valid for a normal Baseline")
+    source = (
+        find_decoy_baseline_generation(preset, direction, single_schedule=True)
+        if single_schedule else find_decoy_baseline_generation(preset, direction)
+    )
     name = f"decoy-baseline-{_decoy_preset_slug(preset)}-{direction}"
+    if single_schedule:
+        name += "-single-schedule"
     if llm_comparison:
         tasks = []
         share_configs = set()
@@ -285,14 +293,21 @@ def build_baseline_plan(
                     }],
                 })
         return tasks
-    return [{
+    task = {
         "label": name, "config_name": name, "is_baseline": True,
         "is_controls": True, "purpose": "control", "target": None,
         "model_preset": preset, "baseline_direction": direction,
         "behavior_source": source, "configs_spec": None, "manifest": None,
         "gpu_tier": gpu_tier,
         "deployments": list(canonical_decoy_feedback_deployments(gpu_tier)),
-    }]
+    }
+    if single_schedule:
+        from .feedback import decoy_generation_uses_network_share
+        task["single_schedule"] = True
+        task["share_required"] = decoy_generation_uses_network_share(
+            source, purpose="control"
+        )
+    return [task]
 
 
 def _build_controls_task(deploy_type: str, deploy_dir: Path, *, preset: str | None = None) -> dict:
@@ -603,6 +618,10 @@ def show_plan_and_confirm(
                 if task.get("is_baseline"):
                     output.info(f"      baseline:    {task['baseline_direction']}")
                     output.info(f"      preset:      {task['model_preset']}")
+                    if task.get("single_schedule"):
+                        output.info("      mode:        single-schedule")
+                        if task.get("share_required"):
+                            output.info("      sidecar:     one fleet-local v1.small share host")
                     if task.get("no_schedule"):
                         output.info("      mode:        autonomous (no PHASE timing; all six activities)")
                     if task.get("requested_model"):

@@ -211,13 +211,41 @@ def find_decoy_control_generation(preset: str | None = None) -> Path:
     return selected
 
 
-def find_decoy_baseline_generation(preset: str, direction: str) -> Path:
+def validate_single_schedule_generation(source_dir: Path) -> dict[str, object]:
+    """Validate a Baseline whose four Brains share one schedule exactly."""
+    plans = validate_decoy_control_generation(source_dir)
+    shared = None
+    for sup_config, filename in DECOY_PLAN_FILENAMES.items():
+        document = json.loads((Path(source_dir) / filename).read_text(encoding="utf-8"))
+        comparable = {
+            key: value for key, value in document.items()
+            if key not in {"sup_config", "brain", "hardware", "brain_profile"}
+        }
+        for window in comparable["schedule"]:
+            for entry in window["sequence"]:
+                entry.pop("instruction", None)
+        if shared is None:
+            shared = comparable
+        elif comparable != shared:
+            raise FeedbackSourceError(
+                "single-schedule Baseline plans must share workflows, resources, "
+                "counts, timing, timezone, max_parallel, and background_services; "
+                f"{sup_config} differs: {source_dir}"
+            )
+    return plans
+
+
+def find_decoy_baseline_generation(
+    preset: str, direction: str, *, single_schedule: bool = False,
+) -> Path:
     """Resolve one global Baseline, without crossing direction or version."""
     if preset not in {"colfix_v12.5.0", "ctrlfix_v12.5.1"}:
         raise FeedbackSourceError(f"unsupported Baseline preset: {preset!r}")
     if direction not in {"human", "not-human"}:
         raise FeedbackSourceError(f"unsupported Baseline direction: {direction!r}")
     root = DECOY_BASELINE_BASE / preset / direction
+    if single_schedule:
+        root /= "single-schedule"
     if not root.is_dir():
         raise FeedbackSourceError(f"Baseline generation root not found: {root}")
     generations = sorted(path for path in root.iterdir()
@@ -225,7 +253,10 @@ def find_decoy_baseline_generation(preset: str, direction: str) -> Path:
     if not generations:
         raise FeedbackSourceError(f"no YYYY-MM-DD_HHMMZ Baseline generation found: {root}")
     selected = generations[-1]
-    validate_decoy_control_generation(selected)
+    if single_schedule:
+        validate_single_schedule_generation(selected)
+    else:
+        validate_decoy_control_generation(selected)
     return selected
 
 
@@ -234,7 +265,10 @@ def generate_baseline_config(task: dict, deploy_dir: Path) -> str:
     import yaml
 
     source = task["behavior_source"]
-    validate_decoy_control_generation(source)
+    if task.get("single_schedule"):
+        validate_single_schedule_generation(source)
+    else:
+        validate_decoy_control_generation(source)
     gpu = DECOY_CANONICAL_GPU_TIERS.get(task["gpu_tier"])
     config = {
         "deployment_name": task["config_name"], "purpose": "control", "target": None,
@@ -247,6 +281,8 @@ def generate_baseline_config(task: dict, deploy_dir: Path) -> str:
         ),
         "deployments": task["deployments"],
     }
+    if task.get("single_schedule"):
+        config["single_schedule"] = True
     if task.get("is_llm_comparison"):
         config["llm_comparison"] = True
         config["requested_model"] = task["requested_model"]
