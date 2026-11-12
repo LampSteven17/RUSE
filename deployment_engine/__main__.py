@@ -102,7 +102,7 @@ examples:
     p.add_argument("--no-schedule", action="store_true",
                    help="With the human Baseline LLM comparison, run autonomously without PHASE timing")
     p.add_argument("--single-schedule", action="store_true",
-                   help="With a normal Baseline, use the shared-schedule PHASE generation")
+                   help="With a Baseline, use the shared-schedule PHASE generation")
     direction = p.add_mutually_exclusive_group()
     direction.add_argument("--human", action="store_true", help="With --baseline, select human direction")
     direction.add_argument("--not-human", action="store_true", help="With --baseline, select not-human (default)")
@@ -317,8 +317,8 @@ def _cmd_deploy(argv: list[str]) -> int:
             parser.error("--llm-comparison requires --decoys --baseline --human and V100 hardware")
         if args.no_schedule and not args.llm_comparison:
             parser.error("--no-schedule requires --decoys --baseline --human --llm-comparison")
-        if args.single_schedule and (args.llm_comparison or args.no_schedule):
-            parser.error("--single-schedule requires a normal Baseline")
+        if args.single_schedule and args.no_schedule:
+            parser.error("--single-schedule cannot combine with --no-schedule")
         from .core.plan import build_baseline_plan, show_plan_and_confirm, execute_plan
         from .core.feedback import FeedbackSourceError
         preset = "ctrlfix_v12.5.1" if args.ctrlfix else (args.preset or "colfix_v12.5.0")
@@ -379,6 +379,7 @@ def _cmd_deploy(argv: list[str]) -> int:
                 if not args.decoy or any((
                     args.controls, args.feedback, args.baseline, args.human,
                     args.not_human, args.llm_comparison, args.no_schedule,
+                    args.single_schedule,
                     args.rampart, args.ghosts, args.canary, args.canary_sup,
                     args.ctrlfix, args.preset, args.source, args.target, args.gpu,
                 )):

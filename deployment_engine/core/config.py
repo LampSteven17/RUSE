@@ -96,13 +96,13 @@ class DeploymentConfig:
         if "single_schedule" in raw and not isinstance(raw["single_schedule"], bool):
             raise ValueError("single_schedule must be a boolean")
         if raw.get("single_schedule") and (
-            raw.get("llm_comparison")
+            raw.get("no_schedule")
             or raw.get("baseline_direction") not in {"human", "not-human"}
             or raw.get("model_preset") not in {"colfix_v12.5.0", "ctrlfix_v12.5.1"}
             or raw.get("type", "decoy") != "decoy"
             or purpose != "control" or target is not None
         ):
-            raise ValueError("single_schedule is only valid for a normal Baseline")
+            raise ValueError("single_schedule is only valid for a scheduled Baseline")
         if not isinstance(capture_interface, str) or not capture_interface:
             raise ValueError("deployment config capture_interface must be non-empty")
         if raw.get("type") == "probe":

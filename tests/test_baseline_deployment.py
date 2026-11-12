@@ -198,7 +198,6 @@ class BaselineTests(TestCase):
     def test_single_schedule_rejects_other_modes_and_string_config_value(self):
         invalid = (
             ["--single-schedule"],
-            ["--decoys", "--baseline", "--human", "--llm-comparison", "--single-schedule"],
             ["--decoys", "--baseline", "--human", "--llm-comparison", "--no-schedule", "--single-schedule"],
             ["--baseline", "--controls", "--single-schedule"],
         )
@@ -336,6 +335,89 @@ class BaselineTests(TestCase):
             rendered,
         )
 
+    def test_single_schedule_llm_comparison_is_shared_marked_and_saved(self):
+        ordinary = self.generation(direction="human")
+        selected = self.single_schedule_generation(direction="human")
+        before = {path.name: path.read_bytes() for path in selected.iterdir()}
+        ordinary_names = {
+            task["config_name"] for task in plan.build_baseline_plan(
+                "colfix_v12.5.0", "human", llm_comparison=True
+            )
+        }
+        with patch.object(
+                 feedback, "find_decoy_baseline_generation",
+                 wraps=feedback.find_decoy_baseline_generation,
+             ) as find, \
+             patch.object(plan, "show_plan_and_confirm", return_value=False) as show, \
+             patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", "--baseline", "--human", "--llm-comparison",
+                "--single-schedule",
+            ]), 0)
+        execute.assert_not_called()
+        find.assert_called_once_with(
+            "colfix_v12.5.0", "human", single_schedule=True
+        )
+        tasks = show.call_args.args[0]
+        self.assertEqual(len(tasks), 36)
+        self.assertEqual(
+            [task["comparison_hardware"] for task in tasks].count("gpu"), 20
+        )
+        self.assertEqual(
+            [task["comparison_hardware"] for task in tasks].count("cpu"), 16
+        )
+        self.assertEqual(len({task["config_name"] for task in tasks}), 36)
+        self.assertTrue(all(task["behavior_source"] == selected for task in tasks))
+        self.assertTrue(all(task["single_schedule"] is True for task in tasks))
+        self.assertTrue(all("-single-schedule-" in task["config_name"] for task in tasks))
+        self.assertTrue(ordinary_names.isdisjoint(
+            {task["config_name"] for task in tasks}
+        ))
+        for task in tasks:
+            feedback.generate_baseline_config(task, self.deploy)
+            config_path = self.deploy / task["config_name"] / "config.yaml"
+            document = __import__("yaml").safe_load(config_path.read_text())
+            self.assertIs(document["single_schedule"], True)
+            self.assertTrue(DeploymentConfig.load(config_path).single_schedule)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in selected.iterdir()}, before
+        )
+        self.assertNotEqual(selected, ordinary)
+
+    def test_saved_single_schedule_comparison_preserves_mode_and_revalidates(self):
+        source = self.single_schedule_generation(direction="human")
+        task = plan.build_baseline_plan(
+            "colfix_v12.5.0", "human", llm_comparison=True,
+            single_schedule=True,
+        )[0]
+        feedback.generate_baseline_config(task, self.deploy)
+        saved = plan.build_saved_llm_comparison_plan(
+            self.deploy, task["config_name"]
+        )
+        self.assertIs(saved[0]["single_schedule"], True)
+        with patch.object(cli, "DEPLOY_DIR", self.deploy), \
+             patch.object(plan, "show_plan_and_confirm", return_value=False) as show, \
+             patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(cli._cmd_deploy([
+                "--decoys", task["config_name"],
+            ]), 0)
+        execute.assert_not_called()
+        self.assertIs(show.call_args.args[0][0]["single_schedule"], True)
+        config_path = self.deploy / task["config_name"] / "config.yaml"
+        config_document = __import__("yaml").safe_load(config_path.read_text())
+        config_document["no_schedule"] = True
+        config_path.write_text(__import__("yaml").safe_dump(config_document))
+        with self.assertRaisesRegex(ValueError, "scheduled Baseline"):
+            DeploymentConfig.load(config_path)
+        config_document.pop("no_schedule")
+        config_path.write_text(__import__("yaml").safe_dump(config_document))
+        document = json.loads((source / "smolagents-v1.json").read_text())
+        document["timezone"] = "UTC"
+        (source / "smolagents-v1.json").write_text(json.dumps(document))
+        feedback.validate_decoy_control_generation(source)
+        with self.assertRaisesRegex(ValueError, "single-schedule Baseline plans"):
+            plan.build_saved_llm_comparison_plan(self.deploy, task["config_name"])
+
     def test_llm_comparison_cli_scope_and_hardware_are_strict(self):
         self.generation(direction="human")
         ctrlfix_source = self.generation(
@@ -455,6 +537,7 @@ class BaselineTests(TestCase):
         conflicts = (
             ["--controls"], ["--feedback"], ["--baseline"], ["--human"],
             ["--llm-comparison"], ["--no-schedule"], ["--ctrlfix"],
+            ["--single-schedule"],
             ["--preset", "colfix_v12.5.0"], ["--source", "/unused"],
             ["--target", "axes-summer24"], ["--gpu", "v100"],
         )

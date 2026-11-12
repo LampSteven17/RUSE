@@ -24,6 +24,7 @@ from ..core.feedback import (
     validate_decoy_control_generation,
     validate_decoy_canary_generation,
     validate_decoy_feedback_generation,
+    validate_single_schedule_generation,
 )
 from ..core.revision import RevisionError, resolve_ruse_revision
 from ..core.vm_naming import make_run_dep_id, make_vm_prefix
@@ -623,7 +624,11 @@ def _validate_behavior_source(
             return [f"canonical {purpose} config has no behavior_source"]
         try:
             validator = {
-                "control": validate_decoy_control_generation,
+                "control": (
+                    validate_single_schedule_generation
+                    if getattr(config, "single_schedule", False)
+                    else validate_decoy_control_generation
+                ),
                 "feedback": validate_decoy_feedback_generation,
                 "other": validate_decoy_canary_generation,
             }[purpose]

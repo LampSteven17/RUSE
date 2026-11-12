@@ -72,6 +72,7 @@ def build_saved_llm_comparison_plan(
         "is_llm_comparison": True,
         "is_saved_config": True,
         "no_schedule": config.no_schedule,
+        "single_schedule": config.single_schedule,
         "is_controls": True,
         "purpose": config.purpose,
         "target": config.target,
@@ -227,8 +228,8 @@ def build_baseline_plan(
         raise FeedbackSourceError("No-schedule mode requires the human Baseline LLM comparison")
     if llm_comparison and (direction != "human" or gpu_tier != "v100"):
         raise FeedbackSourceError("LLM comparison requires the human Baseline on V100")
-    if single_schedule and (llm_comparison or no_schedule):
-        raise FeedbackSourceError("Single-schedule mode is only valid for a normal Baseline")
+    if single_schedule and no_schedule:
+        raise FeedbackSourceError("Single-schedule mode cannot be combined with no-schedule mode")
     source = (
         find_decoy_baseline_generation(preset, direction, single_schedule=True)
         if single_schedule else find_decoy_baseline_generation(preset, direction)
@@ -259,6 +260,7 @@ def build_baseline_plan(
                 tasks.append({
                     "label": identity, "config_name": identity,
                     "is_baseline": True, "is_llm_comparison": True,
+                    "single_schedule": single_schedule,
                     "no_schedule": no_schedule,
                     "is_controls": True, "purpose": "control", "target": None,
                     "model_preset": preset, "baseline_direction": direction,
@@ -281,6 +283,7 @@ def build_baseline_plan(
                 tasks.append({
                     "label": identity, "config_name": identity,
                     "is_baseline": True, "is_llm_comparison": True,
+                    "single_schedule": single_schedule,
                     "no_schedule": no_schedule,
                     "is_controls": True, "purpose": "control", "target": None,
                     "model_preset": preset, "baseline_direction": direction,

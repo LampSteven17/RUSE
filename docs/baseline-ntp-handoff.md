@@ -48,11 +48,15 @@ parallelism, and background services; only Brain identity/profile and
 instructions may differ. It performs no plan regeneration or translation; the
 selected plan bytes are installed unchanged. Its isolated
 deployment identity ends in `-single-schedule`, and saved configuration records
-the native boolean `single_schedule: true`. Ordinary Baselines and LLM
-comparisons are unchanged, and no new phase-run registry field is introduced.
-PHASE ingestion must read that immutable saved run configuration, exclude marked
-runs from both ordinary-control and ordinary-human pools, and select them
-separately by direction, preset, and mode; deployment-name inference is not an
+the native boolean `single_schedule: true`. Ordinary Baselines are unchanged.
+Human LLM comparisons may also select this shared generation by combining
+`--llm-comparison --single-schedule`; all 36 saved comparison configurations
+carry `single_schedule: true`. Autonomous `--no-schedule` comparisons remain
+incompatible with this mode, and no new phase-run registry field is introduced.
+PHASE ingestion must read that immutable saved run configuration. Its current
+comparison selection groups only by model, SUP, and hardware, so it must also
+separate shared-schedule comparisons from ordinary comparisons by the explicit
+mode before inference or graphing; deployment-name inference is not an
 acceptable substitute.
 
 ## Registration agreement for PHASE
@@ -76,13 +80,13 @@ only on Decoy control records with null target. Existing Controls and Feedback
 records have neither field. The saved RUSE configuration carries both fields.
 RUSE's extended schema is `contracts/phase-run-v1/phase-run-v1.schema.json`.
 
-PHASE currently recognizes the direction metadata, but its global newest-control
-and newest-human selection in `INFER.py:138-161` does not separate preset or
-schedule mode; the stage-5 comparison path has the same grouping gap. PHASE must
-exclude `single_schedule: true` runs from ordinary pools and group them by
-explicit direction, preset, and mode before inference or graphing. Do not infer
-those facts from names or substitute Baselines for historical Controls. RUSE's
-existing control-purpose list/teardown filtering also includes these fleets.
+PHASE currently separates ordinary and shared Baselines, but its LLM-comparison
+selection in `INFER.py` and the stage-5 comparison path group only by model,
+SUP, and hardware. They must also group by the explicit schedule mode before
+inference or graphing, so a shared comparison cannot replace or merge with an
+ordinary comparison. Do not infer those facts from names or substitute
+Baselines for historical Controls. RUSE's existing control-purpose
+list/teardown filtering also includes these fleets.
 
 ## Optional NTP policy
 
