@@ -169,13 +169,21 @@
       async: 1800
       poll: 30
       register: stage1_result
-      failed_when: stage1_result.rc not in [0, 100]
+      # APT also returns 100 on failure; only a completed driver install can
+      # request a reboot with that code.
+      failed_when: >-
+        stage1_result.rc != 0 and not (
+          stage1_result.rc == 100 and
+          'Stage 1 complete. NVIDIA drivers installed - reboot required.' in (stage1_result.stdout | default(''))
+        )
 
     - name: Reboot for NVIDIA drivers (exit code 100)
       reboot:
         reboot_timeout: 600
         msg: "Rebooting for NVIDIA driver"
-      when: stage1_result.rc == 100
+      when: >-
+        stage1_result.rc == 100 and
+        'Stage 1 complete. NVIDIA drivers installed - reboot required.' in (stage1_result.stdout | default(''))
 
     - name: Stage assigned canonical workflow plan
       when: sup_behavior in canonical_workflow_configs and not probe_install

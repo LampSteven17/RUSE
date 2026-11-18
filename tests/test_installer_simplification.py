@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 import time
 import unittest
 from pathlib import Path
 
 import yaml
+from jinja2 import Environment
 
 from deployment_engine.core.ansible_runner import _LineParser
 
@@ -32,7 +34,6 @@ class InstallerSimplificationTests(unittest.TestCase):
     def test_cpu_controls_have_no_model_or_gpu_install_path(self):
         self.assertIn('["scripted-cpu"]="scripted:none:none:none"', self.source)
         self.assertIn('["mchp-cpu"]="mchp:none:none:none"', self.source)
-        self.assertIn('if [[ "$MODEL" != "none" ]]; then\n        install_nvidia_driver', self.source)
         self.assertIn('if [[ "$MODEL" != "none" ]]; then\n            install_ollama', self.source)
 
     def test_gpu_controls_retain_driver_reboot_ollama_and_pinned_model(self):
@@ -44,13 +45,68 @@ class InstallerSimplificationTests(unittest.TestCase):
         self.assertIn("exit 100", self.source)
         self.assertIn("install_ollama", self.source)
 
-        play = yaml.safe_load(INSTALL_PLAYBOOK.read_text(encoding="utf-8"))[0]
-        reboot = next(
-            task
-            for task in play["tasks"]
-            if task["name"] == "Reboot for NVIDIA drivers (exit code 100)"
-        )
-        self.assertEqual(reboot["when"], "stage1_result.rc == 100")
+    def test_stage1_reboots_only_after_successful_nvidia_install(self):
+        tasks = {
+            task["name"]: task
+            for task in yaml.safe_load(INSTALL_PLAYBOOK.read_text(encoding="utf-8"))[0]["tasks"]
+        }
+        env = Environment()
+        failed = env.compile_expression(tasks["Stage 1: system deps + drivers"]["failed_when"])
+        reboot = env.compile_expression(tasks["Reboot for NVIDIA drivers (exit code 100)"]["when"])
+
+        # Use the actual Stage 1 Bash flow without invoking system packages,
+        # network downloads, or GPU/systemd commands.
+        stage1 = """
+            source "$1"
+            SCRIPT_DIR="$2"
+            apt_failure="$4"
+            export RUSE_WORKFLOW_GPU_TIER=v100 RUSE_WORKFLOW_MODEL=''
+            export RUSE_LLM_COMPARISON='' RUSE_COMPARISON_HARDWARE=''
+            if [[ "$5" == cpu ]]; then
+                export RUSE_WORKFLOW_GPU_TIER=cpu RUSE_WORKFLOW_MODEL=gemma4:e4b-it-qat
+                export RUSE_LLM_COMPARISON=1 RUSE_COMPARISON_HARDWARE=cpu
+            fi
+            sudo() {
+                case "$*" in
+                    'apt-get update -y')
+                        [[ "$apt_failure" != update ]] || return 100 ;;
+                    'apt-get install -y nvidia-driver-580')
+                        [[ "$apt_failure" != driver ]] || return 100 ;;
+                    'apt-get install '*|'systemctl mask '*|'systemctl enable '*|'dpkg -i '*) ;;
+                    *) echo "unexpected sudo: $*" >&2; return 2 ;;
+                esac
+            }
+            lspci() { echo 'fixture NVIDIA GPU'; }
+            nvidia-smi() { return 1; }
+            wget() { :; }
+            rm() { :; }
+            install_chrome() { :; }
+            install_chromedriver() { :; }
+            main "--$3" --stage=1
+        """
+        for config, hardware, apt_failure, rc, should_fail, should_reboot in (
+            ("scripted-cpu", "", "update", 100, True, False),
+            ("browseruse-gpu", "", "driver", 100, True, False),
+            ("browseruse-gpu", "", "", 100, False, True),
+            ("scripted-cpu", "", "", 0, False, False),
+            ("browseruse-gpu", "cpu", "", 0, False, False),
+        ):
+            with self.subTest(config=config, hardware=hardware, apt_failure=apt_failure):
+                with tempfile.TemporaryDirectory() as work:
+                    result = subprocess.run(
+                        ["bash", "-c", stage1, "stage1-test", str(INSTALLER),
+                         work, config, apt_failure, hardware],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                self.assertEqual(result.returncode, rc, result.stdout + result.stderr)
+                stage1_result = {"rc": result.returncode, "stdout": result.stdout}
+                self.assertEqual(failed(stage1_result=stage1_result), should_fail)
+                self.assertEqual(reboot(stage1_result=stage1_result), should_reboot)
+
+        self.assertTrue(failed(stage1_result={"rc": 100}))
+        self.assertFalse(reboot(stage1_result={"rc": 100}))
 
     def test_cuda_toolkit_and_duplicate_uv_installation_are_absent(self):
         self.assertNotIn("cuda-toolkit", self.source)
