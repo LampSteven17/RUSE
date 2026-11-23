@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 from unittest import TestCase
@@ -76,6 +77,16 @@ class BaselineTests(TestCase):
             (path / name).write_text(json.dumps(document))
         return path
 
+    def comparator_generation(self, root, method):
+        source = self.generation(preset=f"comparator-{method}")
+        path = root / (
+            f"{method}-seed42-budget64-2026-09-27-attempt1/"
+            "plans/2026-11-23_1703Z"
+        )
+        path.parent.mkdir(parents=True)
+        shutil.copytree(source, path)
+        return path
+
     def test_single_schedule_is_opt_in_for_both_directions_and_saved_natively(self):
         names = []
         cases = (
@@ -112,6 +123,82 @@ class BaselineTests(TestCase):
                 {item.name: item.read_bytes() for item in selected.iterdir()}, before
             )
         self.assertEqual(len(set(names)), 4)
+
+    def test_method_comparator_uses_each_fixed_validated_source_and_saves_identity(self):
+        expected_root = self.root / "comparator"
+        expected_sources = {
+            method: self.comparator_generation(expected_root, method)
+            for method in plan.COMPARATOR_METHODS
+        }
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", expected_root):
+            for method in plan.COMPARATOR_METHODS:
+                with self.subTest(method=method):
+                    tasks = plan.build_baseline_plan(
+                        "ctrlfix_v12.5.1", "human", method=method
+                    )
+                    self.assertEqual(len(tasks), 1)
+                    task = tasks[0]
+                    expected_source = expected_sources[method]
+                    self.assertEqual(task["behavior_source"], expected_source)
+                    self.assertEqual(
+                        expected_source.relative_to(expected_root),
+                        Path(f"{method}-seed42-budget64-2026-09-27-attempt1")
+                        / "plans/2026-11-23_1703Z",
+                    )
+                    self.assertEqual(task["method"], method)
+                    self.assertEqual(
+                        task["config_name"],
+                        f"decoy-baseline-ctrlfix-v12-5-1-human-method-{method}",
+                    )
+                    self.assertEqual(task["baseline_direction"], "human")
+                    self.assertEqual(task["model_preset"], "ctrlfix_v12.5.1")
+                    self.assertIsInstance(task["share_required"], bool)
+                    self.assertEqual(
+                        task["deployments"],
+                        list(feedback.canonical_decoy_feedback_deployments("v100")),
+                    )
+                    feedback.generate_baseline_config(task, self.deploy)
+                    config_path = self.deploy / task["config_name"] / "config.yaml"
+                    document = __import__("yaml").safe_load(config_path.read_text())
+                    self.assertEqual(document["method"], method)
+                    self.assertEqual(document["behavior_source"], str(expected_source))
+                    loaded = DeploymentConfig.load(config_path)
+                    self.assertEqual(loaded.method, method)
+                    self.assertEqual(_validate_behavior_source(str(expected_source), loaded), [])
+
+    def test_method_comparator_cli_scope_is_exact_and_rejects_repetition(self):
+        accepted = ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes"]
+        comparator_root = self.root / "comparator"
+        self.comparator_generation(comparator_root, "bayes")
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root), \
+             patch.object(plan, "show_plan_and_confirm", return_value=False) as show, \
+             patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(cli._cmd_deploy(accepted), 0)
+        execute.assert_not_called()
+        self.assertEqual(show.call_args.args[0][0]["method"], "bayes")
+
+        invalid = (
+            ["--method", "bayes"],
+            ["--decoys", "--baseline", "--human", "--method", "bayes"],
+            ["--decoys", "--baseline", "--ctrlfix", "--method", "bayes"],
+            ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes", "--gpu", "v100"],
+            ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes", "--llm-comparison"],
+            ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes", "--single-schedule"],
+            ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes", "--method", "rl"],
+        )
+        for args in invalid:
+            with self.subTest(args=args), patch.object(
+                plan, "build_baseline_plan"
+            ) as build, self.assertRaises(SystemExit):
+                cli._cmd_deploy(args)
+            build.assert_not_called()
+
+    def test_method_comparator_missing_fixed_source_has_no_fallback(self):
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", self.root):
+            with self.assertRaisesRegex(feedback.FeedbackSourceError, "not a directory"):
+                plan.build_baseline_plan(
+                    "ctrlfix_v12.5.1", "human", method="heuristic"
+                )
 
     def test_single_schedule_nested_generation_does_not_affect_ordinary_discovery(self):
         ordinary = self.generation(timestamp="2026-09-20_1200Z")

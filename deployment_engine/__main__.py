@@ -42,6 +42,8 @@ LOGS_DIR = DEPLOY_DIR / "logs"
 
 
 def _deploy_parser() -> argparse.ArgumentParser:
+    from .core.plan import COMPARATOR_METHODS
+
     p = argparse.ArgumentParser(
         prog="deploy",
         description="Deploy DECOY SUP agents, RAMPART enterprise networks, or GHOSTS NPCs",
@@ -99,6 +101,9 @@ examples:
     p.add_argument("--baseline", action="store_true", help="Deploy one global PHASE Baseline fleet")
     p.add_argument("--llm-comparison", action="store_true",
                    help="With --decoys --baseline --human, compare the approved LLM lineup")
+    p.add_argument("--method", choices=COMPARATOR_METHODS,
+                   action="append",
+                   help="With --decoys --baseline --ctrlfix --human, deploy one fixed schedule comparator")
     p.add_argument("--no-schedule", action="store_true",
                    help="With the human Baseline LLM comparison, run autonomously without PHASE timing")
     p.add_argument("--single-schedule", action="store_true",
@@ -304,13 +309,24 @@ def _cmd_deploy(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     # --- Resolve deploy type ---
-    if (args.human or args.not_human or args.llm_comparison or args.no_schedule or args.single_schedule) and not args.baseline:
-        parser.error("--human/--not-human/--llm-comparison/--no-schedule/--single-schedule require --baseline")
+    if (args.human or args.not_human or args.llm_comparison or args.no_schedule
+            or args.single_schedule or args.method) and not args.baseline:
+        parser.error("--human/--not-human/--llm-comparison/--no-schedule/--single-schedule/--method require --baseline")
     if args.baseline:
         if any((args.controls, args.feedback, args.rampart, args.ghosts, args.probes,
                 args.background_services, args.probe_sup, args.canary, args.canary_sup,
                 args.source, args.target, args.config_name)):
             parser.error("--baseline is a global Decoy fleet; cannot combine scopes, targets or sources")
+        if args.method:
+            if len(args.method) != 1:
+                parser.error("--method may be specified exactly once")
+            if (not args.decoy or not args.ctrlfix or not args.human or args.not_human
+                    or args.llm_comparison or args.no_schedule or args.single_schedule
+                    or args.gpu is not None):
+                parser.error(
+                    "--method requires exactly --decoys --baseline --ctrlfix --human "
+                    "and cannot combine with another Baseline mode or GPU selector"
+                )
         if args.llm_comparison and (
             not args.decoy or not args.human or args.not_human or args.gpu == "rtx"
         ):
@@ -319,7 +335,7 @@ def _cmd_deploy(argv: list[str]) -> int:
             parser.error("--no-schedule requires --decoys --baseline --human --llm-comparison")
         if args.single_schedule and args.no_schedule:
             parser.error("--single-schedule cannot combine with --no-schedule")
-        from .core.plan import build_baseline_plan, show_plan_and_confirm, execute_plan
+        from .core.plan import build_baseline_plan, execute_plan, show_plan_and_confirm
         from .core.feedback import FeedbackSourceError
         preset = "ctrlfix_v12.5.1" if args.ctrlfix else (args.preset or "colfix_v12.5.0")
         gpu_tier = args.gpu or "v100"
@@ -329,6 +345,7 @@ def _cmd_deploy(argv: list[str]) -> int:
                 llm_comparison=args.llm_comparison,
                 no_schedule=args.no_schedule,
                 single_schedule=args.single_schedule,
+                method=args.method[0] if args.method else None,
             )
         except FeedbackSourceError as exc:
             output.error(f"ERROR: {exc}")

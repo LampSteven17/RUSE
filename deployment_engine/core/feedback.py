@@ -283,6 +283,8 @@ def generate_baseline_config(task: dict, deploy_dir: Path) -> str:
     }
     if task.get("single_schedule"):
         config["single_schedule"] = True
+    if task.get("method"):
+        config["method"] = task["method"]
     if task.get("is_llm_comparison"):
         config["llm_comparison"] = True
         config["requested_model"] = task["requested_model"]

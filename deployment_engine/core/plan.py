@@ -207,6 +207,14 @@ LLM_COMPARISON_CPU_MODELS = (
     "llama3.2-vision:11b-instruct-q4_K_M",
 )
 
+COMPARATOR_METHODS = ("heuristic", "random", "bayes", "rl")
+COMPARATOR_SOURCE_ROOT = Path(
+    "/home/ubuntu/PHASE/experiments/paper_schedule_comparator/global"
+)
+COMPARATOR_SOURCE_SUFFIX = (
+    "seed42-budget64-2026-09-27-attempt1/plans/2026-11-23_1703Z"
+)
+
 
 def _comparison_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
@@ -220,23 +228,40 @@ def build_baseline_plan(
     llm_comparison: bool = False,
     no_schedule: bool = False,
     single_schedule: bool = False,
+    method: str | None = None,
 ) -> list[dict]:
     from .feedback import (find_decoy_baseline_generation, _decoy_preset_slug,
                            canonical_decoy_feedback_deployments)
 
-    if no_schedule and not llm_comparison:
-        raise FeedbackSourceError("No-schedule mode requires the human Baseline LLM comparison")
-    if llm_comparison and (direction != "human" or gpu_tier != "v100"):
-        raise FeedbackSourceError("LLM comparison requires the human Baseline on V100")
-    if single_schedule and no_schedule:
-        raise FeedbackSourceError("Single-schedule mode cannot be combined with no-schedule mode")
-    source = (
-        find_decoy_baseline_generation(preset, direction, single_schedule=True)
-        if single_schedule else find_decoy_baseline_generation(preset, direction)
-    )
-    name = f"decoy-baseline-{_decoy_preset_slug(preset)}-{direction}"
-    if single_schedule:
-        name += "-single-schedule"
+    if method is not None:
+        if method not in COMPARATOR_METHODS:
+            raise FeedbackSourceError(
+                f"unknown comparator method {method!r}; expected one of "
+                f"{', '.join(COMPARATOR_METHODS)}"
+            )
+        if (preset != "ctrlfix_v12.5.1" or direction != "human" or gpu_tier != "v100"
+                or llm_comparison or no_schedule or single_schedule):
+            raise FeedbackSourceError(
+                "method requires the fixed human ctrlfix Baseline on V100"
+            )
+        source = COMPARATOR_SOURCE_ROOT / f"{method}-{COMPARATOR_SOURCE_SUFFIX}"
+        from .feedback import validate_decoy_control_generation
+        validate_decoy_control_generation(source)
+        name = f"decoy-baseline-ctrlfix-v12-5-1-human-method-{method}"
+    else:
+        if no_schedule and not llm_comparison:
+            raise FeedbackSourceError("No-schedule mode requires the human Baseline LLM comparison")
+        if llm_comparison and (direction != "human" or gpu_tier != "v100"):
+            raise FeedbackSourceError("LLM comparison requires the human Baseline on V100")
+        if single_schedule and no_schedule:
+            raise FeedbackSourceError("Single-schedule mode cannot be combined with no-schedule mode")
+        source = (
+            find_decoy_baseline_generation(preset, direction, single_schedule=True)
+            if single_schedule else find_decoy_baseline_generation(preset, direction)
+        )
+        name = f"decoy-baseline-{_decoy_preset_slug(preset)}-{direction}"
+        if single_schedule:
+            name += "-single-schedule"
     if llm_comparison:
         tasks = []
         share_configs = set()
@@ -307,6 +332,12 @@ def build_baseline_plan(
     if single_schedule:
         from .feedback import decoy_generation_uses_network_share
         task["single_schedule"] = True
+        task["share_required"] = decoy_generation_uses_network_share(
+            source, purpose="control"
+        )
+    if method is not None:
+        from .feedback import decoy_generation_uses_network_share
+        task["method"] = method
         task["share_required"] = decoy_generation_uses_network_share(
             source, purpose="control"
         )
