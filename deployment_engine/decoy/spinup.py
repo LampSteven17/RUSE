@@ -615,6 +615,17 @@ def _validate_behavior_source(
         return []
 
     purpose = getattr(config, "purpose", None)
+    if getattr(config, "method", None):
+        recorded_source = getattr(config, "behavior_source", None)
+        if recorded_source is None:
+            return ["method comparator has no immutable source"]
+        if effective_source != recorded_source:
+            return ["method comparator source must match the recorded immutable source"]
+        from ..core.plan import validate_comparator_method_source
+        try:
+            validate_comparator_method_source(config.method, effective_source)
+        except FeedbackSourceError as exc:
+            return [str(exc)]
     canonical_deployments = all(
         dep.get("behavior") in CANONICAL_WORKFLOW_CONFIGS
         for dep in config.deployments

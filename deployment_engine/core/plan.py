@@ -211,9 +211,116 @@ COMPARATOR_METHODS = ("heuristic", "random", "bayes", "rl")
 COMPARATOR_SOURCE_ROOT = Path(
     "/home/ubuntu/PHASE/experiments/paper_schedule_comparator/global"
 )
-COMPARATOR_SOURCE_SUFFIX = (
-    "seed42-budget64-2026-09-27-attempt1/plans/2026-11-23_1703Z"
-)
+COMPARATOR_REFERENCE = "seed42-budget64-2026-09-27"
+
+
+def _comparator_attempt(path: Path, method: str) -> int | None:
+    """Return one exact method attempt number; an unsuffixed run is attempt 0."""
+    match = re.fullmatch(
+        rf"{re.escape(method)}-{COMPARATOR_REFERENCE}(?:-attempt([1-9][0-9]*))?",
+        path.name,
+    )
+    if match is None:
+        return None
+    return int(match.group(1) or 0)
+
+
+def _require_comparator_directory(path: Path, root: Path, *, label: str) -> None:
+    """Reject missing, linked, or escaping comparator path components."""
+    if path.is_symlink() or not path.is_dir():
+        raise FeedbackSourceError(f"{label} is not a real directory: {path}")
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError as exc:
+        raise FeedbackSourceError(f"{label} escapes comparator root: {path}") from exc
+
+
+def _comparator_source_root() -> Path:
+    root = COMPARATOR_SOURCE_ROOT
+    if root.is_symlink() or not root.is_dir():
+        raise FeedbackSourceError(f"comparator source root is not a real directory: {root}")
+    return root
+
+
+def _require_comparator_plan_files(source: Path) -> None:
+    """Require direct, non-linked canonical plans before passing them to the loader."""
+    from .feedback import DECOY_PLAN_FILENAMES
+
+    resolved_source = source.resolve()
+    for filename in DECOY_PLAN_FILENAMES.values():
+        plan_file = source / filename
+        if plan_file.is_symlink() or not plan_file.is_file():
+            raise FeedbackSourceError(
+                f"method comparator plan is not a real file: {plan_file}"
+            )
+        try:
+            plan_file.resolve().relative_to(resolved_source)
+        except ValueError as exc:
+            raise FeedbackSourceError(
+                f"method comparator plan escapes source: {plan_file}"
+            ) from exc
+
+
+def resolve_comparator_method_source(method: str) -> Path:
+    """Select the newest exact method attempt and its newest timestamped plan set."""
+    root = _comparator_source_root()
+    attempts = [
+        (number, path)
+        for path in root.iterdir()
+        if (number := _comparator_attempt(path, method)) is not None
+    ]
+    if not attempts:
+        raise FeedbackSourceError(
+            f"no comparator attempts for {method!r} under {root}"
+        )
+    _, attempt_dir = max(attempts, key=lambda item: item[0])
+    _require_comparator_directory(attempt_dir, root, label="newest comparator attempt")
+    plans_dir = attempt_dir / "plans"
+    _require_comparator_directory(plans_dir, root, label="comparator plans directory")
+
+    from .feedback import _is_decoy_generation_name, validate_decoy_control_generation
+    timestamps = [path for path in plans_dir.iterdir() if _is_decoy_generation_name(path.name)]
+    if not timestamps:
+        raise FeedbackSourceError(
+            f"no YYYY-MM-DD_HHMMZ comparator plans for {method!r}: {plans_dir}"
+        )
+    selected = max(timestamps, key=lambda path: path.name)
+    _require_comparator_directory(selected, root, label="newest comparator plan set")
+    _require_comparator_plan_files(selected)
+    validate_decoy_control_generation(selected)
+    return selected
+
+
+def validate_comparator_method_source_path(method: str, source: str | Path | None) -> Path:
+    """Validate the lexical shape of one saved immutable comparator source."""
+    if not isinstance(source, (str, Path)):
+        raise FeedbackSourceError("method comparator has no immutable source")
+    root = COMPARATOR_SOURCE_ROOT
+    path = Path(source)
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise FeedbackSourceError(
+            f"method comparator source must be an absolute path under {root}: {path}"
+        ) from exc
+    if (len(relative.parts) != 3 or path.parent.name != "plans"
+            or _comparator_attempt(path.parent.parent, method) is None):
+        raise FeedbackSourceError(f"invalid method comparator source path: {path}")
+    from .feedback import _is_decoy_generation_name
+    if not _is_decoy_generation_name(path.name):
+        raise FeedbackSourceError(f"invalid method comparator timestamp: {path}")
+    return path
+
+
+def validate_comparator_method_source(method: str, source: str | Path) -> Path:
+    """Validate one saved comparator source physically without reselecting it."""
+    path = validate_comparator_method_source_path(method, source)
+    root = _comparator_source_root()
+    _require_comparator_directory(path.parent.parent, root, label="comparator attempt")
+    _require_comparator_directory(path.parent, root, label="comparator plans directory")
+    _require_comparator_directory(path, root, label="method comparator source")
+    _require_comparator_plan_files(path)
+    return path
 
 
 def _comparison_slug(value: str) -> str:
@@ -257,9 +364,7 @@ def build_baseline_plan(
             raise FeedbackSourceError(
                 "method requires the fixed human ctrlfix Baseline on V100"
             )
-        source = COMPARATOR_SOURCE_ROOT / f"{method}-{COMPARATOR_SOURCE_SUFFIX}"
-        from .feedback import validate_decoy_control_generation
-        validate_decoy_control_generation(source)
+        source = resolve_comparator_method_source(method)
         name = f"decoy-baseline-ctrlfix-v12-5-1-human-method-{method}"
     else:
         if no_schedule and not llm_comparison:

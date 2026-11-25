@@ -91,13 +91,8 @@ class DeploymentConfig:
         elif "requested_model" in raw:
             raise ValueError("requested_model is only valid for an LLM comparison")
         if "method" in raw:
-            from .feedback import canonical_decoy_feedback_deployments
-            from .plan import (
-                COMPARATOR_METHODS, COMPARATOR_SOURCE_ROOT, COMPARATOR_SOURCE_SUFFIX,
-            )
-            method_source = COMPARATOR_SOURCE_ROOT / (
-                f"{raw['method']}-{COMPARATOR_SOURCE_SUFFIX}"
-            )
+            from .feedback import FeedbackSourceError, canonical_decoy_feedback_deployments
+            from .plan import COMPARATOR_METHODS, validate_comparator_method_source_path
             if (raw["method"] not in COMPARATOR_METHODS
                     or raw.get("baseline_direction") != "human"
                     or raw.get("model_preset") != "ctrlfix_v12.5.1"
@@ -106,10 +101,13 @@ class DeploymentConfig:
                     or raw.get("gpu_tier") != "v100"
                     or raw.get("llm_comparison") or raw.get("no_schedule")
                     or raw.get("single_schedule")
-                    or raw.get("behavior_source") != str(method_source)
                     or raw.get("deployments")
                     != list(canonical_decoy_feedback_deployments("v100"))):
                 raise ValueError("method requires the fixed human ctrlfix Decoy control comparator")
+            try:
+                validate_comparator_method_source_path(raw["method"], raw.get("behavior_source"))
+            except (FeedbackSourceError, TypeError, ValueError, OSError) as exc:
+                raise ValueError("method comparator has an invalid immutable source") from exc
         if "no_schedule" in raw and not isinstance(raw["no_schedule"], bool):
             raise ValueError("no_schedule must be a boolean")
         if raw.get("no_schedule") and not raw.get("llm_comparison"):

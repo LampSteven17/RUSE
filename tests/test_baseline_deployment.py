@@ -15,6 +15,7 @@ from deployment_engine.core import feedback, plan, phase_run_registry as registr
 from deployment_engine.core.config import DeploymentConfig
 from deployment_engine.core.deploy_steps import register_phase_run
 from deployment_engine.core.vm_naming import make_run_dep_id, make_vm_prefix
+from deployment_engine.decoy import spinup as decoy_spinup
 from deployment_engine.decoy.spinup import _validate_behavior_source
 from tests.test_phase_workflow_runtime import CONTRACT_ROOT, six_workflow_document
 
@@ -77,13 +78,17 @@ class BaselineTests(TestCase):
             (path / name).write_text(json.dumps(document))
         return path
 
-    def comparator_generation(self, root, method):
-        source = self.generation(preset=f"comparator-{method}")
+    def comparator_generation(self, root, method, *, attempt=1,
+                              timestamp="2026-11-23_1703Z"):
+        source = self.base / f"comparator-{method}" / "not-human" / "2026-09-21_1200Z"
+        if not source.is_dir():
+            source = self.generation(preset=f"comparator-{method}")
+        suffix = "" if attempt == 0 else f"-attempt{attempt}"
         path = root / (
-            f"{method}-seed42-budget64-2026-09-27-attempt1/"
-            "plans/2026-11-23_1703Z"
+            f"{method}-seed42-budget64-2026-09-27{suffix}/"
+            f"plans/{timestamp}"
         )
-        path.parent.mkdir(parents=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, path)
         return path
 
@@ -166,6 +171,131 @@ class BaselineTests(TestCase):
                     self.assertEqual(loaded.method, method)
                     self.assertEqual(_validate_behavior_source(str(expected_source), loaded), [])
 
+    def test_method_comparator_selects_highest_attempt_then_newest_plan_set(self):
+        comparator_root = self.root / "comparator"
+        self.comparator_generation(comparator_root, "bayes", attempt=0)
+        self.comparator_generation(comparator_root, "bayes", attempt=2,
+                                   timestamp="2026-11-30_1703Z")
+        self.comparator_generation(comparator_root, "bayes", attempt=10,
+                                   timestamp="2026-11-22_1703Z")
+        newest = self.comparator_generation(comparator_root, "bayes", attempt=10,
+                                            timestamp="2026-11-24_1703Z")
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root):
+            task = plan.build_baseline_plan(
+                "ctrlfix_v12.5.1", "human", method="bayes"
+            )[0]
+        self.assertEqual(task["behavior_source"], newest)
+
+    def test_method_comparator_does_not_fall_back_from_incomplete_newest_plan_set(self):
+        comparator_root = self.root / "comparator"
+        self.comparator_generation(comparator_root, "bayes", attempt=1)
+        newest = self.comparator_generation(comparator_root, "bayes", attempt=2)
+        (newest / "mchp-v1.json").unlink()
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root), \
+             self.assertRaises(feedback.FeedbackSourceError):
+            plan.build_baseline_plan("ctrlfix_v12.5.1", "human", method="bayes")
+
+    def test_method_comparator_does_not_fall_back_from_newest_attempt_without_timestamp(self):
+        comparator_root = self.root / "comparator"
+        self.comparator_generation(comparator_root, "bayes", attempt=2)
+        (comparator_root / "bayes-seed42-budget64-2026-09-27-attempt10").mkdir()
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root), \
+             self.assertRaisesRegex(feedback.FeedbackSourceError, "comparator plans directory"):
+            plan.build_baseline_plan("ctrlfix_v12.5.1", "human", method="bayes")
+
+    def test_method_comparator_does_not_fall_back_within_newest_attempt(self):
+        comparator_root = self.root / "comparator"
+        complete = self.comparator_generation(
+            comparator_root, "bayes", attempt=10, timestamp="2026-11-22_1703Z"
+        )
+        newest = self.comparator_generation(
+            comparator_root, "bayes", attempt=10, timestamp="2026-11-24_1703Z"
+        )
+        (newest / "mchp-v1.json").unlink()
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root), \
+             self.assertRaises(feedback.FeedbackSourceError):
+            plan.build_baseline_plan("ctrlfix_v12.5.1", "human", method="bayes")
+        self.assertTrue(complete.is_dir())
+
+    def test_saved_method_config_keeps_its_legacy_source_pin(self):
+        comparator_root = self.root / "comparator"
+        pinned = self.comparator_generation(comparator_root, "bayes", attempt=1)
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root):
+            task = plan.build_baseline_plan(
+                "ctrlfix_v12.5.1", "human", method="bayes"
+            )[0]
+            feedback.generate_baseline_config(task, self.deploy)
+            self.comparator_generation(comparator_root, "bayes", attempt=2)
+            config_path = self.deploy / task["config_name"] / "config.yaml"
+            loaded = DeploymentConfig.load(config_path)
+        self.assertEqual(loaded.behavior_source, str(pinned))
+
+    def test_saved_method_config_loads_when_archived_source_is_offline(self):
+        comparator_root = self.root / "comparator"
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root):
+            source = self.comparator_generation(comparator_root, "bayes", attempt=1)
+            task = plan.build_baseline_plan(
+                "ctrlfix_v12.5.1", "human", method="bayes"
+            )[0]
+            feedback.generate_baseline_config(task, self.deploy)
+            shutil.rmtree(comparator_root)
+            self.assertFalse(source.exists())
+            loaded = DeploymentConfig.load(
+                self.deploy / task["config_name"] / "config.yaml"
+            )
+        self.assertEqual(loaded.behavior_source, str(task["behavior_source"]))
+
+    def test_method_preprovision_validation_uses_saved_source_once(self):
+        comparator_root = self.root / "comparator"
+        source = self.comparator_generation(comparator_root, "bayes", attempt=1)
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root):
+            task = plan.build_baseline_plan(
+                "ctrlfix_v12.5.1", "human", method="bayes"
+            )[0]
+            feedback.generate_baseline_config(task, self.deploy)
+            config = DeploymentConfig.load(
+                self.deploy / task["config_name"] / "config.yaml"
+            )
+            with patch.object(
+                plan, "resolve_comparator_method_source",
+                side_effect=AssertionError("must not reselect saved source"),
+            ), patch.object(
+                decoy_spinup, "validate_decoy_control_generation",
+                wraps=decoy_spinup.validate_decoy_control_generation,
+            ) as validate:
+                self.assertEqual(_validate_behavior_source(str(source), config), [])
+        validate.assert_called_once_with(source)
+
+    def test_method_preprovision_validation_reports_missing_saved_source(self):
+        config = DeploymentConfig(
+            deployment_name="method", purpose="control", target=None,
+            deployments=list(feedback.canonical_decoy_feedback_deployments("v100")),
+            baseline_direction="human", model_preset="ctrlfix_v12.5.1",
+            gpu_tier="v100", method="bayes",
+        )
+        self.assertEqual(
+            _validate_behavior_source(None, config),
+            ["method comparator has no immutable source"],
+        )
+
+    def test_method_preprovision_validation_rejects_source_override(self):
+        comparator_root = self.root / "comparator"
+        pinned = self.comparator_generation(comparator_root, "bayes", attempt=1)
+        override = self.comparator_generation(comparator_root, "bayes", attempt=2)
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root):
+            task = plan.build_baseline_plan(
+                "ctrlfix_v12.5.1", "human", method="bayes"
+            )[0]
+            task["behavior_source"] = pinned
+            feedback.generate_baseline_config(task, self.deploy)
+            config = DeploymentConfig.load(
+                self.deploy / task["config_name"] / "config.yaml"
+            )
+            self.assertEqual(
+                _validate_behavior_source(str(override), config),
+                ["method comparator source must match the recorded immutable source"],
+            )
+
     def test_method_comparator_cli_scope_is_exact_and_rejects_repetition(self):
         accepted = ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes"]
         comparator_root = self.root / "comparator"
@@ -208,6 +338,7 @@ class BaselineTests(TestCase):
         show.assert_called_once()
         self.assertEqual([task["method"] for task in tasks], list(plan.COMPARATOR_METHODS))
         self.assertEqual(len(tasks), 4)
+        self.assertEqual(sum(len(task["deployments"]) for task in tasks), 16)
         self.assertNotIn("4test", [task["method"] for task in tasks])
         execute.assert_called_once_with(tasks, "decoy", None, cli.DEPLOY_DIR, gpu_tier="v100")
 
@@ -232,7 +363,7 @@ class BaselineTests(TestCase):
 
     def test_method_comparator_missing_fixed_source_has_no_fallback(self):
         with patch.object(plan, "COMPARATOR_SOURCE_ROOT", self.root):
-            with self.assertRaisesRegex(feedback.FeedbackSourceError, "not a directory"):
+            with self.assertRaisesRegex(feedback.FeedbackSourceError, "no comparator attempts"):
                 plan.build_baseline_plan(
                     "ctrlfix_v12.5.1", "human", method="heuristic"
                 )
