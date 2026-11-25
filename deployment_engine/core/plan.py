@@ -233,6 +233,19 @@ def build_baseline_plan(
     from .feedback import (find_decoy_baseline_generation, _decoy_preset_slug,
                            canonical_decoy_feedback_deployments)
 
+    if method == "4test":
+        return [
+            task
+            for comparator_method in COMPARATOR_METHODS
+            for task in build_baseline_plan(
+                preset, direction, gpu_tier,
+                llm_comparison=llm_comparison,
+                no_schedule=no_schedule,
+                single_schedule=single_schedule,
+                method=comparator_method,
+            )
+        ]
+
     if method is not None:
         if method not in COMPARATOR_METHODS:
             raise FeedbackSourceError(

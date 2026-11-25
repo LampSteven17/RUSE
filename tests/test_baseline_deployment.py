@@ -185,6 +185,7 @@ class BaselineTests(TestCase):
             ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes", "--llm-comparison"],
             ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes", "--single-schedule"],
             ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "bayes", "--method", "rl"],
+            ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "4test", "--method", "rl"],
         )
         for args in invalid:
             with self.subTest(args=args), patch.object(
@@ -192,6 +193,42 @@ class BaselineTests(TestCase):
             ) as build, self.assertRaises(SystemExit):
                 cli._cmd_deploy(args)
             build.assert_not_called()
+
+    def test_4test_validates_all_comparators_before_one_preview_and_batch_execution(self):
+        comparator_root = self.root / "comparator"
+        for method in plan.COMPARATOR_METHODS:
+            self.comparator_generation(comparator_root, method)
+        args = ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "4test"]
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root), \
+             patch.object(plan, "show_plan_and_confirm", return_value=True) as show, \
+             patch.object(plan, "execute_plan", return_value=0) as execute:
+            self.assertEqual(cli._cmd_deploy(args), 0)
+
+        tasks = show.call_args.args[0]
+        show.assert_called_once()
+        self.assertEqual([task["method"] for task in tasks], list(plan.COMPARATOR_METHODS))
+        self.assertEqual(len(tasks), 4)
+        self.assertNotIn("4test", [task["method"] for task in tasks])
+        execute.assert_called_once_with(tasks, "decoy", None, cli.DEPLOY_DIR, gpu_tier="v100")
+
+    def test_4test_invalid_fourth_comparator_stops_before_preview(self):
+        comparator_root = self.root / "comparator"
+        for method in plan.COMPARATOR_METHODS[:-1]:
+            self.comparator_generation(comparator_root, method)
+        args = ["--decoys", "--baseline", "--ctrlfix", "--human", "--method", "4test"]
+        with patch.object(plan, "COMPARATOR_SOURCE_ROOT", comparator_root), \
+             patch.object(plan, "show_plan_and_confirm") as show, \
+             patch.object(plan, "execute_plan") as execute:
+            self.assertEqual(cli._cmd_deploy(args), 1)
+
+        show.assert_not_called()
+        execute.assert_not_called()
+
+    def test_4test_direct_builder_retains_single_method_mode_validation(self):
+        with self.assertRaisesRegex(feedback.FeedbackSourceError, "fixed human ctrlfix"):
+            plan.build_baseline_plan(
+                "ctrlfix_v12.5.1", "human", method="4test", llm_comparison=True
+            )
 
     def test_method_comparator_missing_fixed_source_has_no_fallback(self):
         with patch.object(plan, "COMPARATOR_SOURCE_ROOT", self.root):

@@ -101,9 +101,9 @@ examples:
     p.add_argument("--baseline", action="store_true", help="Deploy one global PHASE Baseline fleet")
     p.add_argument("--llm-comparison", action="store_true",
                    help="With --decoys --baseline --human, compare the approved LLM lineup")
-    p.add_argument("--method", choices=COMPARATOR_METHODS,
+    p.add_argument("--method", choices=(*COMPARATOR_METHODS, "4test"),
                    action="append",
-                   help="With --decoys --baseline --ctrlfix --human, deploy one fixed schedule comparator")
+                   help="With --decoys --baseline --ctrlfix --human, deploy one fixed schedule comparator or all four with 4test")
     p.add_argument("--no-schedule", action="store_true",
                    help="With the human Baseline LLM comparison, run autonomously without PHASE timing")
     p.add_argument("--single-schedule", action="store_true",
